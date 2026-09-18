@@ -80,10 +80,11 @@ UI 差距需要真实运行对比与产品决策（布局密度、流式渲染�
 - `tests/textToolCalls.test.js`：17/17 通过（新增 GAP-1 坏 body 保留、GAP-2 白名单接受/拒绝全场景）。
 - `tests/englishTerminalSanitization.test.js`、`tests/loopRuntimeContract.test.js`、`tests/loopMarkers.test.js`、`tests/modelInvocationRuntimeBoundary.test.js`（合计 9 项）与 `tests/serverTurnFlow.test.js`（14 项）全部通过。
 - 改动文件 `npx eslint` 零新增问题。
-- 既有无关失败（在快照 `a16a2aa` 上以 stash 方式复核，与本轮改动无关，单独记录）：
-  - `tests/turnEngine.test.js` 3 项（如 `TurnEngine owns a text turn…` 期望 `completed` 实得 `failed`）；
-  - `tests/subagentRuntime.test.js` 3 项（`Loop runtime contract violation`：子代理测试 mock 依赖袋缺 `createCheckpointBarrier`、`createJobBudget` 等 7 个核心键，生产依赖袋曾缺 `extractTextToolCalls` 的同类漂移问题已由本轮一并修复）。
-  - 全仓 `npm run lint` 当前处于非零状态（大量与本轮无关的 no-unused-vars），全量门禁恢复不在本轮范围。
+- ~~既有无关失败~~ **更正（2026-09-14）**：本节此前记录的失败被误判为「与本轮改动无关」，实际根因是快照 `a16a2aa` 固化了一次错误的 `runtimeDependencies` 精简——依赖袋从 231 个符号被删到 53 个，而扫描漏掉了各 phase 文件的 `const { X } = s.d` 解构消费（`server/services/loop/` 下 19 个文件、61 处），导致 185 个在用符号缺失。已按 `ad6119b` 的健康依赖袋恢复并叠加后续新增符号（现 241 个，缺失审计 0）。原记录的三类现象随之全部消失：
+  - `tests/turnEngine.test.js`、`tests/subagentRuntime.test.js` 合计 121 项全部通过（`Loop runtime contract violation` 不是测试 mock 漂移，是生产依赖袋真实缺键）；
+  - 全仓 `npm run lint` 恢复零问题（此前的大量 no-unused-vars 正是符号已 import 但未进依赖袋的连带结果）；
+  - 全量 `npm test` 通过，`npm run debt:check`、`npm run audit:functions -- --check` 均绿。
+  教训：依赖袋的使用面必须同时统计属性访问与解构两种形态，任何「未使用符号」结论在删除前需以缺失审计脚本反向验证。
 - 不在无真实模型环境的情况下宣称任务成功率变化；GAP-2 对本地模型完成率的实际收益须走 `docs/LIVE_AGENT_EVALS.md` 的显式入口实测。
 
 ## 四、遗留（记录，不在本轮）
@@ -91,3 +92,31 @@ UI 差距需要真实运行对比与产品决策（布局密度、流式渲染�
 - DEBT-TYPE-001 / DEBT-RELEASE-001 / DEBT-RELEASE-002 / DEBT-NET-002：维持既有登记，本轮不重复开单。
 - 工具管线 waterfall 化、插件 patch 组合、UI 对齐：见上文"有意不采纳"，需要单独立项与取舍评审。
 - WorkBuddy：`D:\workbuddy` 仅为插件配置痕迹，无可借鉴源码；维持"仅参考技能使用方式"的既有边界。
+
+## 五、2026-09-18 外部审查复核与修复
+
+对另一位审查者提出的三项不足逐项沿真实调用链独立复核，三项代码事实全部属实；其中一项的行为定性需要更正后才能修。
+
+### R1（属实，已修）：`MODEL_PROMPT_CACHE_RETENTION=long` 缺少上游必需的 beta 头
+
+- 复核：全仓无 `anthropic-beta` 头；`modelRequestCache.js` 的 long 档发送 `cache_control:{type:'ephemeral',ttl:'1h'}`；`nativeModelProviderRequests.js` 的 `buildAnthropicRequest` 只发 `anthropic-version`。Anthropic 官方文档明确 1h 缓存条目必需 `anthropic-beta: extended-cache-ttl-2025-04-11`，缺头时请求会被上游拒绝——本地序列化测试发现不了。
+- 修复：`modelRequestCache.js` 新增 `ANTHROPIC_CACHE_TTL_BETA_HEADERS`（按 ttl 查表，与 retention 档位解耦）；`buildAnthropicRequest` 在 ttl 需要时注入 beta 头，并与调用方自定义 `anthropic-beta` 值合并去重（Anthropic 接受逗号列表），不覆盖用户配置。默认/short 档行为零变化。
+- 测试升级：原 4 处 `ttl:'1h'` 形状断言保留（形状本身没错），新增协议断言——long 必须带 beta 头、short/默认必须不带、与自定义头合并且去重。这回应了"测试冻结错误 wire 形状"的批评：现在形状与上游协议绑定断言。
+
+### R2（属实，行为定性更正后已修）：deadline 替换成功终态
+
+- 复核更正：审查者称该决策表"无人守"——`timeoutReplacesResult` 函数名确实零测试引用，但**行为有测试守护**：`tests/cli/interactiveTurnTimeout.test.js` 原用例 `a success returned after the chat deadline cannot publish completed text` 明确断言 deadline 后的成功文本不得发布。即"成功被替换"是写进测试的刻意防御（不信任 deadline 后返回的 completed），不是无意缺陷。修复因此属于终态语义变更，不是纯 bug fix。
+- 决策：采纳"成功优先"。理由：runtime 状态机已发出 `turn.completed` 且被 CLI `onEvent` 观察到，双重一致的终态证据比本地墙钟更具体；旧行为造成跨层矛盾（CLI 报超时 exit 124、text 模式丢失已完成文本，DB 已持久化 completed），违背"终态可解释、保留已确认进展"。deadline 只解释"无其他终态证据的协作取消"。
+- 修复：`runDeadline.js` 成功分支返回 false（含完整决策表注释）；`yma-cli.js` 提示文案改为 `preserving the runtime outcome`；`interactiveTurn.js` 在 deadline 触发但结果保留时向 stderr 提示 `deadline elapsed; preserving the turn outcome`。
+- 测试：新增 `tests/cli/runDeadlineDecisionTable.test.js` 直接守护五类决策（成功保留、显式不完整保留、纯取消替换、取消但有 completed 终态保留、failed/blocked/interrupted/unknown 保留）；原 `cannot publish completed text` 用例改写为 `is preserved and announced`。headless `runTimeoutBoundary.test.js` 的 5 个既有用例逐个核对新语义全部兼容（矛盾状态场景的 exit 1 来自 `resolveExitCode` 对矛盾成功的拒绝，与替换逻辑无关），未修改即通过。
+
+### R3（属实，已修）：`runtime.js` 文件尾空行
+
+- `git diff --check` 报 `new blank line at EOF`，文件确以空行结尾。已清除。
+
+### 本轮验证
+
+- `tests/cli/runDeadlineDecisionTable.test.js`（新）、`tests/cli/interactiveTurnTimeout.test.js`、`tests/cli/runTimeoutBoundary.test.js`、`tests/cli/cliContracts.test.js`、`tests/nativePromptCachePolicy.test.js`、`tests/promptCacheStability.test.js` 合计 55 项全部通过。
+- 改动文件 `npx eslint` 零问题。
+- 边界说明：R1 的 beta 头修复只保证请求形状符合 Anthropic 官方文档；真实 Anthropic 端到端缓存命中仍需显式 live eval 验证，本地 LM Studio（OpenAI 兼容）路径不受此头影响。
+

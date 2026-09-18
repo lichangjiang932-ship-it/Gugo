@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import { CliError, CliUsageError } from './cli/errors.js'
-import { createRunRecoveryPrompts } from './cli/runRecoveryPrompts.js'
+import { cmdDoctorHeadless, parseDoctorArgs } from './cli/headlessDoctor.js'
+import { cmdTrace } from './cli/traceCommand.js'
+import { cmdGoal } from './cli/goalCommand.js'
+import { cmdMemory } from './cli/memoryCommand.js'
+import { startInteractiveSession } from './cli/interactiveSession.js'
+import { loadBuiltinHeadlessRuntime } from './cli/headlessRuntimeLoader.js'
+import { createRunInteractionPorts } from './cli/runInteractionPorts.js'
+import { terminalDescriptor } from './cli/runDiagnostics.js'
+import { timeoutReplacesResult } from './cli/runDeadline.js'
 import {
   createRunOutputFormatter,
   formatRunError,
@@ -25,6 +32,7 @@ import {
   parseCommandFlags,
   sessionShowArgs,
 } from './cli/serverCommands.js'
+import { collectAttachmentRequests } from './cli/cliAttachments.js'
 
 export { CliError, CliUsageError }
 export { resolveServerUrl } from './cli/serverCommands.js'
@@ -42,15 +50,39 @@ Usage:
   gugo agent list
   gugo skill list
   gugo status
-  gugo doctor
+  gugo doctor [--json]
+  gugo doctor --headless [--model <name>] [--provider <id>]
+                      [--cwd <dir>] [--probe] [--integrity] [--json]
+  gugo trace <turnId> [--session-id <id>] [--limit <n>]
+                      [--export text|json|otel] [--json]
+  gugo goal create "<objective>" --steps <json> [--steps-file <path>]
+                      [--session-id <id>] [--no-approval]
+  gugo goal list [--status <status>] [--limit <n>]
+  gugo goal show <planId>
+  gugo goal approve <planId>
+  gugo goal step <planId> <stepId> --status <status>
+                      [--turn <turnId>] [--tool-call <id>] [--note <text>]
+                      [--manual-confirm] [--confirmed-by <who>]
+                      [--expect-version <n>]
+  gugo goal rewrite <planId> --steps <json> [--objective <text>] [--no-approval]
+                      [--expect-version <n>]
+  gugo goal prune [<planId>] [--keep <n>]
+  gugo memory reindex [--limit <n>] [--batch <n>]
+                      [--all-agents | --agent <agentId>]
   gugo run "<prompt>" [--model <name>] [--provider <id>]
                      [--mode normal|acceptEdits|plan|bypass]
                      [--cwd <dir>] [--session-id <id>]
                      [--timeout <ms>]
-                     [--output jsonl|text]
+                     [--output jsonl|text] [--progress]
+                     [--file <path>] [--image <path>] (repeatable, 8 total)
   gugo run --resume <turnId> [--session-id <id>] [--cwd <dir>]
                      [--timeout <ms>]
                      [--output jsonl|text]
+  gugo chat [--model <name>] [--provider <id>]
+                     [--mode normal|acceptEdits|plan|bypass]
+                     [--cwd <dir>] [--session-id <id>]
+                     [--timeout <ms>] (per turn)
+                     [--file <path>] [--image <path>] (next turn only)
   echo "<prompt>" | gugo run [options]
   gugo --help
   gugo --version
@@ -59,16 +91,25 @@ Environment:
   GUGO_SERVER_URL  absolute server URL (overrides SERVER_HOST/SERVER_PORT)
   GUGO_CLI_HTTP_TIMEOUT_MS  API request timeout in milliseconds (default 10000)
   GUGO_CLI_RUN_TIMEOUT_MS   optional Turn execution timeout in milliseconds
+  GUGO_CLI_INPUT    readline (default) or optional ink on Node 22+
+                   auto is a legacy alias for readline; no automatic selection
+  GUGO_CLI_HISTORY  set 0 to disable persisted input history
   SERVER_PORT   server port (default 5173)
   SERVER_HOST   server host (default 127.0.0.1)
 
 Auth tokens are isolated per server under ~/.yma-cli/tokens/ (chmod 0600).
 Run defaults to durable TurnEngine JSONL; use --output text for final text only.
+Chat: /sessions lists local history; /resume <session-id> selects a conversation.
+Use run --resume <turnId> only to recover a persisted turn, not to start a new reply.
 `
 
 const RUN_VALUE_FLAGS = new Set([
   'model', 'provider', 'mode', 'cwd', 'session-id', 'resume', 'timeout', 'output',
+  'file', 'image',
 ])
+/** Value flags that may be repeated; every other one is single-use. */
+const RUN_REPEATABLE_VALUE_FLAGS = new Set(['file', 'image'])
+const RUN_BOOLEAN_FLAGS = new Set(['progress'])
 const RUN_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
 const MAX_STDIN_PROMPT_BYTES = 1024 * 1024
 const MAX_TIMER_TIMEOUT_MS = 2_147_483_647
@@ -84,10 +125,14 @@ export function parseRunArgs(argv = []) {
     modelProviderId: null,
     mode: 'normal',
     cwd: process.cwd(),
+    cwdExplicit: false,
     sessionId: null,
     resumeTurnId: null,
     timeoutMs: null,
     outputFormat: 'jsonl',
+    progress: false,
+    files: [],
+    images: [],
   }
   const positional = []
   let positionalOnly = false
@@ -102,11 +147,16 @@ export function parseRunArgs(argv = []) {
     if (!positionalOnly && raw.startsWith('--')) {
       const equalAt = raw.indexOf('=')
       const key = raw.slice(2, equalAt >= 0 ? equalAt : undefined)
-      if (!RUN_VALUE_FLAGS.has(key)) throw new CliUsageError('CLI_OPTION_UNKNOWN', `unknown run option: --${key}`)
-      if (specifiedValueFlags.has(key)) {
+      if (!RUN_VALUE_FLAGS.has(key) && !RUN_BOOLEAN_FLAGS.has(key)) throw new CliUsageError('CLI_OPTION_UNKNOWN', `unknown run option: --${key}`)
+      if (specifiedValueFlags.has(key) && !RUN_REPEATABLE_VALUE_FLAGS.has(key)) {
         throw new CliUsageError('CLI_OPTION_DUPLICATE', `--${key} may only be specified once`)
       }
       specifiedValueFlags.add(key)
+      if (RUN_BOOLEAN_FLAGS.has(key)) {
+        if (equalAt >= 0) throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', `--${key} does not take a value`)
+        options[key] = true
+        continue
+      }
       const value = equalAt >= 0 ? raw.slice(equalAt + 1) : argv[++i]
       const normalizedValue = value === undefined ? '' : String(value).trim()
       if (!normalizedValue || String(value).startsWith('--')) {
@@ -118,11 +168,16 @@ export function parseRunArgs(argv = []) {
         options.mode = normalizedValue
         modeSpecified = true
       }
-      if (key === 'cwd') options.cwd = resolve(normalizedValue)
+      if (key === 'cwd') {
+        options.cwd = resolve(normalizedValue)
+        options.cwdExplicit = true
+      }
       if (key === 'session-id') options.sessionId = normalizedValue
       if (key === 'resume') options.resumeTurnId = normalizedValue
       if (key === 'timeout') options.timeoutMs = resolveRunTimeoutMs(normalizedValue, {})
       if (key === 'output') options.outputFormat = normalizeRunOutputFormat(normalizedValue)
+      if (key === 'file') options.files.push(normalizedValue)
+      if (key === 'image') options.images.push(normalizedValue)
       continue
     }
     positional.push(raw)
@@ -133,6 +188,9 @@ export function parseRunArgs(argv = []) {
   }
   if (options.resumeTurnId && options.prompt) {
     throw new CliUsageError('CLI_RESUME_PROMPT_CONFLICT', 'prompt cannot be combined with --resume')
+  }
+  if (options.resumeTurnId && (options.files.length || options.images.length)) {
+    throw new CliUsageError('CLI_RESUME_ATTACHMENT_CONFLICT', 'attachments cannot be combined with --resume')
   }
   if (options.resumeTurnId && modeSpecified) {
     throw new CliUsageError(
@@ -204,65 +262,31 @@ export async function readPromptFromStdin(input = process.stdin) {
   return prompt.trim()
 }
 
-function createApprovalPrompt(input, diagnostics, signal = null) {
-  return async (event) => {
-    if (signal?.aborted) return { decision: 'deny' }
-    const tool = event?.payload?.toolName || 'unknown'
-    const args = JSON.stringify(event?.payload?.args || {})
-    const rl = createInterface({ input, output: diagnostics })
-    try {
-      const answer = await new Promise((done) => {
-        let settled = false
-        const finish = (value = '') => {
-          if (settled) return
-          settled = true
-          signal?.removeEventListener('abort', abort)
-          done(value)
-        }
-        const abort = () => {
-          finish('')
-          rl.close()
-        }
-        signal?.addEventListener('abort', abort, { once: true })
-        rl.once('close', () => finish(''))
-        rl.question(`[approval] tool=${tool} args=${args} [y/N] `, finish)
-      })
-      return { decision: /^y(?:es)?$/i.test(String(answer).trim()) ? 'approve' : 'deny' }
-    } finally {
-      rl.close()
-    }
-  }
-}
-
-async function loadBuiltinHeadlessRuntime({
+export async function cmdChat(options, {
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  runTurn = null,
   runtimeCwd = process.cwd(),
   env = process.env,
+  signal = null,
+  lines = null,
 } = {}) {
-  // Keep the CLI entry free of eager backend imports. Trusted persistence is
-  // selected before preflight can open the distribution's remaining SQLite
-  // stores, and ordinary runtime plugin state cannot influence this choice.
-  // A CLI may be launched inside an untrusted project, so cwd/.env must never
-  // select executable host code. Deployment-owned process env remains explicit.
-  const persistenceEnv = Object.freeze({ ...env })
-  const { resolveBuiltinSqliteTurnPersistenceBootstrap } = await import(
-    '../server/adapters/builtinSqliteTurnPersistenceBootstrap.js'
-  )
-  const persistenceBootstrap = await resolveBuiltinSqliteTurnPersistenceBootstrap({
-    cwd: runtimeCwd,
-    env: persistenceEnv,
-  })
-  const { runRuntimeConfigStartupPreflight } = await import(
-    '../server/services/runtimeConfigStartupService.js'
-  )
-  const { runtimeEnv } = runRuntimeConfigStartupPreflight({ cwd: runtimeCwd, env })
-  const { runBuiltinHeadlessTurn } = await import('../server/adapters/headlessTurnHost.js')
-  return (options) => runBuiltinHeadlessTurn({
-    ...options,
-    runtimeCwd,
-    runtimeEnv,
-    env: runtimeEnv,
-    turnPersistenceAdapter: persistenceBootstrap.adapter,
-    turnPersistenceProvenance: persistenceBootstrap.provenance,
+  if (options.resumeTurnId) {
+    throw new CliUsageError(
+      'CLI_CHAT_RESUME_CONFLICT',
+      'gugo chat keeps its own session; use `gugo run --resume <turnId>` to continue a specific turn',
+    )
+  }
+  if (options.prompt) {
+    throw new CliUsageError(
+      'CLI_CHAT_PROMPT_CONFLICT',
+      `gugo chat takes no prompt argument; drop "${String(options.prompt).slice(0, 40)}" and type it inside the session`,
+    )
+  }
+  return startInteractiveSession({
+    options: { ...options, timeoutMs: options.timeoutMs ?? resolveRunTimeoutMs(null, env) },
+    stdin, stdout, stderr, runTurn, runtimeCwd, env, signal, lines,
   })
 }
 
@@ -277,12 +301,14 @@ export async function cmdRun(argv, {
 } = {}) {
   const output = createRunOutputFormatter({
     format: requestedRunOutputFormat(argv),
+    progress: argv.includes('--progress'),
     stdout,
     stderr,
   })
   let timeoutTimer = null
   let timeoutTriggered = false
   let timeoutError = null
+  let observedTerminal = null
   try {
     const options = parseRunArgs(argv)
     const stdinPrompt = stdin.isTTY === true ? '' : await readPromptFromStdin(stdin)
@@ -294,7 +320,19 @@ export async function cmdRun(argv, {
     }
     if (!options.resumeTurnId) {
       options.prompt = [options.prompt, stdinPrompt].filter(Boolean).join('\n\n')
-      if (!options.prompt) throw new CliUsageError('PROMPT_REQUIRED', 'prompt is required')
+      if (!options.prompt && !options.files.length && !options.images.length) throw new CliUsageError('PROMPT_REQUIRED', 'prompt is required')
+    }
+    if (options.files.length > 0 || options.images.length > 0) {
+      // A resumed turn replays its own prompt; folding attachments in would invent one.
+      if (options.resumeTurnId) {
+        throw new CliUsageError(
+          'CLI_RESUME_ATTACHMENT_CONFLICT',
+          'attachments cannot be combined with --resume',
+        )
+      }
+      // Only the trusted headless host reads files, after establishing the local
+      // identity. Bytes become managed attachment IDs, never giant prompt strings.
+      options.attachmentRequests = collectAttachmentRequests({ files: options.files, images: options.images })
     }
     const timeoutMs = options.timeoutMs ?? resolveRunTimeoutMs(null, env)
     const timeoutController = timeoutMs > 0 ? new AbortController() : null
@@ -315,10 +353,18 @@ export async function cmdRun(argv, {
       : signal
     const runtime = runTurn || await loadBuiltinHeadlessRuntime({ runtimeCwd, env })
     const interactive = stdin.isTTY === true && stderr.isTTY === true
-    const recoveryPrompts = createRunRecoveryPrompts(stdin, stderr, { signal: runtimeSignal })
+    const interactionPorts = createRunInteractionPorts({
+      stdin, diagnostics: stderr, signal: runtimeSignal,
+    })
     const runtimeOptions = { ...options }
+    runtimeOptions.workspaceExplicit = options.cwdExplicit === true
+    delete runtimeOptions.cwdExplicit
+    delete runtimeOptions.progress
     delete runtimeOptions.outputFormat
     delete runtimeOptions.timeoutMs
+    // Raw flags are replaced by the bounded, explicit attachment request list.
+    delete runtimeOptions.files
+    delete runtimeOptions.images
     const result = await runtime({
       ...runtimeOptions,
       // HTTP credentials belong to a server URL. Headless execution binds to
@@ -326,24 +372,31 @@ export async function cmdRun(argv, {
       token: '',
       interactive,
       signal: runtimeSignal,
-      onEvent: output.onEvent,
+      onEvent: (event) => {
+        if (event?.type?.startsWith('turn.') && (event.type === 'turn.completed' || terminalDescriptor(event))) observedTerminal = event
+        return output.onEvent(event)
+      },
       onToken: () => {},
       onDiagnostic: (message) => stderr.write(`${message}\n`),
-      onApproval: createApprovalPrompt(stdin, stderr, runtimeSignal),
-      ...recoveryPrompts,
+      ...interactionPorts,
     })
-    if (timeoutTriggered) {
+    if (timeoutTimer) clearTimeout(timeoutTimer)
+    if (timeoutTriggered && timeoutReplacesResult(result, observedTerminal)) {
       await output.writeError(timeoutError)
       return timeoutError.exitCode
     }
+    if (timeoutTriggered) stderr.write('[CLI_RUN_TIMEOUT elapsed; preserving the runtime outcome]\n')
     await output.finish(result)
     return output.resolveExitCode(result)
   } catch (error) {
-    const resolvedError = timeoutTriggered ? timeoutError : error
-    await output.writeError(resolvedError)
-    return Number.isInteger(resolvedError?.exitCode) ? resolvedError.exitCode : 1
+    if (timeoutTimer) clearTimeout(timeoutTimer)
+    // A deadline requests cooperative cancellation; it cannot prove that a
+    // concurrent persistence, output or unknown-result failure was cancelled.
+    await output.writeError(error)
+    return Number.isInteger(error?.exitCode) ? error.exitCode : 1
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer)
+    await output.dispose()
   }
 }
 
@@ -430,6 +483,10 @@ export async function main(argv = process.argv.slice(2)) {
     await cmdVerify(flags)
     return 0
   }
+  if (cmd === 'chat' || cmd === 'i') {
+    const options = parseRunArgs(argv.slice(1))
+    return await cmdChat(options)
+  }
   if (cmd === 'run') {
     const shutdown = createRunShutdownController()
     try {
@@ -483,8 +540,19 @@ export async function main(argv = process.argv.slice(2)) {
     return cmdStatus()
   }
   if (cmd === 'doctor') {
-    parseCommandFlags(argv.slice(1), { command: 'doctor' })
-    return cmdDoctor()
+    const options = parseDoctorArgs(argv.slice(1))
+    if (!options.headless) return cmdDoctor()
+    return cmdDoctorHeadless(options)
+  }
+
+  if (cmd === 'trace') {
+    return cmdTrace(argv.slice(1))
+  }
+  if (cmd === 'goal') {
+    return cmdGoal(argv.slice(1))
+  }
+  if (cmd === 'memory') {
+    return cmdMemory(argv.slice(1))
   }
 
   throw new CliUsageError('CLI_COMMAND_UNKNOWN', `Unknown command: ${argv.join(' ')}`)
