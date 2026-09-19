@@ -10,3 +10,7 @@ bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/shellSession.test.js:generic-api-
 # These exact historical findings do not exempt the file or any future token.
 82dbeceb872f324628d410f3421e2037d3a810e0:tests/toolCallSecretRedaction.test.js:stripe-access-token:11
 82dbeceb872f324628d410f3421e2037d3a810e0:tests/toolCallSecretRedaction.test.js:stripe-access-token:12
+# Historical redaction-test false positive: JSON sub/role segments with literal
+# SYNTHETIC_SIGNATURE, no JOSE algorithm or issued credentials. The fixture is
+# now constructed at runtime. Only this exact old finding is excluded.
+a16a2aa91e11b8c706975685cfa13cbf1efd27a4:tests/sideEffectExecutionLedger.test.js:jwt:867

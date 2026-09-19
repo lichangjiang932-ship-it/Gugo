@@ -852,6 +852,12 @@ test('known-failed proofs may retain explicit actionable diagnostics without tru
 })
 
 test('safe failure diagnostics redact credentials, request bodies and secret-bearing URLs before truncation', () => {
+  // Construct a deliberately unsigned test shape; never store a token literal.
+  const syntheticJwt = [
+    Buffer.from(JSON.stringify({ sub: 'synthetic-user' })).toString('base64url'),
+    Buffer.from(JSON.stringify({ role: 'test-fixture' })).toString('base64url'),
+    'SYNTHETIC_SIGNATURE',
+  ].join('.')
   const cases = [
     ['render rejected Bearer SYNTHETIC_BEARER_VALUE_1234', 'SYNTHETIC_BEARER_VALUE_1234'],
     ['render rejected password="SYNTHETIC PASSWORD VALUE"', 'SYNTHETIC PASSWORD VALUE'],
@@ -864,7 +870,7 @@ test('safe failure diagnostics redact credentials, request bodies and secret-bea
     ['render rejected ["SYNTHETIC_RAW_ARRAY"]', 'SYNTHETIC_RAW_ARRAY'],
     ['render rejected github_pat_SYNTHETIC_GITHUB_PAT_1234567890', 'SYNTHETIC_GITHUB_PAT'],
     ['render rejected sk_test_SYNTHETIC_STRIPE_VALUE_1234567890', 'SYNTHETIC_STRIPE_VALUE'],
-    ['render rejected eyJzdWIiOiIxMjM0NTY3ODkwIn0.eyJyb2xlIjoiYWRtaW4ifQ.SYNTHETIC_SIGNATURE', 'SYNTHETIC_SIGNATURE'],
+    [`render rejected ${syntheticJwt}`, 'SYNTHETIC_SIGNATURE'],
     ['render rejected -----BEGIN PRIVATE KEY----- SYNTHETIC_PRIVATE_KEY -----END PRIVATE KEY-----', 'SYNTHETIC_PRIVATE_KEY'],
     ['x'.repeat(990) + ' password=SYNTHETIC_BOUNDARY_SECRET', 'SYNTHETIC_BOUNDARY_SECRET'.slice(0, 4)],
   ]
