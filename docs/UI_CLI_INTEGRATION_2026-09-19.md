@@ -71,3 +71,18 @@ Playwright 真实浏览器已验证：
 后续只将该样本改为运行时生成，并按仓库既有策略登记 commit/file/rule/line 四项精确指纹；没有忽略整文件、JWT 规则或历史区间，也没有修改历史。相关回归39/39；与 CI 相同的 Gitleaks 8.24.3 经发布方校验和核验后，完整历史749提交扫描无未排除泄漏。
 
 v0.11.57 保留为失败发布记录，不移动或复用标签。准备版本改为 v0.11.58，明确延续 unsigned 策略，需重新通过远程 CI、完整五资产构建/校验和/来源证明与发布后核对。该次追加不改变已经完成全量及真实模型验收的业务实现。
+
+### 发布门禁追加：coverage 运行器
+
+v0.11.58 的远程历史密钥扫描、生产依赖审计、Docker、Node 20/24 原生 SQLite 兼容及 Ubuntu 全量检查已通过；coverage 在 2026-09-19T05:42:14Z 被自身 1,200,000ms watchdog 停止。日志保留在 `coverage-58-job.log`，终态为 `FAIL (1 final failure(s)): batch 1/1 (921 files), ETIMEDOUT`；没有把未完成的覆盖率执行算作通过。
+
+原因是覆盖率必须把整个普通测试集合放在同一进程中聚合，但错误地沿用了普通 100 文件批次的 20 分钟时限。修复保持完整单批、测试集合、40% lines / 35% functions / 60% branches 门槛及失败退出码不变：
+
+- 完整 coverage 默认 40 分钟，优先合法 `TEST_COVERAGE_TIMEOUT_MS`，其次合法 `TEST_BATCH_TIMEOUT_MS`；普通批次 20 分钟和隔离测试 3 分钟不变。空白/无效/非正整数不能关闭 watchdog。
+- CI 显式设置 coverage 40 分钟，job 外层 50 分钟，为安装与隔离 UI 测试留有限余量；不增加忽略失败或绕过门禁的路径。
+- coverage 保留捕获诊断并实时转发 stdout/stderr，不再等进程结束才输出，也不重复打印报告。
+- watchdog / spawn 错误优先于子进程偶然返回的 exit 0，防止超时被误报 PASS；覆盖率不足即使 TAP 全绿、exit 0 也必须失败。
+
+这些改动只修发布验证工具链，不改变已验收的应用行为。新增失败路径回归通过后使用独立 v0.11.59 标签重新进入完整 Release CI；v0.11.57 / v0.11.58 的失败标签与运行记录均保留。新 Release 的成功状态必须以实际远程完成及资产核对为准。
+
+提交前追加验证：runner / selectors / process queue / releasePipeline 共 44/44，通过真实进程树短超时、真实 Node 覆盖率阈值失败、失败断言不重试与双通道提前输出握手；发布策略、来源证明、Release discovery / publisher、插件兼容及 Web 隔离验证共 95/95；全仓 lint 零 warning、typecheck 及 14 个反向 fixture、debt 13/13、依赖清单、复杂度 0 违规通过。独立只读复核未发现新增阻塞。这些定向结果不是新版全量 coverage 通过证明。

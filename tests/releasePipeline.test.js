@@ -99,6 +99,11 @@ test('Release workflow is gated by reusable CI and never overwrites a published 
   assert.doesNotMatch(offlineGate, /--eval-suite/)
   assert.equal(packageMetadata.scripts['eval:offline'], 'node scripts/run-tests.js offline-eval')
   assert.match(ci, /npm run test:coverage/)
+  const coverageJob = ci.match(/\n {2}coverage:[\s\S]*?(?=\n {2}[a-z][a-z-]+:|$)/)?.[0] || ''
+  assert.match(coverageJob, /timeout-minutes: 50/)
+  assert.match(coverageJob, /TEST_COVERAGE_TIMEOUT_MS: 2400000/)
+  assert.match(coverageJob, /TEST_CONCURRENCY: 1/)
+  assert.doesNotMatch(coverageJob, /continue-on-error|COVERAGE_(?:LINES|FUNCTIONS|BRANCHES):\s*0\b/)
   assert.match(ci, /npm run audit:prod/)
   assert.match(ci, /gitleaks\/gitleaks-action/)
   assert.match(ci, /docker build --tag gugo:ci/)

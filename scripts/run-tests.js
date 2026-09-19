@@ -74,6 +74,7 @@ const testConcurrency = Number.isFinite(configuredConcurrency) && configuredConc
   ? Math.floor(configuredConcurrency)
   : defaultConcurrency
 const DEFAULT_BATCH_TIMEOUT_MS = 20 * 60_000
+const DEFAULT_COVERAGE_TIMEOUT_MS = 40 * 60_000
 const DEFAULT_ISOLATED_TIMEOUT_MS = 3 * 60_000
 const PROCESS_TREE_KILL_GRACE_MS = 5_000
 
@@ -82,7 +83,10 @@ function positiveIntegerEnv(name, fallback) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
-const batchTimeoutMs = positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_BATCH_TIMEOUT_MS)
+const batchTimeoutMs = coverageMode
+  ? positiveIntegerEnv('TEST_COVERAGE_TIMEOUT_MS',
+    positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_COVERAGE_TIMEOUT_MS))
+  : positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_BATCH_TIMEOUT_MS)
 const isolatedTimeoutMs = positiveIntegerEnv('TEST_ISOLATED_TIMEOUT_MS', DEFAULT_ISOLATED_TIMEOUT_MS)
 const isolatedCapacity = Math.max(1, Math.min(2, availableParallelism(), Math.floor(totalmem() / (3 * 1024 ** 3))))
 const isolatedConcurrency = Math.min(isolatedCapacity,
@@ -344,16 +348,16 @@ if (batchFiles.length) {
       ...batch,
     ], {
       captureOutput: true,
-      streamOutput: !coverageMode,
+      streamOutput: true,
       timeoutMs: batchTimeoutMs,
     })
-    if (coverageMode) forwardCapturedOutput(result)
     reportProcessError(result, label, batchTimeoutMs)
     console.log(`[run-tests] finished ${label} in ${Date.now() - startedAt}ms; status=${result.status ?? 'none'}`)
-    if ((result.status ?? 1) !== 0 || hasTapFailure(result)
+    if (result.error || result.signal || (result.status ?? 1) !== 0 || hasTapFailure(result)
       || (coverageMode && coverageThresholdFailures(result).length > 0)) {
       failed = true
       const coverageOnlyFailure = coverageMode
+        && !result.error && !result.signal
         && !hasTapFailure(result)
         && coverageThresholdFailures(result).length > 0
       rememberFailure(coverageOnlyFailure
@@ -434,7 +438,7 @@ async function runIsolatedTest(file) {
     forwardCapturedOutput(result)
     reportProcessError(result, label, isolatedTimeoutMs)
 
-    if (result.status === 0 && !hasTapFailure(result)) {
+    if (!result.error && !result.signal && result.status === 0 && !hasTapFailure(result)) {
       passed = true
       break
     }
