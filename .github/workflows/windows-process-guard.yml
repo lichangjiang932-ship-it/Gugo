@@ -7,9 +7,11 @@ on:
     paths:
       - '.github/workflows/windows-process-guard.yml'
       - 'scripts/diagnostics/windows-worker-startup.js'
+      - 'scripts/diagnostics/windows-worker-lifecycle.js'
       - 'server/utils/windowsTreeKill*.js'
       - 'server/utils/windowsProcessGate*.js'
       - 'tests/windowsTreeKill*.test.js'
+      - 'tests/windowsWorkerDiagnosticLifecycle.test.js'
 
 permissions:
   contents: read
@@ -24,6 +26,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.x
@@ -32,4 +36,4 @@ jobs:
       - name: Independent isolated startup stages (no user command)
         run: node scripts/diagnostics/windows-worker-startup.js
       - name: Process isolation, cancellation and real CLI artifact regressions
-        run: node --test --test-concurrency=1 tests/windowsTreeKillStartup.test.js tests/processGroup.test.js tests/processGroupCancellation.test.js tests/cli/artifactCompletion.e2e.test.js
+        run: node --test --test-concurrency=1 tests/windowsTreeKillStartup.test.js tests/windowsTreeKillDependencyIsolation.test.js tests/windowsWorkerDiagnosticLifecycle.test.js tests/processGroup.test.js tests/processGroupCancellation.test.js tests/cli/artifactCompletion.e2e.test.js

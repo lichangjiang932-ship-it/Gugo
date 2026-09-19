@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process'
-import { once } from 'node:events'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { createWindowsTreeKillWorkerManager } from '../../server/utils/windowsTreeKillRuntime.js'
+import { observeDiagnosticWorker } from './windows-worker-lifecycle.js'
 
 // Readiness only: no user command, model, database or existing user profile.
 // Match the CLI artifact fixture's deliberately sparse Windows environment.
@@ -29,14 +30,12 @@ function isolatedEnvironment(root) {
 async function diagnoseWorker(attempt) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'gugo-worker-diagnostic-'))
   const env = isolatedEnvironment(root)
-  let closed = Promise.resolve()
-  let workerChild
+  let lifecycle
   const manager = createWindowsTreeKillWorkerManager({
     spawnProcess: (executable, args, options) => {
+      const startedAt = performance.now()
       const child = spawn(executable, args, { ...options, env, cwd: root })
-      workerChild = child
-      // Register before readiness; only this diagnostic's own child is stopped.
-      closed = once(child, 'close').catch(() => {})
+      lifecycle = observeDiagnosticWorker(child, { startedAt })
       return child
     },
   })
@@ -48,12 +47,20 @@ async function diagnoseWorker(attempt) {
     result = { attempt, ready: false, code: error.code, startup: manager.startupDiagnostics() }
     process.exitCode = 1
   } finally {
+    // Print the evidence before cleanup: even a cleanup failure must not hide
+    // the last known startup stage behind the outer workflow deadline.
+    process.stdout.write(`${JSON.stringify({ ...result, lifecycle: lifecycle?.snapshot() })}\n`)
     manager.shutdown()
-    workerChild?.ref()
-    await closed
-    rmSync(root, { recursive: true, force: true })
+    const cleanupConfirmed = !lifecycle || await lifecycle.waitForClose()
+    process.stdout.write(`${JSON.stringify({ attempt, cleanupConfirmed, lifecycle: lifecycle?.snapshot() })}\n`)
+    if (cleanupConfirmed) rmSync(root, { recursive: true, force: true })
+    else {
+      process.exitCode = 1
+      // Keep the fixture if handles are unconfirmed; do not race their writes.
+      result.cleanupUnconfirmed = true
+    }
   }
-  process.stdout.write(`${JSON.stringify(result)}\n`)
+  return result
 }
 
 if (process.platform !== 'win32') {
@@ -63,5 +70,7 @@ if (process.platform !== 'win32') {
   process.stdout.write(`${JSON.stringify({ platform: process.platform, node: process.version, trials: 3 })}\n`)
   // Three independent cold workers, not success-until-green retries. Any failure
   // keeps the exit code nonzero; the original 30s worker deadline is unchanged.
-  for (let attempt = 1; attempt <= 3; attempt += 1) await diagnoseWorker(attempt)
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if ((await diagnoseWorker(attempt)).cleanupUnconfirmed) break
+  }
 }
