@@ -86,3 +86,19 @@ v0.11.58 的远程历史密钥扫描、生产依赖审计、Docker、Node 20/24 
 这些改动只修发布验证工具链，不改变已验收的应用行为。新增失败路径回归通过后使用独立 v0.11.59 标签重新进入完整 Release CI；v0.11.57 / v0.11.58 的失败标签与运行记录均保留。新 Release 的成功状态必须以实际远程完成及资产核对为准。
 
 提交前追加验证：runner / selectors / process queue / releasePipeline 共 44/44，通过真实进程树短超时、真实 Node 覆盖率阈值失败、失败断言不重试与双通道提前输出握手；发布策略、来源证明、Release discovery / publisher、插件兼容及 Web 隔离验证共 95/95；全仓 lint 零 warning、typecheck 及 14 个反向 fixture、debt 13/13、依赖清单、复杂度 0 违规通过。独立只读复核未发现新增阻塞。这些定向结果不是新版全量 coverage 通过证明。
+
+后续远程证据：v0.11.59 / `65dd21f` 的 coverage job `105849564994` 已真实通过。完整 921 文件批次约 14 分 25 秒完成，1025 文件（含隔离阶段）最终 PASS；`coverage-59-job.log` 的总计为 78.59% lines / 78.07% branches / 78.45% functions，保留原门槛。Ubuntu 全量 job `105849565115` 也通过。该结果验证了 coverage 工具链，不覆盖下文随后修正的 Windows 兼容问题。
+
+### Windows 远程完整结果追加
+
+v0.11.58 的 Windows job `105845997196` 已完整执行 1025 文件、9042 测试（9005 pass / 14 fail / 23 skip），包括 10 个普通批次及 104 个隔离文件，job 约 35 分钟后失败；不是外层 45 分钟到期。保留的 `windows-58-job-105845997196.log` 中的 14 条失败归为以下三类。隔离文件全部通过，不能将这些失败归咎于 Vite worker 偶发退出。
+
+1. 桌面服务及保存的目录授权使用 `fs.realpathSync`，桌面端原先使用的 `fs.promises.realpath` 则在 Windows 扩展 8.3 短名及不同的大小写路径。两者指向同一实体文件、stat 指纹相同，但精确路径比较提前抛 `DESKTOP_FILE_CHANGED`。桌面端改为异步 `promisify(fs.realpath)`，与已有服务/授权算法一致；没有修改授权数据、签名协议或放松任何路径/文件身份比较。真实短名、大小写、HTTP 签名服务链路及同大小同 mtime 的 inode 替换、父目录 junction 替换、确认期间撤销授权均有回归。
+2. 三份历史宿主提示词 fixture 被 Windows Git 的 `core.autocrlf` 改成 CRLF，无法匹配真实旧提示词的完整 SHA-256。只在 `.gitattributes` 固定这些 fixture 为 LF，不扩展生产代码对“宿主记录”的识别。新测试在独立临时 Git 仓库启用 autocrlf，再删除测试工作树文件并真实 checkout，先失败再通过；同时保证 CRLF 变体、附加权限条件和用户引用仍不被当成可删除的宿主记录。
+3. 五个真实 CLI/PPT 验收共用的测试请求主动给 `run_command` 六秒期限，CI 冷启动在准备 Windows 进程树守护时耗尽它。失败日志里的 CLI 没有整体超时，脚本已写入但 PPT 尚不存在；实际工具结果明确报告自己的六秒超时。测试 fixture 为 Windows 提供包含该启动工作的有限期限，保留原有 CLI/测试外层期限和所有产物验证、损坏拒绝、同轮修复与 lease-loss 断言；生产进程守护及超时/取消语义不变。
+
+v0.11.59 已推送的提交 `65dd21f` 不改写。用于补跑的本机 `full-tests-release-59.log` 在上述远程结果确认后主动停止，以免一边修复源码一边把混合版本运行声称为冻结全量通过。后续完整交付使用独立 v0.11.60 候选，仍须完成全量远程门禁、五项资产及下载后的独立校验。
+
+v0.11.60 提交前定向结果：桌面关联 96/96，真实 Electron 短路径桥接退出 0；历史 policy 字节及升级回归 23/23；PPT 回归 13/13、生产 Windows 进程护栏 9/9、按 CI 串行执行的真实 CLI/PPT 链及参数修复 8/8。上述组有重叠，不相加为独立测试总数。整合策略/发布/桌面回归 74/74，全仓 lint、typecheck 及 14 个反向 fixture、debt、依赖清单及复杂度门禁均通过；两个独立只读复核未发现新增阻塞。最终冻结全量另记 `full-tests-release-60.log`，未完成前不宣称通过。
+
+最终冻结全量已于 2026-09-19T06:19:35Z 前完成：**1026 文件、9059 测试，9050 pass / 9 skip / 0 fail / 0 cancelled**，退出 0；104 个隔离 UI 文件全部完成。以 `full-tests-release-60.log` 为本地最终记录，不能替代后续同一版本的远程 Release CI 和下载资产核对。

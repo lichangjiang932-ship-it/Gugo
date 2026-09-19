@@ -1,9 +1,17 @@
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { realpath } from 'node:fs'
+import { promisify } from 'node:util'
 import { randomBytes } from 'node:crypto'
 import { desktopFileError, desktopFileOpenPolicy, normalizeDesktopFileReference } from '../shared/desktopFileReference.js'
 import { desktopFileStatFingerprint, signDesktopFileMessage, verifyDesktopFileMessage } from '../server/utils/desktopFileProtocol.js'
 import { isLoopbackHostname, isTrustedNavigation, parseHttpUrl } from './security.js'
+
+// The signed service and saved grants use fs.realpathSync. On Windows the
+// promises API uses native realpath and expands 8.3 names/casing differently.
+// Keep the matching callback resolver asynchronous; do not relax path or stat
+// equality to compensate for two different canonicalization algorithms.
+const desktopFileSystem = { realpath: promisify(realpath), lstat: fs.lstat }
 
 function trustedFileActionFrame(event, { mainWindow, applicationOrigin }) {
   const contents = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null
@@ -69,7 +77,7 @@ async function verifyCurrentFile(target, fsImpl) {
 }
 
 export async function executeDesktopFileAction(payload, {
-  applicationOrigin, secret, shellImpl, confirmOpen, fsImpl = fs, fetchImpl = fetch, now = Date.now,
+  applicationOrigin, secret, shellImpl, confirmOpen, fsImpl = desktopFileSystem, fetchImpl = fetch, now = Date.now,
   assertCanAct = () => {},
 }) {
   const request = requestFileAction(payload, applicationOrigin)

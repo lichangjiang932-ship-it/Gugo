@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { basename, resolve } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import test from 'node:test'
 import { buildPptxArtifactBuffer } from '../../server/services/pptxArtifactFormat.js'
 import { validateGeneratedArtifactFile } from '../../server/services/generatedArtifactFormatValidation.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
-import { createCliArtifactHarness, diagnosticSummary } from './helpers/artifactCompletionHarness.js'
+import { prepareWindowsProcessExecution } from '../../server/utils/windowsProcessGateRuntime.js'
+import { windowsTreeKillTesting } from '../../server/utils/windowsTreeKillRuntime.js'
+import { ARTIFACT_FIXTURE_COMMAND_TIMEOUT_MS, createCliArtifactHarness, diagnosticSummary } from './helpers/artifactCompletionHarness.js'
 
 const PROMPT = '这个ppt太丑了，重新做一个，要前沿未来科技风'
 
@@ -34,6 +37,26 @@ function readsTarget(event, target, workspace) {
   return event.payload?.name === 'read_file' && matchesTarget(event.payload.args?.path, target, workspace)
 }
 
+test('Windows artifact fixture covers delayed isolation readiness without disabling shorter command deadlines', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock)
+  windowsTreeKillTesting.setManager({
+    ready: () => { clock += 7_000; return Promise.resolve(true) },
+    shutdown() {},
+  })
+  t.after(() => windowsTreeKillTesting.reset())
+  let executions = 0
+  const execute = ({ timeout }) => { executions += 1; return { remainingTimeout: timeout } }
+  const admitted = await prepareWindowsProcessExecution({ timeout: ARTIFACT_FIXTURE_COMMAND_TIMEOUT_MS }, execute)
+  assert.equal(executions, 1, 'a seven-second readiness delay must not consume the artifact fixture budget')
+  assert.equal(admitted.remainingTimeout, ARTIFACT_FIXTURE_COMMAND_TIMEOUT_MS - 7_000)
+  const expired = await prepareWindowsProcessExecution({ timeout: 6_000 }, execute)
+  assert.equal(expired.timedOut, true, 'an explicit short deadline still includes readiness time')
+  assert.equal(executions, 1, 'the expired command must never execute')
+})
+
 test('real CLI bypass auto-verifies a PPT production turn without user resume or model readback', { timeout: 60_000 }, async (t) => {
   const bytes = await fixtureBytes()
   const harness = await createCliArtifactHarness(t, bytes)
@@ -49,6 +72,13 @@ test('real CLI bypass auto-verifies a PPT production turn without user resume or
   const generated = toolEvents.find((event) => event.payload.name === 'run_command')
   assert.equal(generated?.payload.result.ok, true, diagnosis)
   assert.equal(generated?.payload.result.exitCode, 0, diagnosis)
+  const commandTimeout = generated.payload.args.timeout_ms
+  assert.ok(Number.isSafeInteger(commandTimeout) && commandTimeout > 0 && commandTimeout < 45_000,
+    'the producer must keep a finite command deadline below the separate CLI deadline')
+  if (process.platform === 'win32') {
+    assert.ok(commandTimeout > 30_000,
+      'artifact verification is not a cold-start benchmark: allow the 30s Windows isolation readiness gate plus execution')
+  }
   assert.ok(generated?.payload.result.verifiedOutputs?.some((output) => output.type === 'file'), diagnosis)
   const hostReadback = toolEvents.find((event) => readsTarget(event, harness.paths.script, harness.paths.workspace)
     && /host_verify_/.test(event.payload.toolCallId))

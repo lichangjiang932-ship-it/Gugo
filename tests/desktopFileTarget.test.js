@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { randomBytes } from 'node:crypto'
+import { executeDesktopFileAction } from '../desktop/fileActions.js'
 import { signDesktopFileMessage, verifyDesktopFileMessage } from '../server/utils/desktopFileProtocol.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-desktop-target-'))
@@ -56,9 +57,9 @@ async function resolveTarget(body, token = alice.token) {
   })
 }
 
-function receiptFixture(filename) {
+function receiptFixture(filename, transformPath = (value) => value) {
   const id = `target-${filename}`
-  const fullPath = path.join(allowed, filename)
+  const fullPath = transformPath(path.join(allowed, filename))
   fs.writeFileSync(fullPath, 'private fixture content, must not appear in metadata')
   upsertSession({ id, userId: alice.userId, title: filename })
   upsertMessage({
@@ -105,6 +106,41 @@ test('receipt owner and current read grants are checked on every desktop resolut
   const denied = await resolveTarget(request(reference))
   assert.equal(denied.status, 403)
   assert.equal((await denied.json()).error.code, 'PATH_NOT_AUTHORIZED')
+})
+
+test('the real signed service and desktop verifier agree on path spelling and retain owner and revocation checks', async () => {
+  const { reference, fullPath } = receiptFixture('bridge-casing.txt', (value) => process.platform === 'win32' ? value.toLowerCase() : value)
+  const grant = grantLocalPath({ userId: alice.userId, rootPath: allowed, accessMode: 'read_only' })
+  const opened = []
+  const options = { applicationOrigin: origin, secret, shellImpl: { openPath: async (value) => { opened.push(value); return '' } } }
+  const payload = { action: 'open', reference, authToken: alice.token }
+  try {
+    assert.equal((await executeDesktopFileAction(payload, options)).ok, true)
+    assert.deepEqual(opened, [fs.realpathSync(fullPath)])
+    await assert.rejects(executeDesktopFileAction({ ...payload, authToken: bob.token }, options), { code: 'VERIFIED_FILE_NOT_FOUND' })
+    revokeLocalPath({ userId: alice.userId, id: grant.id })
+    await assert.rejects(executeDesktopFileAction(payload, options), { code: 'PATH_NOT_AUTHORIZED' })
+    assert.equal(opened.length, 1)
+  } finally {
+    revokeLocalPath({ userId: alice.userId, id: grant.id })
+  }
+})
+
+test('desktop confirmation cannot reuse service permission revoked while the prompt was open', async () => {
+  const { reference } = receiptFixture('bridge-confirm.html')
+  const grant = grantLocalPath({ userId: alice.userId, rootPath: allowed, accessMode: 'read_only' })
+  const opened = []
+  const options = {
+    applicationOrigin: origin, secret,
+    shellImpl: { openPath: async (value) => { opened.push(value); return '' } },
+    confirmOpen: async () => { revokeLocalPath({ userId: alice.userId, id: grant.id }); return true },
+  }
+  try {
+    await assert.rejects(executeDesktopFileAction({ action: 'open', reference, authToken: alice.token }, options), { code: 'PATH_NOT_AUTHORIZED' })
+    assert.deepEqual(opened, [])
+  } finally {
+    revokeLocalPath({ userId: alice.userId, id: grant.id })
+  }
 })
 
 test('deleted files, forged paths and unsafe open types do not return native targets', async () => {

@@ -13,6 +13,10 @@ const CLI_PATH = fileURLToPath(new URL('../../../bin/yma-cli.js', import.meta.ur
 const NETWORK_GUARD = new URL('./artifactCompletionNetworkGuard.mjs', import.meta.url).href
 const MODEL_NAME = 'gpt-cli-artifact-e2e'
 const ROOT_PREFIX = 'gugo-cli-artifact-e2e-'
+// Windows command execution includes the real process-isolation worker's
+// bounded 30s cold startup. Leave execution time within the separate 45s CLI
+// deadline; these tests verify artifact outcomes, not worker startup speed.
+export const ARTIFACT_FIXTURE_COMMAND_TIMEOUT_MS = process.platform === 'win32' ? 35_000 : 6_000
 
 export { isolatedEnvironment, seedProvider, modelReply, CLI_PATH, NETWORK_GUARD, MODEL_NAME }
 
@@ -304,7 +308,7 @@ function fixtureProducerCalls(paths, pptBytes, idPrefix = 'cli_fixture') {
     { id: `${idPrefix}_script`, name: 'write_file', args: { path: paths.script, content: script } },
     { id: `${idPrefix}_ppt`, name: 'run_command', args: {
       command: `node "${basename(paths.script)}"`, cwd: paths.workspace,
-      expected_outputs: [paths.ppt], timeout_ms: 6_000,
+      expected_outputs: [paths.ppt], timeout_ms: ARTIFACT_FIXTURE_COMMAND_TIMEOUT_MS,
     } },
   ]
 }
@@ -627,6 +631,12 @@ export function diagnosticSummary(run) {
     )).map((event) => ({ type: event.type, sequence: event.sequence, name: event.payload?.name,
       code: event.payload?.code || event.payload?.result?.code || event.error?.code,
       ok: event.payload?.result?.ok, exitCode: event.payload?.result?.exitCode,
+      ...(event.payload?.name === 'run_command' ? {
+        command: event.payload.args?.command, commandTimeoutMs: event.payload.args?.timeout_ms,
+        commandDurationMs: event.payload.result?.durationMs, commandTimedOut: event.payload.result?.timedOut,
+        commandStdout: event.payload.result?.stdout?.slice(-2000),
+        commandStderr: event.payload.result?.stderr?.slice(-2000),
+      } : {}),
       approvalMode: event.payload?.approvalMode, risk: event.payload?.risk,
       phase: event.payload?.phase,
       reason: event.payload?.reason, metadataSource: event.payload?.metadataSource,

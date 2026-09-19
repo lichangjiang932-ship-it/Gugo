@@ -112,3 +112,14 @@ node "$desktopBridgeProbeRoot/launch.mjs" "$PWD" "$desktopBridgeElectron" "$desk
 CLI 分发范围只读核对：`electron-builder.yml` 原本不包含 `bin/**`，既有 ASAR 顶层 `bin/` 文件数为 0，`bin/yma-cli.js` 也不在包内。`package.json` 中的 bin 元数据不等于桌面安装器提供了 CLI。新 `runtimeSelection.js`、`configCommand.js` 属于独立源码 CLI，不是此次 desktop 漏装；本轮没有擅自增加 CLI 打包入口。
 
 **仍未生成本轮 installer，未发布。** 主任务应通过完整 release/CI 重新构建并验收新安装包，不能交付这份已有旧产物或把 mini-ASAR 当成安装包。
+
+## Windows 短路径兼容追加验证
+
+远程 Windows CI 后续暴露了此前长路径探针未覆盖的问题：服务及保存的目录授权使用 `fs.realpathSync`，桌面端 `fs.promises.realpath` 在 Windows 使用 native 解析，会扩展 `RUNNER~1` 等 8.3 名称和路径大小写。两端文件实体和 stat 一致，但路径字符串不同，被精确身份检查拒绝。桌面端现在使用异步 `promisify(fs.realpath)` 与服务口径一致；未修改授权目录、签名载荷、指纹字段或放松精确比较。
+
+- 新增真实大小写、8.3 短名和 HTTP 签名服务链路用例，先复现 3 项 `DESKTOP_FILE_CHANGED`，修后关联 5 文件 96/96、零跳过。
+- 同大小同 mtime 的文件替换、父目录 junction 替换、确认期间撤销授权、跨 owner、错误 key/nonce、导航与 iframe 拒绝仍有行为回归。
+- 复用隔离探针，以 `C:\Users\21161\AppData\Local\Temp\GUGO-N~2\alias-rerun-20260919` 短路径运行真实 Electron 43.3.0 / Node 24.18.1；通过真实 preload/IPC、独立 Node 22 后端、SQLite、HTTP、HMAC 及真实 `shell.showItemInFolder` 定位自建 TXT，退出 0。报告证明 service 短名与 native 长名确实不同。
+- 本轮额外尝试直接用 Electron `RUN_AS_NODE` 跑两份测试：文件动作 16/16 通过，但数据库测试因现有工作树 `better-sqlite3` 的 Node 22 ABI 与 Electron ABI 不同而无法加载。保留失败日志，未改安装或把失败算成通过；随后成功的是前述使用独立后端的真实 IPC 探针，不是直接 DB 测试。
+
+证据为 QA 目录中的 `desktop-bridge-alias-before.log`、`desktop-bridge-alias-after.log`、`desktop-bridge-alias-electron-node.log`、`desktop-bridge-alias-native.log`，及原探针目录的 `alias-rerun-20260919/report.json`。默认应用打开仍未实测；检查与系统打开调用之间既有的短 TOCTOU 窗口未宣称被消除。正式 installer 与发布仍以主任务后续完整 Release CI 为准。

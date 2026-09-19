@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { execFileSync } from 'node:child_process'
 import { executeDesktopFileAction, registerDesktopFileIpc } from '../desktop/fileActions.js'
 import { createDesktopFileActionSetup } from '../desktop/fileActionSetup.js'
 import { desktopFileOpenPolicy, desktopFileReferenceFromUrl } from '../shared/desktopFileReference.js'
@@ -24,8 +25,8 @@ function resign(message, patch) {
   return signDesktopFileMessage({ ...unsignedMessage(message), ...patch }, secret)
 }
 
-function fixture({ extension = 'txt', responseTransform, afterResponse, shellError = '' } = {}) {
-  const fullPath = path.join(root, `file-${++sequence}.${extension}`)
+function fixture({ extension = 'txt', directory = root, responseTransform, afterResponse, shellError = '' } = {}) {
+  const fullPath = path.join(directory, `file-${++sequence}.${extension}`)
   fs.writeFileSync(fullPath, 'synthetic file body')
   const calls = { requests: [], opened: [], revealed: [] }
   const payload = { action: 'open', reference: { kind: 'artifact', filename: path.basename(fullPath) }, authToken: 'synthetic-owner-token' }
@@ -84,6 +85,39 @@ test('desktop opens and reveals only metadata signed by the actual local service
   }
 })
 
+test('desktop accepts service-signed Windows path casing without weakening file identity', { skip: process.platform !== 'win32' }, async () => {
+  const value = fixture({ responseTransform: (message) => resign(message, {
+    target: { ...message.target, fullPath: message.target.fullPath.toLowerCase() },
+  }) })
+  const servicePath = fs.realpathSync(value.fullPath.toLowerCase())
+  assert.notEqual(servicePath, await fs.promises.realpath(servicePath), 'the native API expands a different path spelling')
+  assert.deepEqual(await executeDesktopFileAction(value.payload, value.options), { ok: true, canceled: false, action: 'open' })
+  assert.deepEqual(value.calls.opened, [servicePath])
+})
+
+test('desktop accepts a real Windows 8.3 alias from the signed service without changing its fingerprint', { skip: process.platform !== 'win32' }, async (t) => {
+  let servicePath
+  const value = fixture({ responseTransform: (message) => resign(message, {
+    target: { ...message.target, fullPath: servicePath, filename: path.basename(servicePath) },
+  }) })
+  const shortPath = execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'for %I in ("%GUGO_TEST_FILE_PATH%") do @echo %~sI'], {
+    env: { ...process.env, GUGO_TEST_FILE_PATH: value.fullPath }, encoding: 'utf8',
+    windowsHide: true, windowsVerbatimArguments: true, timeout: 10_000,
+  }).trim()
+  servicePath = fs.realpathSync(shortPath)
+  if (!/(?:^|[\\/])[^\\/]*~[0-9]/u.test(servicePath)) {
+    t.skip('this Windows volume does not generate an 8.3 alias for the isolated fixture')
+    return
+  }
+  assert.notEqual(servicePath, await fs.promises.realpath(servicePath))
+  assert.equal(desktopFileStatFingerprint(fs.statSync(servicePath, { bigint: true })),
+    desktopFileStatFingerprint(fs.statSync(value.fullPath, { bigint: true })))
+  await executeDesktopFileAction(value.payload, value.options)
+  await executeDesktopFileAction({ ...value.payload, action: 'reveal' }, value.options)
+  assert.deepEqual(value.calls.opened, [servicePath])
+  assert.deepEqual(value.calls.revealed, [servicePath])
+})
+
 test('unsigned, substituted-service, stale, wrong-nonce and tampered metadata never reach native APIs', async () => {
   const invalidReplies = [
     unsignedMessage,
@@ -128,6 +162,45 @@ test('file replacement and nonregular paths are rejected just before opening', a
   } })
   await assert.rejects(executeDesktopFileAction(device.payload, device.options), { code: 'DESKTOP_FILE_PATH_INVALID' })
   assert.deepEqual(device.calls.opened, [])
+})
+
+test('same-size replacements with restored modification time still fail the exact file fingerprint check', async () => {
+  const value = fixture()
+  const fixedTime = 1_700_000_000
+  fs.utimesSync(value.fullPath, fixedTime, fixedTime)
+  const previousStat = fs.statSync(value.fullPath, { bigint: true })
+  const fetchImpl = value.options.fetchImpl
+  value.options.fetchImpl = async (...args) => {
+    const response = await fetchImpl(...args)
+    fs.renameSync(value.fullPath, `${value.fullPath}.previous`)
+    fs.writeFileSync(value.fullPath, 'synthetic file body')
+    fs.utimesSync(value.fullPath, fixedTime, fixedTime)
+    const replacementStat = fs.statSync(value.fullPath, { bigint: true })
+    assert.equal(replacementStat.size, previousStat.size)
+    assert.equal(replacementStat.mtimeNs, previousStat.mtimeNs)
+    assert.notEqual(replacementStat.ino, previousStat.ino)
+    return response
+  }
+  await assert.rejects(executeDesktopFileAction(value.payload, value.options), { code: 'DESKTOP_FILE_CHANGED' })
+  assert.deepEqual(value.calls.opened, [])
+})
+
+test('a parent directory replaced by a junction after signing cannot redirect the native action', async () => {
+  const original = path.join(root, 'junction-original')
+  const replacement = path.join(root, 'junction-replacement')
+  fs.mkdirSync(original)
+  fs.mkdirSync(replacement)
+  const value = fixture({ directory: original })
+  fs.writeFileSync(path.join(replacement, path.basename(value.fullPath)), 'synthetic file body')
+  const fetchImpl = value.options.fetchImpl
+  value.options.fetchImpl = async (...args) => {
+    const response = await fetchImpl(...args)
+    fs.renameSync(original, `${original}.previous`)
+    fs.symlinkSync(replacement, original, process.platform === 'win32' ? 'junction' : 'dir')
+    return response
+  }
+  await assert.rejects(executeDesktopFileAction(value.payload, value.options), { code: 'DESKTOP_FILE_CHANGED' })
+  assert.deepEqual(value.calls.opened, [])
 })
 
 test('HTML external-open confirmation defaults to cancel and rechecks permissions and version after approval', async () => {

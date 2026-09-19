@@ -137,6 +137,23 @@ for (const version of ['V2', 'V3']) {
   })
 }
 
+test('line-ending changes and independent conditions do not broaden exact host-record ownership', () => {
+  for (const version of ['V1', 'V2', 'V3']) {
+    const content = readFileSync(new URL(`./fixtures/pptxAuthoringPolicy${version}.txt`, import.meta.url), 'utf8').trimEnd()
+    for (const record of [
+      { role: 'system', content: content.replaceAll('\n', '\r\n') },
+      { role: 'system', content: `${content}\nIndependent authorization condition.` },
+      { role: 'user', content },
+    ]) {
+      const original = [record]
+      assert.strictEqual(replacePresentationPromptContext(original), original)
+      const enabled = replacePresentationPromptContext(original, { enabled: true })
+      assert.ok(enabled.includes(record), 'independent records must remain untouched')
+      assert.equal(ownRecords(enabled).length, 1)
+    }
+  }
+})
+
 test('an explicitly loaded PPT skill already supplies the full policy without a duplicate block', async () => {
   const skill = SKILLS.find((item) => item.id === 'ppt').systemPrompt
   const history = [{ role: 'system', content: skill }]

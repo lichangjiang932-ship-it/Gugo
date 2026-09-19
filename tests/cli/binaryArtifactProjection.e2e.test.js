@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import PptxGenJS from 'pptxgenjs'
 import JSZip from 'jszip'
-import { createCliArtifactHarness } from './helpers/artifactCompletionHarness.js'
+import { createCliArtifactHarness, diagnosticSummary } from './helpers/artifactCompletionHarness.js'
 
 test('real CLI projects its newly validated command-produced PPT as verified without a binary readback or old-turn upgrade', { timeout: 60_000 }, async (t) => {
   const deck = new PptxGenJS()
@@ -12,9 +12,7 @@ test('real CLI projects its newly validated command-produced PPT as verified wit
   assert.ok(bytes.length < 20_000, 'the binary fixture must fit the existing bounded CLI prompt budget')
   const harness = await createCliArtifactHarness(t, bytes)
   const run = await harness.run('Create the requested PPT in this workspace and deliver the completed presentation.')
-  const diagnosis = JSON.stringify({ status: run.status, timedOut: run.timedOut, stderr: run.stderr,
-    failures: harness.provider.failures, events: run.events.map((event) => ({ type: event.type,
-      code: event.payload?.code, phase: event.payload?.phase, error: event.payload?.error })) })
+  const diagnosis = diagnosticSummary(run)
   assert.equal(run.timedOut, false, diagnosis)
   assert.equal(run.status, 0, diagnosis)
   assert.deepEqual(harness.provider.failures, [], diagnosis)
