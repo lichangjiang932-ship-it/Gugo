@@ -32,12 +32,14 @@ import {
   secureDesktopWebContents,
 } from './mainWindowSecurity.js'
 import { configureDesktopUpdates } from './updateSetup.js'
+import { createDesktopFileActionSetup } from './fileActionSetup.js'
 
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, 'preload.cjs')
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.ico')
 const BACKEND_DISCONNECT_TIMEOUT_MS = 16_000
+const desktopFileActions = createDesktopFileActionSetup({ app, dialog, ipcMain, shell })
 
 let mainWindow = null
 let petWindow = null
@@ -122,6 +124,7 @@ function configureDesktopRuntime() {
   // A packaged app can be installed next to a source checkout. Never treat a
   // neighbouring developer .env as the desktop user's model configuration.
   process.env.GUGO_LOAD_DOTENV = '0'
+  process.env.GUGO_DESKTOP_BRIDGE_SECRET = desktopFileActions.secret
   process.env.GUGO_SQLITE_DRIVER = 'node'
   process.env.SERVER_HOST = '127.0.0.1'
   process.env.SERVER_PORT = String(port)
@@ -386,6 +389,7 @@ function handlePetDrag(event, payload = {}) {
 }
 
 function registerDesktopIpc() {
+  desktopFileActions.register(() => ({ mainWindow, applicationOrigin }))
   ipcMain.handle('desktop:write-clipboard-text', (event, value) => {
     assertTrustedIpc(event)
     clipboard.writeText(String(value ?? ''))

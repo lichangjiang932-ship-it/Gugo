@@ -258,6 +258,7 @@ async function settlePausedResult(runtime, context) {
     userId, sessionId, turnId, text, clarification,
     pausedEventSequence: event.sequence,
     checkpointMessages: state.checkpointMessages,
+    publicTimeline: state.publicTimeline,
     baselineToolCallIds: state.baselineToolCallIds,
     verifiedLocalFiles, retainedLocalFiles, artifactIds, deliveryArtifactIds, iterations,
     pluginPromptBlockIds: state.promptContextSnapshot?.pluginPromptBlockIds,
@@ -290,6 +291,7 @@ async function settleCompletedResult(runtime, context) {
   const message = createCompletedTurnMessage({
     userId, sessionId, turnId, text,
     checkpointMessages: state.checkpointMessages,
+    publicTimeline: state.publicTimeline,
     baselineToolCallIds: state.baselineToolCallIds,
     verifiedLocalFiles, retainedLocalFiles, artifactIds, deliveryArtifactIds, iterations,
     pluginPromptBlockIds: state.promptContextSnapshot?.pluginPromptBlockIds,

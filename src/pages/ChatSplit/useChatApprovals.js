@@ -6,6 +6,7 @@ import {
   updateApprovalSettings,
 } from '../../lib/approvalClient.js'
 import { createApprovalEpochGuard, createApprovalOwnerGuard } from './approvalOwnerGuard.js'
+import { approvalDecisionNoticeKey, localizeApprovalError } from '../../lib/approvalErrorPresentation.js'
 
 function approvalPresentationClosedError() {
   const error = new Error('Approval view closed before a decision was submitted.')
@@ -27,6 +28,7 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
   const resolveToolApproval = useCallback((decision) => {
     const resolve = toolApprovalResolveRef.current
     if (typeof resolve !== 'function') return false
+    const presentation = activeApprovalRef.current
     const resolutionEpoch = epochGuardRef.current.current()
     toolApprovalResolveRef.current = null
     ownerGuardRef.current.clear()
@@ -36,10 +38,12 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
       setToolApproval({ open: false, request: null, busy: false })
     }
     Promise.resolve(resolve?.(decision)).catch((error) => {
-      setWorkbenchMessage(error?.message || 'Approval failed.')
+      if (mountedRef.current && presentation?.noticeEnabled !== false && epochGuardRef.current.isCurrent(resolutionEpoch)) {
+        setWorkbenchMessage(localizeApprovalError(error, t))
+      }
     }).finally(close)
     return true
-  }, [setWorkbenchMessage])
+  }, [setWorkbenchMessage, t])
 
   const presentServerToolApproval = useCallback((request, owner) => {
     // Closing the chat page is not a user denial. Keep the persisted approval
@@ -50,15 +54,22 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
     if (!mountedRef.current) return Promise.reject(approvalPresentationClosedError())
     let approvalPromise
     let rejectApproval
+    const presentationOwner = createApprovalOwnerGuard()
+    const canNotify = () => mountedRef.current && activeApprovalRef.current?.promise === approvalPromise
+      && activeApprovalRef.current.noticeEnabled === true
     approvalPromise = new Promise((resolve, reject) => {
       rejectApproval = reject
       epochGuardRef.current.advance()
       ownerGuardRef.current.claim(owner)
+      presentationOwner.claim(owner)
       toolApprovalResolveRef.current = async (decision) => {
         try {
-          await decideApprovalApi(request.id, decision?.approved ? 'approve' : 'deny', null, { remember: !!decision?.remember })
+          const result = await decideApprovalApi(request.id, decision?.approved ? 'approve' : 'deny', null, { remember: !!decision?.remember })
+          const noticeKey = approvalDecisionNoticeKey(result)
+          if (noticeKey && canNotify()) setWorkbenchMessage(t(noticeKey))
           resolve()
         } catch (error) {
+          if (canNotify()) setWorkbenchMessage(localizeApprovalError(error, t))
           reject(error)
         } finally {
           if (activeApprovalRef.current?.promise === approvalPromise) activeApprovalRef.current = null
@@ -70,15 +81,20 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
       id: request.id,
       promise: approvalPromise,
       reject: rejectApproval,
+      presentationOwner,
+      noticeEnabled: true,
     }
     return approvalPromise
-  }, [])
+  }, [setWorkbenchMessage, t])
 
   const requestServerToolApproval = useCallback((request, owner) => {
     // approval.required is durable and may be delivered again after an SSE
     // reconnect. Reusing the in-flight promise is essential: replacing it used
     // to submit `deny` for an approval the user had never rejected.
     const active = activeApprovalRef.current
+    // Keep the original waiter/POST lifecycle, but do not show a previous
+    // owner's delayed result in a newly requested Turn's workbench.
+    if (active && !active.presentationOwner.matches(owner)) active.noticeEnabled = false
     if (active?.id === request.id) return active.promise
     if (active) {
       return active.promise.then(
@@ -96,9 +112,12 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
   }, [resolveToolApproval])
 
   const clearToolApprovalForOwner = useCallback((owner) => {
+    const active = activeApprovalRef.current
+    // Submission has already released the interactive owner guard. A later
+    // owner cleanup still invalidates copy, without cancelling or replaying it.
+    if (active?.presentationOwner.matches(owner)) active.noticeEnabled = false
     if (!ownerGuardRef.current.release(owner)) return false
     epochGuardRef.current.advance()
-    const active = activeApprovalRef.current
     toolApprovalResolveRef.current = null
     activeApprovalRef.current = null
     active?.reject?.(approvalPresentationClosedError())
@@ -162,7 +181,7 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
       return safe
     } catch (error) {
       setApprovalSettings(previous)
-      toast.error({ title: t('errors.saveFailed'), body: error.message })
+      toast.error({ title: t('errors.saveFailed'), body: localizeApprovalError(error, t) })
       return false
     }
   }, [approvalSettings, toast, t])

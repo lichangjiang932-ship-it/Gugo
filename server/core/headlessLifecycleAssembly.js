@@ -2,6 +2,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { closeDb } from '../db.js'
+import { shutdownAll as shutdownMcpAll } from '../mcp/mcpManager.js'
 import {
   initPlugins,
   initializeRuntimePluginConfig,
@@ -35,6 +36,7 @@ export const HEADLESS_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
   runtimePluginConfig: 'headless.startup.runtime-plugin-config',
   pluginDiscovery: 'headless.startup.plugin-discovery',
   runtimePlugins: 'headless.resource.runtime-plugins',
+  mcp: 'headless.resource.mcp',
   agentEventConsumers: 'headless.resource.agent-event-consumers',
   lsp: 'headless.resource.lsp',
   turnEngine: 'headless.resource.turn-engine',
@@ -42,6 +44,7 @@ export const HEADLESS_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
 
 const DEFAULT_ADAPTERS = Object.freeze({
   closeDb,
+  shutdownMcpAll,
   recoverPendingSessionDeletion,
   startSessionContentMaterializerRuntime,
   closeSessionContentMaterializerRuntime,
@@ -177,7 +180,15 @@ export function createHeadlessLifecycleCapabilities({
       stopFailure: 'fail',
       errorLabel: 'headless runtime plugin lifecycle',
     }),
-    definition(ids.agentEventConsumers, ids.runtimePlugins, {
+    definition(ids.mcp, ids.runtimePlugins, {
+      // Discovery connects only the user's already-enabled servers on demand.
+      // A CLI turn must nevertheless release those transports before exit.
+      stop: () => adapters.shutdownMcpAll(),
+      stopTimeoutMs: 20_000,
+      stopFailure: 'fail',
+      errorLabel: 'headless MCP shutdown',
+    }),
+    definition(ids.agentEventConsumers, ids.mcp, {
       start: () => adapters.startAgentEventDurableConsumerRuntime(),
       startFailure: 'fail',
       stop: () => adapters.closeAgentEventDurableConsumerRuntime(),

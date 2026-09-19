@@ -1,6 +1,7 @@
 import { buildAssistantModelContext } from './turnMessageContext.js'
 import { normalizeArtifactIds } from './turnTerminalProjection.js'
 import { normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
+import { publicTimelineContext } from './turnPublicTimeline.js'
 
 export function createInitialCancellationMessage({
   userId,
@@ -76,6 +77,7 @@ export function createTurnEvidenceMessage({
   sessionId,
   turnId,
   checkpointMessages,
+  publicTimeline = null,
   baselineToolCallIds,
   pluginPromptBlockIds,
   checkpointRecovery,
@@ -118,6 +120,7 @@ export function createTurnEvidenceMessage({
       }),
       turnEvidence: true,
       evidenceState: state,
+      ...publicTimelineContext(publicTimeline, { userId, sessionId, turnId }, evidenceText),
       ...(Number.isInteger(serverLastSequence) && serverLastSequence >= 0
         ? { serverLastSequence }
         : {}),
@@ -137,6 +140,7 @@ export function createPausedTurnMessage({
   clarification,
   pausedEventSequence,
   checkpointMessages,
+  publicTimeline = null,
   baselineToolCallIds,
   verifiedLocalFiles,
   retainedLocalFiles,
@@ -180,6 +184,7 @@ export function createPausedTurnMessage({
         turnCompletedAt: pausedAt,
       }),
       clarification,
+      ...publicTimelineContext(publicTimeline, { userId, sessionId, turnId }, text),
       pausedSequence: pausedEventSequence,
     },
     createdAt: pausedAt,
@@ -193,6 +198,7 @@ export function createCompletedTurnMessage({
   turnId,
   text,
   checkpointMessages,
+  publicTimeline = null,
   baselineToolCallIds,
   verifiedLocalFiles,
   retainedLocalFiles,
@@ -214,7 +220,8 @@ export function createCompletedTurnMessage({
     sessionId,
     role: 'assistant',
     content: text,
-    modelContext: buildAssistantModelContext({
+    modelContext: {
+      ...buildAssistantModelContext({
       turnId,
       checkpointMessages,
       baselineToolCallIds,
@@ -232,7 +239,9 @@ export function createCompletedTurnMessage({
       estimatedPromptTokens: latestEstimatedPromptTokens,
       turnStartedAt: effectiveTurnStartedAt,
       turnCompletedAt: completedAt,
-    }),
+      }),
+      ...publicTimelineContext(publicTimeline, { userId, sessionId, turnId }, text),
+    },
     createdAt: completedAt,
     updatedAt: completedAt,
   }

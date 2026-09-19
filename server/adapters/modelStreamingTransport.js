@@ -11,7 +11,9 @@ import {
 import {
   extractModelResponseError,
   extractUsage,
+  modelHttpResponseError,
 } from './modelProviderResponse.js'
+import { markContextOverflowGeneration } from './modelContextOverflow.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
 import {
   createCompatibleModelStreamState,
@@ -128,6 +130,7 @@ async function* consumeStreamingResponse({
   let lastUsage = null
   let sawProviderEvent = false
   let sawTerminal = false
+  let generationObserved = false
   const argumentProgress = createToolArgumentProgressTracker()
   const recordProgress = (kind) => armTimer('idle', kind === 'tool_arguments'
     ? modelToolArgumentsIdleMs(profile.timeouts.idleMs) : profile.timeouts.idleMs)
@@ -147,10 +150,20 @@ async function* consumeStreamingResponse({
     }
     const chunk = decoded.data
     const responseError = extractModelResponseError(chunk)
-    if (responseError) throw responseError
+    if (responseError) {
+      const reportedUsage = responseError.usage || lastUsage
+      if (reportedUsage) {
+        responseError.usage = reportedUsage
+        yield { type: 'usage', usage: reportedUsage }
+      }
+      if (generationObserved || Number(reportedUsage?.completionTokens) > 0) markContextOverflowGeneration(responseError)
+      throw responseError
+    }
     if (nativeStreamState) {
       const nativeEvents = consumeNativeFrameWithProgress(chunk, nativeStreamState, argumentProgress, recordProgress)
       for (const event of nativeEvents) {
+        if ((['text', 'reasoning'].includes(event.type) && String(event.delta || '').length > 0)
+          || ['tool_call_ready', 'tool_call_progress', 'tool_calls'].includes(event.type)) generationObserved = true
         if (event.type === 'reasoning' && event.delta) {
           reasoningChars += event.delta.length
           if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
@@ -165,6 +178,7 @@ async function* consumeStreamingResponse({
       continue
     }
     const frame = normalizeCompatibleModelStreamPayload(chunk, compatibleStreamState)
+    if (frame.text?.length || frame.reasoning?.length || frame.toolCallDeltas.length) generationObserved = true
     if (hasModelContentProgress(frame.text) || hasModelContentProgress(frame.reasoning)) recordProgress()
     const chunkUsage = extractUsage(chunk)
     if (chunkUsage) {
@@ -233,14 +247,7 @@ async function assertStreamingResponseOk(response) {
   const text = await response.text()
   let data
   try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
-  const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
-  const error = new Error(message)
-  error.status = response.status
-  error.code = data?.error?.code || data?.code || ''
-  error.type = data?.error?.type || data?.type || ''
-  error.fromUpstream = true
-  error.retryAfter = response.headers?.get?.('retry-after') ?? null
-  throw error
+  throw modelHttpResponseError(data, response, text)
 }
 
 /** Provider streaming boundary: transport deadlines, frames and tool assembly. */

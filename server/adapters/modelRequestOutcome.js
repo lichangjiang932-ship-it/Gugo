@@ -1,4 +1,5 @@
 import { isContextLengthError } from './modelProxyErrors.js'
+import { contextOverflowHasGeneration, isContextOverflowWithoutGeneration } from './modelContextOverflow.js'
 
 export const MODEL_REQUEST_OUTCOME_UNKNOWN_CODE = 'MODEL_REQUEST_OUTCOME_UNKNOWN'
 
@@ -75,11 +76,18 @@ export function modelRequestOutcomeUnknown(error, {
   }
 
   const status = Number(error?.status ?? error?.statusCode)
+  if (!cancellationObserved && isContextOverflowWithoutGeneration(error)) {
+    // This is a known provider failure, not a pre-send failure or generic retry
+    // permission. Only context recovery may attempt a changed, bounded request.
+    error.modelRequestOutcome = 'failed'
+    error.retryable = false
+    return error
+  }
   const rateLimitRejected = error?.fromUpstream === true && status === 429
     && [error?.code, error?.type].some((value) => /^(?:rate_limit_exceeded|rate_limit_error|too_many_requests|resource_exhausted)$/i.test(String(value || '')))
   const definiteClientRejection = Number.isFinite(status) && status >= 400 && status < 500
     && ![408, 409, 425, 429].includes(status)
-  if (!cancellationObserved && (definiteClientRejection || rateLimitRejected)) {
+  if (!cancellationObserved && !contextOverflowHasGeneration(error) && (definiteClientRejection || rateLimitRejected)) {
     // Generic 408/5xx/gateway/SSE failures do not prove the request was rejected.
     // A structured rate-limit rejection can use the normal bounded backoff.
     if (rateLimitRejected) error.modelRequestOutcome = 'rejected'
@@ -104,5 +112,6 @@ export function modelRequestOutcomeUnknown(error, {
   if (error?.timeoutPhase) unknown.timeoutPhase = String(error.timeoutPhase)
   if (Number.isFinite(Number(error?.timeoutMs))) unknown.timeoutMs = Number(error.timeoutMs)
   if (error?.partialModelResult) unknown.partialModelResult = error.partialModelResult
+  if (error?.usage) unknown.usage = error.usage
   return unknown
 }

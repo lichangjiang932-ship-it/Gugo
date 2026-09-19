@@ -1,4 +1,5 @@
 import { CliUsageError } from './errors.js'
+import { assertCliRuntimeDirectory } from './runtimeSelection.js'
 
 const BOOLEAN_FLAGS = new Map([
   ['--headless', 'headless'],
@@ -63,12 +64,14 @@ export function parseDoctorArgs(argv = []) {
  * `--probe` was explicitly requested. The report is JSON on stdout; the exit
  * code is 0 only when no blocking reason was found.
  */
-export async function cmdDoctorHeadless({ model, provider, cwd, probe, integrity } = {}) {
+export async function cmdDoctorHeadless({ model, provider, cwd, probe, integrity, runtimeCwd = process.cwd(), env = process.env } = {}) {
+  assertCliRuntimeDirectory(runtimeCwd)
   const { runHeadlessDoctor } = await import('../../server/services/headlessDoctorService.js')
   const report = await runHeadlessDoctor({
-    // The runtime directory stays the process cwd; --cwd only selects the task
-    // workspace, so a checked-out project cannot relocate trusted runtime state.
-    runtimeCwd: process.cwd(),
+    // Runtime selection is independent of --cwd, which only selects the task
+    // workspace. Project files cannot relocate the selected trusted runtime.
+    runtimeCwd,
+    env,
     workspaceCwd: cwd || process.cwd(),
     providerId: provider || '',
     modelName: model || '',

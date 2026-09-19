@@ -10,6 +10,7 @@ const LOGIN_ERROR_I18N_KEYS = Object.freeze({
   AUTH_EMAIL_INVALID: 'leftRailLogin.emailInvalid',
   AUTH_SEND_CODE_RATE_LIMITED: 'leftRailLogin.sendCodeRateLimited',
   AUTH_SEND_CODE_FAILED: 'leftRailLogin.sendCodeFailed',
+  AUTH_MAIL_NOT_CONFIGURED: 'leftRailLogin.mailNotConfigured',
   AUTH_CODE_INVALID_OR_EXPIRED: 'leftRailLogin.codeInvalidOrExpired',
   AUTH_CODE_ATTEMPTS_EXCEEDED: 'leftRailLogin.codeAttemptsExceeded',
   AUTH_CODE_INVALID: 'leftRailLogin.codeInvalid',

@@ -28,12 +28,13 @@ npm run cli -- --version
 |---|---|---|
 | `gugo --help` | 文本 | 显示命令帮助 |
 | `gugo --version` | 文本 | 显示 `package.json` 中的当前版本 |
+| `gugo config [--json]` | 文本或 JSON | 只读检查本地运行目录、配置层和既有网页设置链接 |
 | `gugo login --email <email>` | 文本 | 请求邮箱验证码 |
 | `gugo verify --email <email> --code <code>` | 文本 | 校验验证码并保存登录 token |
 | `gugo session list [--archived true\|false\|all] [--limit <n>] [--offset <n>]` | JSON | 分页列出会话 |
 | `gugo session search --query <text> [--session-id <id>] [--limit <n>] [--offset <n>]` | JSON | 搜索会话消息 |
 | `gugo session show <session-id> [--limit <n>] [--offset <n>]` | JSON | 读取会话快照与消息 |
-| `gugo model list [--provider <id>] [--search <text>]` | JSON | 发现可供 `run` 使用的模型 |
+| `gugo model list [--provider <id>] [--search <text>]` | JSON | 查询目标 HTTP 服务的模型目录；不自动绑定本地 `run` 数据库 |
 | `gugo agent list` | JSON | 列出 Agent |
 | `gugo skill list` | JSON | 列出 Skill |
 | `gugo status` | JSON 或文本 | 检查公开健康端点是否可访问 |
@@ -44,13 +45,15 @@ npm run cli -- --version
 | `gugo run ...` | JSONL 或文本 | 在当前进程运行或恢复一个持久化 Turn |
 | `gugo chat` | 交互式终端 | 一个终端里连续多轮：切模型/模式/工作区、实时看工具进度、看/批准计划 |
 
-`-h` 等价于 `--help`，`-V` 等价于 `--version`。不带参数时也会显示帮助。
+`-h` 等价于 `--help`，`-V` 等价于 `--version`。不带参数时也会显示帮助。各命令和命令分组均支持上下文帮助，例如 `gugo chat --help`、`gugo session --help`、`gugo session show -h`、`gugo help goal create`、`gugo goal help step`；别名 `gugo i --help` 显示 chat 帮助。帮助退出码为 `0`，不读取 stdin、不打开数据库、不创建身份、不调用 HTTP 或模型，也不会读取 `--steps-file` 内容。
 
-除 `run` 的独立参数解析外，带值选项同时接受 `--name value` 和 `--name=value`。未知选项、重复选项和多余位置参数均以退出码 `2` 结束。
+带值选项同时接受 `--name value` 和 `--name=value`。帮助不是忽略非法命令的通行证：未知命令/选项、重复选项、冲突或越界值仍失败，不为显示帮助而执行命令。`--` 后的内容与选项值不会被帮助层劫走，例如 `gugo run -- --help` 把 `--help` 当作 prompt，`gugo run help` 仍提交字面 `help`。用法错误退出 `2`，保留已有错误码的具体语义。
+
+`goal`、`memory reindex`、`trace` 在加载配置/数据库前完成命令级参数预检。`goal --steps` 与 `--steps-file` 互斥；steps 文件必须为稳定可读的普通 UTF-8 JSON 文件（不接受目录、设备、FIFO 或符号链接），最多 1 MiB、64 个步骤。非法输入不会因坏配置抢先报错，也不会留下新数据库。缺少可选 `.env` 不是本地命令失败：这几个命令静默读取相同配置层，合法配置错误仍正常报告，不通过禁用配置读取来消除提示。
 
 ## 服务地址
 
-登录、验证、资源列表、`status` 和普通 `doctor` 通过 HTTP 访问 Gugo 服务；`run`、`chat`、`doctor --headless`、`trace`、`goal`、`memory reindex` 在本地进程运行。HTTP 默认地址为：
+登录、验证、资源列表、`status` 和普通 `doctor` 通过 HTTP 访问 Gugo 服务；`config`、`run`、`chat`、`doctor --headless`、`trace`、`goal`、`memory reindex` 在本地进程运行。HTTP 默认地址为：
 
 ```text
 http://127.0.0.1:5173
@@ -77,6 +80,52 @@ gugo agent list
 `GUGO_CLI_RUN_TIMEOUT_MS` 是可选的 Turn 执行超时，单位为毫秒；命令行 `--timeout <ms>` 优先于环境变量。两者都只接受 1–2147483647 的十进制整数，未设置时不限制。到期后 CLI 请求取消 Turn，并等待持久化终态和运行时清理。只有没有更具体终态证据的协作取消才以 `CLI_RUN_TIMEOUT` 与退出码 `124` 结束；一致且完整的成功保留正文与退出码 `0`，并在 stderr 提醒 deadline 已过。具体失败、恢复阻塞或未知副作用不会被改写为超时。详见下文“deadline 与结果证据”。
 
 `gugo run` 不经由该 HTTP 地址执行。它在 CLI 进程内启动 Gugo 的内置 Headless Runtime，并使用本机运行时配置、模型配置和 Turn 持久化目录；`GUGO_SERVER_URL` 不会把 `run` 转发到远程服务。`run` 也不会读取或复用任何服务作用域的 HTTP token，远程登录凭据不会进入本地 Headless Runtime。
+
+## 复用已有网页与桌面配置
+
+CLI 不另建模型凭据或工具配置器。复用的前提是选择**同一运行时数据路径和本机 owner**；仅设置 `GUGO_SERVER_URL` 并不满足这个前提。从任意项目目录启动时，可显式绑定原运行目录：
+
+```powershell
+gugo --runtime-dir 'D:\Gugo运行目录' config --json
+gugo --runtime-dir 'D:\Gugo运行目录' chat --cwd 'D:\工作项目'
+gugo --runtime-dir 'D:\Gugo运行目录' run '分析当前项目' --cwd 'D:\工作项目'
+```
+
+`--runtime-dir` 是位于命令**之前**的全局选项，只用于本地命令；HTTP 命令使用 `GUGO_SERVER_URL`，普通 `doctor` 需要改为 `doctor --headless`。启动器也可设置 `GUGO_RUNTIME_CWD`；优先级为 `--runtime-dir` > 启动进程的 `GUGO_RUNTIME_CWD` > 实际启动 cwd。默认仍是启动目录，不扫描磁盘寻找其他实例、不迁移或删除旧数据，也不会自动改用桌面目录。
+
+运行目录与任务目录是两件事：前者决定 `.env`、`.gugo/runtime.json` 和相对存储路径；`--cwd` 决定任务文件、项目指令及工具执行目录，不重选运行配置或数据库。`goal --steps-file` 等用户显式输入文件仍相对 CLI 的实际启动目录解析。运行中读取的 JSON/项目配置不能通过 `GUGO_RUNTIME_CWD` 重选本轮绑定。
+
+新会话在 `run/chat --cwd <dir>` 或 chat 显式 `/cwd <dir>` 后首次发送时，将规范化目录保存为项目归属；同一数据源的网页会话目录与快照可以读取该归属。未显式选目录的新会话仍归 Recent。继续已有会话时，切换 cwd 只改变本轮执行目录，不自动移动原会话（包括旧的 Recent 会话）；chat `/new` 沿用当前目录选择。已配置的默认生成目录可与执行目录不同，不因项目归属持久化而改变。
+
+CLI 的目录选择只在当前进程中生效，不保存新的目录授权或工作区信任。网页看到会话项目归属，不代表获得读写权限；网页继续使用该目录仍需原有授权与信任检查。无效目录或发送前取消不创建会话归属记录。
+
+| 设置内容 | CLI 的实际读取路径与边界 |
+|---|---|
+| 模型与凭据 | 与网页使用同 owner 的 Provider store、readiness 和凭据库；每个 Turn 校验选定 Provider/模型/版本，不复制密钥文件 |
+| 审批与目录 | 共享 owner 的审批记录、remembered grants、目录授权；未显式 `--mode` 时保持 `normal`，保存的 `plan` 会进一步收紧；不会静默继承 `acceptEdits`/`bypass` |
+| MCP | 使用该 owner 已启用的 MCP 配置、惰性发现和原权限检查；Turn 退出时关闭已建立的连接，不预先启动未启用的服务 |
+| Agent 与 Skill | 使用共享默认 Agent、Skill catalog 及已选 Skill 的编译路径；`run '/skill_id prompt'` 使用既有显式技能前缀。网页当前临时选择的非默认 Agent/Skill 不自动变成 CLI 选择 |
+| 长短期记忆 | 同 owner/Agent 范围的持久消息、压缩归档和记忆注入；embedding 仍需显式配置，不因启动 CLI 自动启用外部请求 |
+| 运行配置 | 复用 `user runtime.json < project .gugo/runtime.json < explicit APP_CONFIG_PATH < .env < 原始启动环境` 的覆盖顺序 |
+
+长驻 chat 每个 Turn 都从原始启动来源重读运行配置，原启动环境覆盖仍然优先。删除的运行配置项不会继续残留为旧的进程值。若数据目录、DB、产物目录或显式配置路径发生变化，会在切换进程路径、打开另一份 DB 前失败；需正常退出并核对路径后重新启动，不会在会话中无声换库。配置刷新在下一 Turn 边界发生，不代表运行中立即热切所有服务。
+
+`gugo config` 不打开 DB、凭据库或本机身份，不探测模型、不连接网络，也不启动 HTTP 服务或浏览器。输出给出实际路径、存储来源和低到高配置优先级；网页设置 URL 使用实际 hash 路由 `/#/settings`，保留配置的服务 basePath，仅是**未验证的链接**，不证明对应服务与本地 CLI 是同一实例。可手动打开该链接使用已有网页设置页面；想检查当前 owner/模型的就绪状态，应使用隔离于写入路径的 `doctor --headless`，不能把 config 的路径检查当作模型验收。
+
+桌面默认数据目录来自 Electron 的 `userData/server-data`，通常与源码启动的 `cwd/server-data` 不同；桌面还显式选择 DB、artifacts，并关闭 cwd `.env`。`--runtime-dir` **不是** `--data-dir`。与桌面共用时，应从桌面诊断或现有运行配置确认准确路径，再由受信任启动器或用户显式设置：
+
+```powershell
+$env:GUGO_RUNTIME_CWD = 'C:\已确认的Gugo运行目录'
+$env:APP_DATA_DIR = 'D:\已确认的桌面数据\server-data'
+$env:APP_DB_PATH = 'D:\已确认的桌面数据\server-data\app.db'
+$env:ARTIFACT_DIR = 'D:\已确认的桌面数据\server-data\artifacts'
+$env:GUGO_LOAD_DOTENV = '0'
+$env:GUGO_SERVER_URL = 'http://127.0.0.1:5180'
+gugo config --json
+gugo chat --cwd 'D:\工作项目'
+```
+
+这些只是待替换的示例路径，不是自动发现结果。若部署另外注入了凭据加密密钥等环境覆盖，CLI 也需要同一受信任部署环境；诊断不会读取或导出这些密钥。当前未新增桌面 IPC 自动启动 CLI，也不从 renderer 导出任意环境变量。不同版本同时操作同一 DB 前，应确认 schema 兼容并保留备份。
 
 ## 登录与 token
 
@@ -179,7 +228,7 @@ gugo doctor --headless --probe   # 实际探测选定端点；仅保存的 Provi
 
 输出为单个 JSON 对象（stdout），退出码 `0` 表示无阻断项、`1` 表示存在阻断。字段含义：
 
-- `runtime`：实际使用的 `dataDir` / `dbPath` / `artifactDir` / `configPath`，以及本次由进程环境显式覆盖的存储键。`runtime.cwd` 始终是启动目录，**不是** `--cwd`。
+- `runtime`：实际使用的 `dataDir` / `dbPath` / `artifactDir` / `configPath`，以及本次由进程环境显式覆盖的存储键。`runtime.cwd` 是 `--runtime-dir` / 启动器选中的运行目录，未指定时为启动目录，**不是**任务 `--cwd`。
 - `workspace`：`--cwd` 解析出的任务工作区及其存在性。
 - `model`：选中 Provider/模型/配置版本；`toolsDeclared` 是配置声明。`probe.status` 区分 `passed` / `failed` / `not_run`，并区分持久结果与本次临时探测。环境配置存在不等于探测通过；未探测的 `checkedAt` 为 `null`。
 - `probeSteps`：仅在 `--probe` 时出现，包含步骤名、是否通过、耗时、稳定错误码及可用的脱敏诊断。
@@ -204,11 +253,15 @@ gugo trace <turnId> --session-id <session-id> --limit 500
 gugo trace <turnId> --json
 ```
 
-`trace` 只读本地持久事件（不启动 HTTP、不调用模型），把 `sessionId` / `turnId` / `toolCallId` /
+`trace` 只读已有本地持久事件（不启动 HTTP、不调用模型），把 `sessionId` / `turnId` / `toolCallId` /
 `modelRequestId` 关联成一条时间线，并汇总模型阶段数、工具调用/失败数、审批数、检查点数，
-以及 prompt/completion/measured cached token。`--json` 输出完整事件与聚合对象，
+以及 prompt/completion/cache usage 计数。`--json` 输出预算内事件与聚合对象，
 便于脚本消费。无法仅凭 Turn ID 定位会话时需同时传 `--session-id`（与 `run --resume` 一致）。
-退出码：找到并读出为 `0`；未找到、缺少身份或缺少 Turn ID 为 `1`；参数错误为 `2`。
+退出码：找到并读出为 `0`；未找到或只读检查不可用为 `1`；参数错误（含缺少 Turn ID）为 `2`。
+
+它仍需读取运行时配置以定位正确数据库、认证模式和 owner，但不会初始化/迁移 DB、创建账户/登录会话、写凭据或改变进程存储路径。缺库、缺已有本机身份、待迁移/不兼容 schema、活跃 WAL、待恢复 journal 或源文件变化均返回明确 `TRACE_*` 阻塞码，不回退到可写启动路径。存在活跃 WAL 时请使用运行中服务的认证 API/SDK，或正常关闭运行时后重试；不要手工删除 WAL/SHM。multi_user 配置需要服务侧已有授权，远程 `gugo login` token 不会被当成本地数据库权限。
+
+`--limit` 为 1–10000 的整数，默认 2000；内部可跨多个存储页读取，不再将 2000 行误作更高 limit 的全部结果。达到预算且仍有后续事件时输出 `coverage: "partial"` / `truncated: true`，text 明示 Partial，OTLP root span 带 `gugo.trace.coverage`；事件聚合只针对实际读到的部分，不能当作整段历史总量。`complete` 表示本次读完该范围内当前持久化的可用事件，不承诺恢复此前已裁剪的历史。
 
 `context_prepared` 还记录工具 schema / 稳定前缀指纹和脱敏记忆覆盖诊断，阶段为 `pre_compaction`，不代表最终供应商 tokenization 或 GPU KV 命中。稳定前缀只统计开头**连续且显式标记 `__gugoPromptStability==='stable'`** 的 system 块；未标记、`volatile`、未知标记或非 system 消息都会结束前缀并按保守“无稳定前缀”处理。诊断的 `comparisonScope` 固定为 `within_turn`：指纹对比仅在同一 Turn 内相邻两次模型请求之间进行，不跨 Turn 持久化，也不重建历史边界；旧版（v1 快照、全部 system 坍缩边界）的先前值不可比，显示为 `prefix not comparable`。实际 cache usage 未报告时保持未知，不能显示成零命中。兼容流在请求了 usage 时，会有限读取 `finish_reason` 后的统计帧；缺失统计不会触发模型重试。LM Studio 默认支持该请求选项，显式 `MODEL_STREAM_USAGE=0` 可关闭。
 
@@ -483,7 +536,7 @@ gugo run --resume <turnId> [--session-id <id>] [--cwd <dir>]
 |---|---|
 | `--model <name>` | 为新 Turn 选择模型名称 |
 | `--provider <id>` | 为新 Turn 选择已持久化的 Provider ID |
-| `--mode <mode>` | 为新 Turn 选择本次权限模式，默认 `normal` |
+| `--mode <mode>` | 显式选择本次权限模式；未指定时默认 `normal`，保存的账户 `plan` 可进一步收紧，不自动继承更宽模式 |
 | `--cwd <dir>` | 选择本次执行的工作目录；路径必须存在且是目录 |
 | `--session-id <id>` | 指定新 Turn 所属的会话 |
 | `--resume <turnId>` | 从持久化状态恢复一个未完成 Turn，不能组合新 Prompt 或附件 |

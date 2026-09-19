@@ -8,6 +8,7 @@ import { collectArtifacts } from './rightWorkbench/rightWorkbenchArtifacts.js'
 import {
   clampWidth,
   DEFAULT_WIDTH,
+  isLocalWorkbenchPath,
   normalizeBrowserUrl,
   readStoredWidth,
   WIDTH_STORAGE_KEY,
@@ -103,7 +104,7 @@ export default function RightWorkbench({
     event.preventDefault()
     const nextUrl = normalizeBrowserUrl(browserInput)
     if (!nextUrl) {
-      setBrowserError(t('workbench.browserInvalid'))
+      setBrowserError(t(isLocalWorkbenchPath(browserInput) ? 'workbench.browserLocalFile' : 'workbench.browserInvalid'))
       return
     }
     setBrowserError('')

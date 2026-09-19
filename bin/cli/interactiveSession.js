@@ -316,11 +316,15 @@ async function applyInteractiveCommand(parsed, context) {
           throw new CliUsageError('CLI_MODE_INVALID', `mode must be one of ${INTERACTIVE_MODES.join(', ')}`)
         }
         state.mode = parsed.args
+        state.modeExplicit = true
       }
       write(stdout, `mode ${state.mode}`)
       return null
     case '/cwd':
-      if (parsed.args) state.cwd = parsed.args
+      if (parsed.args) {
+        state.cwd = parsed.args
+        state.cwdExplicit = true
+      }
       write(stdout, `cwd ${state.cwd}`)
       return null
     case '/plan':
@@ -378,7 +382,9 @@ export async function startInteractiveSession({
     model: options.model || null,
     modelProviderId: options.modelProviderId || null,
     mode: options.mode || 'normal',
+    modeExplicit: options.modeExplicit ?? options.mode != null,
     cwd: options.cwd || runtimeCwd,
+    cwdExplicit: options.cwdExplicit ?? Object.hasOwn(options, 'cwd'),
     attachments: createAttachmentQueue({ files: options.files, images: options.images, cwd: options.cwd || runtimeCwd }),
   }
   if (!state.sessionId) {

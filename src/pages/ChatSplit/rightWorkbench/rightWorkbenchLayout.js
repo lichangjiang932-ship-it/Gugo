@@ -19,11 +19,19 @@ export function readStoredWidth() {
 
 export function normalizeBrowserUrl(value) {
   const input = String(value || '').trim()
-  if (!input) return ''
+  if (!input || input.includes('\\') || isLocalWorkbenchPath(input)) return ''
+  if (Array.from(input).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return ''
+  const explicitHttp = /^https?:\/\//i.test(input)
+  const hostWithPort = /^(?:localhost|[a-z\d.-]+\.[a-z\d.-]+):\d+(?:[/?#]|$)/i.test(input)
+  if (!explicitHttp && /^[a-z][a-z\d+.-]*:/i.test(input) && !hostWithPort) return ''
   try {
-    const url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`)
-    return ['http:', 'https:'].includes(url.protocol) ? url.href : ''
+    const url = new URL(explicitHttp ? input : `https://${input}`)
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : ''
   } catch {
     return ''
   }
+}
+
+export function isLocalWorkbenchPath(value) {
+  return /^(?:file:|[a-z]:|[\\/]|\.{1,2}[\\/]|~[\\/])/i.test(String(value || '').trim())
 }

@@ -186,6 +186,7 @@ export async function dispatchTurnEvent(sourceEvent, {
         turnCompletedAt: null,
         latency: null,
         serverPartialText: '',
+        publicTimeline: null,
         serverArtifactIds: [],
         modelActivity: null,
       },

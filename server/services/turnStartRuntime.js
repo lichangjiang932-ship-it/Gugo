@@ -6,6 +6,7 @@ import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
 import { normalizeServerToolsConfig } from './turnToolSpecs.js'
+import { normalizeSessionWorkspaceMode } from './turnSessionWorkspaceBinding.js'
 
 const MODEL_MODES = new Set(['agent', 'chat_only'])
 
@@ -119,7 +120,7 @@ function normalizeTurnStartRequest(input = {}) {
     locale = null, modelName = null, modelProviderId = null, modelConfigRevision = null,
     modelMode = 'agent', history = [], agentId = null, skillIds = [],
     skillDefinitions = [], toolsConfig = null, intentMode = 'auto', approvalMode = null,
-    attachments = [], authMode = null,
+    attachments = [], authMode = null, sessionWorkspaceMode,
   } = input
   const rawText = String(content || '').trim()
   const normalizedAttachmentIds = normalizeAttachmentIds(attachments)
@@ -135,6 +136,7 @@ function normalizeTurnStartRequest(input = {}) {
   if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
   return {
     userId, sessionId, turnId, text, displayText, workspacePath, modelName,
+    sessionWorkspaceMode: normalizeSessionWorkspaceMode(sessionWorkspaceMode),
     authMode, history, normalizedAttachmentIds, normalizedLocale,
     normalizedApprovalMode: normalizeTurnApprovalMode(approvalMode),
     normalizedModelConfigRevision: normalizeTurnModelConfigRevision(modelConfigRevision),
@@ -309,6 +311,7 @@ function turnStartedPayload(request, prepared, messages) {
     intentMode: request.normalizedIntentMode,
     ...(request.normalizedLocale ? { locale: request.normalizedLocale } : {}),
     ...(request.normalizedApprovalMode ? { approvalMode: request.normalizedApprovalMode } : {}),
+    ...(request.sessionWorkspaceMode === 'create-only' ? { sessionWorkspaceMode: 'create-only' } : {}),
     ...(prepared.projectDirectory ? {
       workspacePath: prepared.normalizedWorkspacePath,
       projectDirectory: prepared.projectDirectory,

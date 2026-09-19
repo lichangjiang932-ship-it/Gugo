@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   }),
   getVersion: () => ipcRenderer.invoke('desktop:get-version'),
   openConfigFile: () => ipcRenderer.invoke('desktop:open-config-file'),
+  fileAction: ({ action, reference, authToken } = {}) => ipcRenderer.invoke('desktop:file-action', {
+    action, reference, authToken,
+  }),
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
   setPetVisible: (visible) => ipcRenderer.invoke('desktop:set-pet-visible', visible === true),

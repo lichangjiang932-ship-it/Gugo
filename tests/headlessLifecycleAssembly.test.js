@@ -54,6 +54,7 @@ test('headless lifecycle starts only local durability/plugin services and stops 
     },
     closeLspRuntime: () => { events.push('stop:lsp') },
     closeTurnEngine: () => { events.push('stop:turn-engine') },
+    shutdownMcpAll: () => { events.push('stop:mcp') },
     warn: (message) => { events.push(`warn:${message}`) },
   }
   const compactionArchiveController = {
@@ -94,10 +95,11 @@ test('headless lifecycle starts only local durability/plugin services and stops 
 
   const stopped = await graph.stopAll()
   assert.equal(stopped.exitCode, 0)
-  assert.deepEqual(events.slice(-8), [
+  assert.deepEqual(events.slice(-9), [
     'stop:turn-engine',
     'stop:lsp',
     'stop:agent-event-consumers',
+    'stop:mcp',
     'stop:runtime-plugins',
     'stop:materializer',
     'stop:compaction-archive',

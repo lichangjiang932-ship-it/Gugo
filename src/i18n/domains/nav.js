@@ -63,7 +63,7 @@ const translations = {
     "filterArchived": "归档",
     "filterAll": "全部",
     "quoteSelection": "引用",
-    "quoteSelectionTitle": "引用所选文本到输入框"
+    "quoteSelectionTitle": "引用这条消息的选区或全文到输入框"
   },
   "en": {
     "home": "Home",
@@ -129,7 +129,7 @@ const translations = {
     "filterArchived": "Archived",
     "filterAll": "All",
     "quoteSelection": "Quote",
-    "quoteSelectionTitle": "Quote selection into composer"
+    "quoteSelectionTitle": "Quote this message or its selected text into the composer"
   }
 }
 

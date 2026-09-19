@@ -9,6 +9,8 @@ import { NativePreviewRenderer, WorkbookPreview } from './NativePreviewRenderers
 import { OpenOriginalLink, PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
 import { BUILTIN_PREVIEW_RENDERER_OWNER, previewRendererRegistry } from './previewRendererRegistry.js'
 import { withPreviewRetry } from './previewUrl.js'
+import { canViewDirectFileSource } from '../../../lib/directFileSource.js'
+import DirectFileSource from './DirectFileSource.jsx'
 
 export { DirectHtmlUrlPreview } from './HtmlFilePreview.jsx'
 
@@ -20,6 +22,9 @@ function directFilePreviewIdentity(file = {}, url = '') {
 }
 
 export default function DirectFilePreview(props) {
+  if (props.view === 'source' && canViewDirectFileSource(props.file)) {
+    return <DirectFileSource key={directFilePreviewIdentity(props.file, props.url)} {...props} />
+  }
   return <DirectFilePreviewRequest key={directFilePreviewIdentity(props.file, props.url)} {...props} />
 }
 

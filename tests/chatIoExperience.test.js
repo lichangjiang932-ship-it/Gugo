@@ -4,6 +4,7 @@ import test from 'node:test'
 import { readSourceTree } from './sourceTree.js'
 import { toolFailureFacts, toolFailureSummary } from '../src/lib/toolFailurePresentation.js'
 import { toolCallLabel } from '../src/lib/toolCallPresentation.js'
+import { assistantTimelinePresentation, stableTimelineSegments } from '../src/pages/ChatSplit/chatMessages/messageRow/timelinePresentation.js'
 
 const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
 const messagesSource = readSourceTree('../src/pages/ChatSplit/chatMessages/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
@@ -243,18 +244,33 @@ test('reasoning stays a compact live status while tool traces remain inspectable
 })
 
 test('one assistant turn preserves narration and tool batches in their recorded order', () => {
-  assert.match(messageRowSource, /buildMessageTimeline\(content, toolCalls\)/)
-  assert.match(messageRowSource, /assistantTimelinePresentation\(timeline\)/)
-  assert.match(messageRowSource, /segments\.map\(\(segment, index\)/)
-  assert.match(messageRowSource, /segment\.kind === 'tools'/)
-  assert.match(messageRowSource, /<ToolCallTrace[\s\S]*?calls=\{segment\.calls\}/)
-  assert.match(messageRowSource, /\{segment\.text\}/)
-  assert.match(messageRowSource, /<ExecutionDisclosure[\s\S]*?\(isCurrentStreamingMessage \|\| hasReasoningSummary\) && <ActivityStream/)
-  assert.doesNotMatch(messageRowSource, /execution-running|execution-complete/)
-  assert.match(messageRowSource, /useState\(running\)/)
-  assert.match(messageRowSource, /if \(running && !wasRunning\.current\) setExpanded\(true\)/)
-  assert.match(messageRowSource, /chatMessages\.executionToolCount/)
-  assert.doesNotMatch(messageRowSource, /compactMessagePresentation|timeline\.flatMap|\.reverse\(\)/)
+  const opening = '**Inspect**\n\nRead both files.\n\n'
+  const middle = '**Verify**\n\nCheck the edited result.\n\n'
+  const answer = '**Result**\n\nVerification passed.'
+  const content = opening + middle + answer
+  const calls = [
+    { id: 'first-read', name: 'read_file', textOffset: opening.length, status: 'success' },
+    { id: 'second-read', name: 'read_file', textOffset: opening.length, status: 'success' },
+    { id: 'verify', name: 'run_command', textOffset: opening.length + middle.length, status: 'running' },
+  ]
+  const before = structuredClone(calls)
+  const timeline = stableTimelineSegments(content, calls)
+  assert.deepEqual(timeline.map((segment) => segment.kind), ['text', 'tools', 'text', 'tools', 'text'])
+  assert.deepEqual(timeline.filter((segment) => segment.kind === 'text').map((segment) => segment.text), [opening, middle, answer])
+  const batches = timeline.filter((segment) => segment.kind === 'tools')
+  assert.deepEqual(batches.map((segment) => segment.calls.map((call) => call.id)), [['first-read', 'second-read'], ['verify']])
+  assert.deepEqual(batches.map((segment) => segment.stepOffset), [0, 2])
+  const presented = assistantTimelinePresentation(timeline)
+  assert.equal(presented.hasPublicNarration, true)
+  assert.equal(presented.answer, answer)
+  assert.deepEqual(presented.execution.map((segment) => segment.kind), ['text', 'tools', 'text', 'tools'])
+  assert.equal(presented.execution.some((segment) => segment.text === answer), false, 'final text is rendered exactly once')
+  const completed = stableTimelineSegments(content, calls.map((call) => ({ ...call, status: 'success' })))
+  assert.deepEqual(completed.map((segment) => segment.key), timeline.map((segment) => segment.key), 'completion does not reorder or remount earlier tool batches')
+  assert.deepEqual(calls, before)
+  assert.deepEqual(assistantTimelinePresentation(stableTimelineSegments(answer, [])), {
+    answer, execution: [], hasPublicNarration: false,
+  }, 'a plain final reply is not an execution or private-reasoning transcript')
 })
 
 test('reasoning does not expose raw text or character counts', () => {

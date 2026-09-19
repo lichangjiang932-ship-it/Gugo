@@ -9,6 +9,7 @@ import { createEmptyModelResponseError } from './sseLifecycle.js'
 import { getProviderReplayContext } from './providerReplayState.js'
 import { normalizeModelProviderStopDiagnostic } from '../../shared/modelProviderStopDiagnostic.js'
 import { redactModelConfigSecrets } from './modelProxyErrors.js'
+import { contextOverflowFromProviderPayload, isParsedContextOverflow, providerFailureUsage } from './modelContextOverflow.js'
 
 export function stripEmbeddedReasoning(value) {
   const text = String(value || '')
@@ -95,6 +96,8 @@ export function extractCompatibleToolCalls(data) {
  */
 export function extractModelResponseError(data) {
   if (!data || typeof data !== 'object') return null
+  const contextError = contextOverflowFromProviderPayload(data)
+  if (contextError) return contextError
   const raw = data.error ?? (data.type === 'error' ? data : null)
   if (!raw) return null
   const detail = raw && typeof raw === 'object' ? raw : {}
@@ -107,6 +110,25 @@ export function extractModelResponseError(data) {
   const status = Number(detail.status ?? detail.status_code ?? data.status ?? data.status_code)
   if (Number.isFinite(status) && status >= 400) error.status = status
   error.fromUpstream = true
+  const usage = providerFailureUsage(data)
+  if (usage) error.usage = usage
+  return error
+}
+
+/** HTTP status comes only from the response, never an error payload's code. */
+export function modelHttpResponseError(data, response, text = '') {
+  const error = extractModelResponseError(data) || new Error(
+    data?.message || text.slice(0, 240) || response.statusText,
+  )
+  if (!isParsedContextOverflow(error)) {
+    // Preserve the HTTP contract's absent upstream code. Synthesizing the SSE
+    // fallback here masks existing bounded diagnostics such as MODEL_NOT_LOADED.
+    error.code = data?.error?.code || data?.code || ''
+    error.type = data?.error?.type || data?.type || ''
+  }
+  error.status = response.status
+  error.fromUpstream = true
+  error.retryAfter = response.headers?.get?.('retry-after') ?? null
   return error
 }
 

@@ -202,6 +202,22 @@ test('turn routes expose host configuration and cleanup failures as actionable 5
   }, { resolveEngine })
 })
 
+test('HTTP turn clients cannot set the host-only session workspace binding mode', async () => {
+  const user = issueTestSession({ email: 'turn-workspace-mode-route@example.invalid' })
+  let received
+  const engine = { async startTurn(input) { received = input; return { id: 'route-workspace-mode-turn' } } }
+  await withTurnRouteEngine(engine, async (routeOrigin) => {
+    const response = await fetch(`${routeOrigin}/api/turns/run`, { method: 'POST', headers: auth(user.token),
+      body: JSON.stringify({ sessionId: 'route-workspace-mode-session', content: 'hello', workspacePath: 'C:\\WebProject',
+        sessionWorkspaceMode: 'create-only', sessionWorkspaceExplicit: true, workspaceExplicit: true }) })
+    assert.equal(response.status, 202)
+    assert.equal(received.workspacePath, 'C:\\WebProject')
+    for (const field of ['sessionWorkspaceMode', 'sessionWorkspaceExplicit', 'workspaceExplicit']) {
+      assert.equal(Object.hasOwn(received, field), false, field)
+    }
+  })
+})
+
 test('turn run route preserves structured model readiness failures', async () => {
   const user = issueTestSession({ email: 'turn-readiness-route@example.com' })
   let failure = new ModelReadinessError('MODEL_CONFIG_MISSING', {

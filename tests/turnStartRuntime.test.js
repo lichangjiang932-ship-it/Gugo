@@ -244,6 +244,32 @@ test('turn start leaves no durable state when workspace validation fails', async
   assert.equal(emitterFactory.emitters.length, 0)
 })
 
+test('headless creation-only workspace binding is durable without replacing the actual execution directory', async () => {
+  let aggregate
+  const { ports } = createPorts({ ports: {
+    readSession: async () => ({ id: 'session-1', userId: 'user-1', workspacePath: 'C:\\Original' }),
+    resolveProjectDirectory: async () => ({ workspacePath: 'C:\\Execution', projectDirectory: 'C:\\Execution',
+      defaultOutputDirectory: 'C:\\Output' }),
+    commitTurnStart: async (command) => { aggregate = command },
+  } })
+  const result = await createTurnStartRuntime(ports).initialize({ ...BASE_INPUT,
+    workspacePath: 'C:\\Execution', sessionWorkspaceMode: 'create-only' })
+  assert.equal(aggregate.session, null)
+  assert.equal(aggregate.event.payload.sessionWorkspaceMode, 'create-only')
+  assert.equal(aggregate.event.payload.workspacePath, 'C:\\Execution')
+  assert.equal(result.execution.projectDirectory, 'C:\\Execution')
+  assert.equal(result.execution.defaultOutputDirectory, 'C:\\Output')
+  await result.emitter.close()
+})
+
+test('unknown session workspace binding modes fail before any persistence lookup or write', async () => {
+  const { ports } = createPorts({ ports: {
+    readSession: async () => assert.fail('invalid mode must fail before the first storage read'),
+  } })
+  await assert.rejects(createTurnStartRuntime(ports).initialize({ ...BASE_INPUT, sessionWorkspaceMode: 'replace-all' }),
+    (error) => error.code === 'TURN_SESSION_WORKSPACE_MODE_INVALID')
+})
+
 for (const [label, code] of [
   ['stale model configuration revision', 'MODEL_CONFIG_REVISION_STALE'],
   ['unconfigured model provider', 'MODEL_PROVIDER_NOT_CONFIGURED'],

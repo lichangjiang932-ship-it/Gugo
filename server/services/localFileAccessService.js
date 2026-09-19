@@ -306,10 +306,16 @@ export function withTurnProjectDirectory({
   }), operation)
 }
 
-/** Explicit headless CLI workspace root (`--cwd`), or empty when unset. */
+/** Only the exact process-trusted CLI root can supply temporary authority. */
 function cliExplicitWorkspaceRoot() {
   const configured = String(process.env.GUGO_CLI_WORKSPACE_ROOT || '').trim()
-  return configured ? path.resolve(configured) : ''
+  if (!configured || process.env.WORKSPACE_FS_ENABLED !== '1' || !sharedWorkspaceTrusted()) return ''
+  try {
+    const canonical = realPath(path.resolve(configured))
+    return samePath(canonical, realPath(workspaceRoot())) ? canonical : ''
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -326,7 +332,7 @@ export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {})
   // instructions) instead of a configured default output directory taking over
   // the workspace role. The default output directory still controls where new
   // files are written.
-  const cliWorkspace = selectedPath ? '' : cliExplicitWorkspaceRoot()
+  const cliWorkspace = cliExplicitWorkspaceRoot()
   const configuredPath = configuredOutputDirectory(userId)
   let requestedPath = selectedPath
     || cliWorkspace
@@ -363,13 +369,16 @@ export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {})
     canonicalPath = realPath(requestedPath)
     stat = fs.statSync(canonicalPath)
   }
+  const selectedCliWorkspace = Boolean(cliWorkspace && samePath(cliWorkspace, canonicalPath))
   if (selectedPath) {
     const grant = findAuthorizedDirectoryGrant({
       userId,
       rawPath: canonicalPath,
       accessMode: 'read_write',
     })
-    if (!grant) {
+    // This authority was already established by the CLI host, not an HTTP
+    // request or session metadata. It never becomes a saved grant/trust row.
+    if (!grant && !selectedCliWorkspace) {
       throw serviceError('所选项目目录尚未获得读写授权', 403, 'TURN_WORKSPACE_NOT_AUTHORIZED')
     }
     const trust = getWorkspaceTrustStatus({ userId, rootPath: canonicalPath })
@@ -381,7 +390,7 @@ export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {})
   return {
     workspacePath: selectedPath ? canonicalPath : null,
     projectDirectory: canonicalPath,
-    defaultOutputDirectory: cliWorkspace
+    defaultOutputDirectory: selectedCliWorkspace
       ? (configuredPath || isolatedTestOutputDirectory() || canonicalPath)
       : canonicalPath,
   }

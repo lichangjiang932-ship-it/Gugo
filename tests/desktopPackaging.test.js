@@ -159,6 +159,8 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
   assert.equal(normalizeAsarEntry('\\src\\lib\\officeExport\\documentExport.js'), 'src/lib/officeExport/documentExport.js')
   assert.equal(resolveAsarPath(path.join('release', 'win-unpacked')), path.resolve('release', 'win-unpacked', 'resources', 'app.asar'))
   assert.deepEqual(REQUIRED_DESKTOP_ASAR_FILES, [
+    'desktop/fileActionSetup.js',
+    'desktop/fileActions.js',
     'server/start.js',
     'server/adapters/builtinSqliteTurnPersistenceBootstrap.js',
     'server/adapters/sqliteTurnPersistenceAdapter.js',
@@ -167,6 +169,7 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
     'server/adapters/browserFrameAutomation.js',
     'server/adapters/browserUploadAutomation.js',
     'server/services/desktopParentGuard.js',
+    'server/services/desktopFileTargetService.js',
     'server/services/runtimeServerStartup.js',
     'server/services/pptxMarkdownCompatibility.js',
     'server/services/pptxMarkdownSource.js',
@@ -175,6 +178,8 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
     'server/services/pptxArtifactValidation.js',
     'server/utils/windowsProcessGateChild.js',
     'server/utils/windowsProcessGateRuntime.js',
+    'server/utils/desktopFileProtocol.js',
+    'shared/desktopFileReference.js',
     'shared/runtimeConfigRecoveryProtocol.js',
     'src/i18n/domains/skillsMarket.js',
     'src/lib/officeExport/documentExport.js',
@@ -210,7 +215,7 @@ test('desktop packaging covers the transitive artifact parsers and minimal skill
   }
 })
 
-test('desktop ASAR verification catches a missing skill copy or PPT compatibility module', async (t) => {
+test('desktop ASAR verification catches each missing bridge, skill copy or PPT compatibility module', async (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-asar-runtime-'))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
   const fixture = path.join(rootDir, 'app')
@@ -222,11 +227,24 @@ test('desktop ASAR verification catches a missing skill copy or PPT compatibilit
   const complete = path.join(rootDir, 'complete.asar')
   await createPackage(fixture, complete)
   assert.deepEqual(verifyDesktopAsar(complete).checkedFiles, [...REQUIRED_DESKTOP_ASAR_FILES])
-  for (const [index, file] of ['src/i18n/domains/skillsMarket.js', 'server/services/pptxMarkdownCompatibility.js'].entries()) {
-    fs.rmSync(path.join(fixture, file))
+  const missingCandidates = [
+    'desktop/fileActionSetup.js',
+    'desktop/fileActions.js',
+    'server/services/desktopFileTargetService.js',
+    'server/utils/desktopFileProtocol.js',
+    'shared/desktopFileReference.js',
+    'src/i18n/domains/skillsMarket.js',
+    'server/services/pptxMarkdownCompatibility.js',
+  ]
+  for (const [index, file] of missingCandidates.entries()) {
+    const target = path.join(fixture, file)
+    fs.rmSync(target)
     const incomplete = path.join(rootDir, `incomplete-${index}.asar`)
     await createPackage(fixture, incomplete)
-    assert.throws(() => verifyDesktopAsar(incomplete), (error) => error.message.includes(file))
+    assert.throws(() => verifyDesktopAsar(incomplete), (error) => error.message.endsWith(`missing runtime files: ${file}`))
+    // Every archive has exactly one omission, so an earlier failure cannot
+    // accidentally stand in for coverage of the next bridge dependency.
+    fs.copyFileSync(new URL(`../${file}`, import.meta.url), target)
   }
 })
 

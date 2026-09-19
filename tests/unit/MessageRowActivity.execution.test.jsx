@@ -45,7 +45,7 @@ function diagnosticState() {
 }
 
 for (const lang of ['zh', 'en']) {
-  test(`wire/context events survive real dispatch, reducer and localized execution details (${lang})`, async (t) => {
+  test(`wire/context events survive dispatch and reducer without diagnostic chrome in normal conversation (${lang})`, async (t) => {
     const dom = setupDom()
     const element = document.getElementById('root')
     const root = createRoot(element)
@@ -69,27 +69,24 @@ for (const lang of ['zh', 'en']) {
       assert.equal(state.message().meta.modelRequestId, 'request-fixture', 'stale diagnostic cannot replace current request identity')
       await render()
       const live = element.querySelector('[data-testid="execution-diagnostics"]')
-      assert.ok(live)
-      assert.match(live.textContent, /request-fixture/u)
-      assert.match(live.textContent, /MEMORY_SEMANTIC_SCAN_LIMIT/u)
-      assert.match(live.textContent, lang === 'zh' ? /不是缓存命中证据/u : /not cache-hit evidence/u)
-      assert.match(live.textContent, lang === 'zh' ? /实际 KV.*未知/u : /Actual KV.*unknown/u)
+      assert.equal(Boolean(live), false)
+      assert.doesNotMatch(element.textContent, /request-fixture|MEMORY_SEMANTIC_SCAN_LIMIT|实际 KV|Actual KV/u)
       await state.send('model.phase', { phase: 'completed', usage: { promptTokens: 100, cacheHitTokens: 20 } }, 3)
-      await state.send('turn.completed', { text: 'Final fixture answer' }, 4)
+      await state.send('assistant.delta', { text: 'Final fixture answer' }, 4)
+      await state.send('turn.completed', { text: 'Final fixture answer' }, 5)
       await render()
       const toggle = element.querySelector('[data-testid="execution-toggle"]')
-      assert.ok(toggle, 'diagnostics remain available after a tool-free terminal')
-      await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+      assert.equal(Boolean(toggle), false, 'trace metadata must not create process UI for a tool-free terminal')
       const final = element.querySelector('[data-testid="execution-diagnostics"]')
-      assert.ok(final)
-      assert.match(final.textContent, lang === 'zh' ? /供应商报告.*20/u : /Provider-reported.*20/u)
-      assert.doesNotMatch(final.textContent, lang === 'zh' ? /实际 KV.*未知/u : /Actual KV.*unknown/u)
+      assert.equal(Boolean(final), false)
+      assert.equal(state.message().meta.modelUsage.cacheHitTokens, 20, 'provider evidence is retained, not removed from state')
+      assert.match(element.textContent, /Final fixture answer/u)
       assert.equal(network.mock.callCount(), 0)
     } finally { await act(async () => root.unmount()); dom.window.close() }
   })
 }
 
-test('completion-policy exhaustion survives dispatch to execution details without widening terminal success', async () => {
+test('completion-policy exhaustion remains durable and failed without raw diagnostics in the transcript', async () => {
   const dom = setupDom()
   const element = document.getElementById('root')
   const root = createRoot(element)
@@ -104,9 +101,11 @@ test('completion-policy exhaustion survives dispatch to execution details withou
     await act(async () => root.render(<I18nProvider><MessageRow msg={state.message()} rowKey="diagnostic-message"
       generatingMessageId="" lang="en" t={t} /></I18nProvider>))
     const toggle = element.querySelector('[data-testid="execution-toggle"]')
-    assert.ok(toggle)
-    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.match(element.querySelector('[data-testid="execution-diagnostics"]').textContent, /mutation_verification.*2\/2/u)
+    assert.equal(Boolean(toggle), false)
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.ok(element.textContent.trim(), 'the actual failure must remain visible')
+    assert.equal(state.message().meta.failed, true)
+    assert.deepEqual(state.message().meta.serverFailure.completionPolicies, policies)
   } finally { await act(async () => root.unmount()); dom.window.close() }
 })
 
@@ -128,7 +127,7 @@ test('manual retry clears prior request diagnostics and cache usage atomically w
   assert.equal(state.message().meta.serverLastSequence, 3)
 })
 
-test('validated diagnostics remain visible on failed model calls without inventing tools for pre-execution failures', async () => {
+test('model failures stay visible without rendering request diagnostics or fabricating tool activity', async () => {
   const dom = setupDom()
   const element = document.getElementById('root')
   const root = createRoot(element)
@@ -143,9 +142,11 @@ test('validated diagnostics remain visible on failed model calls without inventi
     await state.send('turn.failed', { code: 'MODEL_NOT_LOADED' }, 2)
     await render(state.message())
     const toggle = element.querySelector('[data-testid="execution-toggle"]')
-    assert.ok(toggle)
-    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.match(element.querySelector('[data-testid="execution-diagnostics"]').textContent, /failed-request/u)
+    assert.equal(Boolean(toggle), false)
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.doesNotMatch(element.textContent, /failed-request/u)
+    assert.equal(state.message().meta.modelRequestId, 'failed-request')
+    assert.ok(element.textContent.trim(), 'the real failure is not hidden with diagnostic metadata')
     assert.equal(element.querySelector('.chat-tool-list'), null)
     await render({ id: 'before-execution', role: 'assistant', content: '', meta: {
       streaming: false, failed: true, executionStarted: false, serverFailure: { code: 'MODEL_CONFIG_MISSING' },
@@ -168,7 +169,7 @@ test('restored diagnostic metadata cannot render arbitrary prompt or credential 
         modelContextDiagnostics: { ...contextDiagnosticFixture, credentials: 'PRIVATE_TOKEN' },
       } }} /></I18nProvider>))
     const toggle = element.querySelector('[data-testid="execution-toggle"]')
-    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(toggle, null)
     assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
     assert.doesNotMatch(element.textContent, /PRIVATE_/u)
   } finally { await act(async () => root.unmount()); dom.window.close() }
@@ -511,7 +512,7 @@ test('only final deliverables are clickable in execution steps and appear below'
   }
 })
 
-test('reasoning-only completion uses a thought label without exposing private reasoning', async () => {
+test('completed plain replies do not manufacture a process block from private reasoning metadata', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -550,9 +551,7 @@ test('reasoning-only completion uses a thought label without exposing private re
     ))
 
     const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
-    assert.match(executionToggle?.textContent || '', /Thought · 1s/)
-    assert.doesNotMatch(executionToggle?.textContent || '', /Execution/)
-    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(Boolean(executionToggle), false)
     assert.doesNotMatch(rootElement.textContent, /private chain-of-thought/)
     assert.match(rootElement.textContent, /Safe final answer/)
   } finally {

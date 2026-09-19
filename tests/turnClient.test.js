@@ -2819,6 +2819,7 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
       latency: null,
       serverFailure: null,
       serverPartialText: '',
+      publicTimeline: null,
       serverArtifactIds: [],
       modelActivity: null,
       modelContextDiagnostics: null,

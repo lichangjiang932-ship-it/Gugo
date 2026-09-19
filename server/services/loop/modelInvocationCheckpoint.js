@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { normalizeModelInvocationUsage } from './modelInvocationUsage.js'
 import { assertValidCompletedModelResponse } from '../../utils/modelResponseValidation.js'
 import { snapshotModelResponse } from './modelResponseSnapshot.js'
 import { normalizeStoredModelRequestDiagnostics, publicModelRequestDiagnostics } from './modelGenerationRecovery.js'
@@ -195,26 +196,11 @@ export function normalizeModelInvocation(value) {
     } catch {
       return null
     }
-    const hasUsageApplied = Object.hasOwn(value, 'usageApplied')
-    if (hasUsageApplied && typeof value.usageApplied !== 'boolean') {
-      return null
-    }
-    const reconciliation = value.reconciliation
-    const isLegacyManualCompletion = !hasUsageApplied
-      && reconciliation
-      && typeof reconciliation === 'object'
-      && !Array.isArray(reconciliation)
-      && reconciliation.source === 'manual'
-      && reconciliation.outcome === 'completed'
-    // Provider-completed checkpoints created before usageApplied existed had
-    // already persisted their matching budget snapshot. A manually materialized
-    // response is the exception: the provider usage is first applied when the
-    // resumed loop consumes that response.
-    normalized.usageApplied = hasUsageApplied
-      ? value.usageApplied
-      : !isLegacyManualCompletion
   }
   if (status === 'failed' && value.errorCode) normalized.errorCode = String(value.errorCode)
+  const usageReceipt = normalizeModelInvocationUsage(value, status)
+  if (!usageReceipt) return null
+  Object.assign(normalized, usageReceipt)
   const diagnostics = normalizeStoredModelRequestDiagnostics(value.modelRequestDiagnostics, normalized)
   if (diagnostics) normalized.modelRequestDiagnostics = diagnostics
   if (value.reconciliation && typeof value.reconciliation === 'object'

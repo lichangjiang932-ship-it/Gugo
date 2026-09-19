@@ -18,6 +18,7 @@ import { normalizeTurnOptionalId } from './turnStartRuntime.js'
 import { abortError, normalizePositiveInteger } from './turnEnginePolicy.js'
 import { getTurnPermissionContextSnapshot } from './turnPermissionContext.js'
 import { optionalContextDiagnostics, optionalWireDiagnostics, requireContextDiagnosticDurability } from './loop/runtimeContextDiagnostics.js'
+import { copyPublicTimelineCheckpoint, recordPublicToolAnchor, updateTurnPublicText } from './turnPublicTimeline.js'
 
 const ATOMIC_CHECKPOINT_UNSUPPORTED_CODE = 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED'
 const ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE = 'TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH'
@@ -81,6 +82,8 @@ function createCheckpointWriter({
       executionEnvironment: effectiveExecutionEnvironment,
       promptContextSnapshot,
       turnMessages: state.checkpointMessages,
+      // Host-produced display evidence overrides any loop/plugin checkpoint field.
+      publicTimeline: copyPublicTimelineCheckpoint(state.publicTimeline, scope),
       ...(state.latestModelUsage ? { latestModelUsage: state.latestModelUsage } : {}),
       ...(state.turnModelUsage ? { turnModelUsage: state.turnModelUsage } : {}),
       ...(state.latestEstimatedPromptTokens !== null
@@ -180,6 +183,7 @@ function createTurnLoopEventCallbacks({ emitter, state, memoryDiagnostics = null
     }),
     onModelDelta: async ({ text, iteration, modelName }) => {
       state.streamedAssistantText += String(text || '')
+      updateTurnPublicText(state, state.streamedAssistantText)
       await emitter('assistant.delta', { text, iteration, modelName })
     },
     onReasoningDelta: async ({ text, iteration, modelName }) => {
@@ -196,21 +200,31 @@ function createTurnLoopEventCallbacks({ emitter, state, memoryDiagnostics = null
       ...(deletions !== undefined ? { deletions } : {}),
       ...(phase !== undefined ? { phase } : {}),
     }),
-    onToolCall: async (call) => emitter('tool.call', {
-      toolCallId: call.id, name: call.name, args: call.args,
-    }),
-    onToolStarted: async (call) => emitter('tool.started', {
-      toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
-    }),
-    onToolCompleted: async (outcome) => emitter('tool.completed', {
-      toolCallId: outcome.call.id,
-      name: outcome.call.name,
-      args: outcome.executionArgs ?? outcome.call.args,
-      result: outcome.result,
-      error: toolFailure(outcome.result),
-      artifactId: outcome.artifactId || null,
-      artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
-    }),
+    onToolCall: async (call) => {
+      const textOffset = state.streamedAssistantText.length
+      const event = await emitter('tool.call', { toolCallId: call.id, name: call.name, args: call.args })
+      recordPublicToolAnchor(state, call, textOffset)
+      return event
+    },
+    onToolStarted: async (call) => {
+      const textOffset = state.streamedAssistantText.length
+      const event = await emitter('tool.started', {
+        toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
+      })
+      recordPublicToolAnchor(state, call, textOffset)
+      return event
+    },
+    onToolCompleted: async (outcome) => {
+      const textOffset = state.streamedAssistantText.length
+      const event = await emitter('tool.completed', {
+        toolCallId: outcome.call.id, name: outcome.call.name,
+        args: outcome.executionArgs ?? outcome.call.args, result: outcome.result,
+        error: toolFailure(outcome.result), artifactId: outcome.artifactId || null,
+        artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
+      })
+      recordPublicToolAnchor(state, outcome.call, textOffset)
+      return event
+    },
     onApprovalPending: async (approval) => emitter('approval.required', {
       approvalId: approval.id, toolName: approval.toolName, args: approval.args,
       risk: approval.risk, metadataSource: approval.metadataSource,
@@ -311,6 +325,7 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       pendingRecoveryAttempt,
       onRecoveryAttempt: (attempt) => {
         state.streamedAssistantText = String(attempt?.assistantText || '')
+        updateTurnPublicText(state, state.streamedAssistantText)
       },
       onPromptTokenEstimate: (value) => {
         state.latestEstimatedPromptTokens = normalizePromptTokenEstimate(value)

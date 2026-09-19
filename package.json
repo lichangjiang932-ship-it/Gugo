@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.11.56",
+  "version": "0.11.57",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",
@@ -131,6 +131,7 @@
     "vite": "^8.2.0"
   },
   "overrides": {
+    "fast-uri": "3.1.6",
     "brace-expansion": "5.0.9",
     "minimatch": "10.2.6",
     "nanoid": "3.3.17",

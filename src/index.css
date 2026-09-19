@@ -416,6 +416,10 @@ html[data-animations="false"] *::after {
 }
 
 .chat-session-header {
+  /* backdrop-filter creates a stacking context: keep its branch menu above
+     the later, positioned message scroller so visible choices are clickable. */
+  position: relative;
+  z-index: 20;
   border-bottom: 0;
   background: rgb(var(--color-paper-rgb) / 0.92);
   box-shadow: inset 0 -1px rgb(var(--color-ink-rgb) / 0.045);
@@ -548,6 +552,14 @@ html[data-animations="false"] *::after {
 
 .chat-execution-content {
   padding: 0.2rem 0 0.3rem;
+}
+
+.chat-execution-content > .chat-markdown + .chat-run-timeline {
+  margin-top: 0.45rem;
+}
+
+.chat-execution-content > .chat-run-timeline + .chat-markdown {
+  margin-top: 0.65rem;
 }
 
 .chat-execution-disclosure + .chat-assistant-answer {
@@ -1312,7 +1324,7 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   position: absolute;
   top: 0.45rem;
   left: 0;
-  width: 2px;
+  width: 1px;
   height: 1.1rem;
   border-radius: 1px;
   background: rgb(var(--color-ink-rgb) / 0.18);

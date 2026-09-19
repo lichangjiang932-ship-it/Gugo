@@ -19,6 +19,9 @@ import {
 } from 'lucide-react'
 import { getArtifactToolbarActions } from './artifactToolbar.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
+import { canViewDirectFileSource } from '../../../lib/directFileSource.js'
+import FileIdentity from './FileIdentity.jsx'
+import FileActions from './FileActions.jsx'
 
 export function ArtifactIcon({ type }) {
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(type)) return <FileImage className="h-4 w-4" />
@@ -114,7 +117,7 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
 
   return (
     <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
-      <FileIdentity preview={preview} />
+      <FileIdentity preview={preview} t={t} />
       <div className="chat-preview-toolbar-actions ml-auto flex shrink-0 items-center gap-1.5">
         <div className="inline-flex h-8 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-xs">
           <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
@@ -130,33 +133,23 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
           <ActionButton onClick={exports.handleHtmlToPptx} disabled={exports.premiumExporting || exports.downloading} icon={<Presentation className="h-3.5 w-3.5" />} label={exports.premiumExporting ? t('chatPreview.converting', { progress: exports.premiumProgress }) : t('chatPreview.convertPptx')} compact />
         )}
         {actions.canDownload && (
-          <ActionButton onClick={exports.handleDownload} disabled={exports.downloading || exports.premiumExporting} icon={<Download className="h-3.5 w-3.5" />} label={downloadLabel} primary />
+          <ActionButton onClick={exports.handleDownload} disabled={exports.downloading || exports.premiumExporting} icon={<Download className="h-3.5 w-3.5" />} label={downloadLabel} />
         )}
       </div>
     </div>
   )
 }
 
-export function DirectFileToolbar({ filename, type, url, t }) {
-  const preview = { filename, label: type.toUpperCase() }
+export function DirectFileToolbar({ filename, type, file = {}, url, view = 'preview', setView, t }) {
+  const preview = { ...file, filename, label: type.toUpperCase() }
   return (
     <div data-testid="preview-command-bar" className="chat-preview-toolbar chat-direct-file-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
-      <FileIdentity preview={preview} />
-      {url && (
-        <a href={url} download={filename} aria-label={t('chatPreview.download', { filename })} title={t('chatPreview.download', { filename })} className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-ink/10 bg-ink px-2.5 text-xs font-medium text-paper outline-none transition-colors hover:bg-ink-soft focus-visible:ring-2 focus-visible:ring-ink/25">
-          <Download className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span>{t('chatPreview.downloadShort')}</span>
-        </a>
-      )}
-    </div>
-  )
-}
-
-function FileIdentity({ preview }) {
-  return (
-    <div className="chat-preview-file-identity min-w-0 flex-1">
-      <div className="truncate text-[13px] font-medium tracking-[-0.01em] text-ink" title={preview.filename}>{preview.filename}</div>
-      {preview.summary && <div className="mt-0.5 truncate text-[10px] text-ink-fade">{preview.summary}</div>}
+      <FileIdentity preview={preview} t={t} />
+      {setView && canViewDirectFileSource(preview) && <div className="inline-flex h-8 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-xs">
+        <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
+        <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
+      </div>}
+      <FileActions key={`${file.url || url}:${file.path || ''}:${file.previewRevision || ''}`} file={{ ...preview, url: file.url || url }} url={url} setView={setView} t={t} />
     </div>
   )
 }
@@ -178,7 +171,7 @@ function ActionButton({ compact = false, disabled, icon, label, onClick, primary
 
 function Tab({ active, onClick, icon, label, bordered }) {
   return (
-    <button type="button" onClick={onClick} className={`inline-flex items-center gap-1.5 px-2.5 ${bordered ? 'border-l border-ink/10' : ''} ${active ? 'bg-paper text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}>
+    <button type="button" onClick={onClick} aria-pressed={active} className={`inline-flex items-center gap-1.5 px-2.5 ${bordered ? 'border-l border-ink/10' : ''} ${active ? 'bg-paper text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}>
       {icon}{label}
     </button>
   )

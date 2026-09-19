@@ -4,49 +4,6 @@ import MarkdownRenderer from '../../../../components/MarkdownRenderer.jsx'
 import { isPreExecutionFailure } from '../../../../lib/chatFlowGuards.js'
 import { executionResultSummary } from '../../../../lib/executionResultSummary.js'
 import { ToolCallTrace } from '../ActivityTraces.jsx'
-import { modelContextDiagnosticsSchema } from '../../../../../shared/modelContextDiagnostics.js'
-import { modelWireDiagnosticsSchema } from '../../../../../shared/modelWireDiagnostics.js'
-import { completionPoliciesSchema } from '../../../../../shared/turnFailureSchemas.js'
-import { normalizeModelUsage } from '../../../../../shared/modelUsage.js'
-
-function safeRecallSummary(recall) {
-  if (!recall) return '—'
-  const code = /^(?:MEMORY|SQLITE)_[A-Z0-9_]{1,80}$/u.test(recall.code || '') ? recall.code : ''
-  const coverage = recall.truncated ? 'partial'
-    : ['full', 'complete', 'partial', 'unknown', 'unavailable', 'disabled', 'skipped'].includes(recall.coverage) ? recall.coverage : '—'
-  return [coverage, recall.scanned, code].filter((value) => value !== '').join(' / ')
-}
-
-function ExecutionDiagnostics({ meta = {}, t }) {
-  const context = modelContextDiagnosticsSchema.safeParse(meta.modelContextDiagnostics)
-  const wire = modelWireDiagnosticsSchema.safeParse(meta.modelWireDiagnostics)
-  const policyResult = completionPoliciesSchema.safeParse(meta.serverFailure?.completionPolicies)
-  const policies = policyResult.success ? policyResult.data || [] : []
-  if (!context.success && !wire.success && !policies.length) return null
-  const usage = normalizeModelUsage(meta.modelUsage)
-  const requestId = typeof meta.modelRequestId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/u.test(meta.modelRequestId)
-    ? meta.modelRequestId : null
-  const attempt = Number.isSafeInteger(meta.modelPhysicalAttempt) && meta.modelPhysicalAttempt > 0 ? meta.modelPhysicalAttempt : '—'
-  const memory = context.success ? context.data.memory : null
-  return (
-    <section data-testid="execution-diagnostics" aria-label={t('chatMessages.executionDiagnostics')} className="text-xs text-ink-fade">
-      <p>{t('chatMessages.executionDiagnostics')}</p>
-      <ul>
-        {requestId && <li>{t('chatMessages.diagnosticRequest', { id: requestId, attempt })}</li>}
-        {context.success && <li>{t('chatMessages.diagnosticContext', { messages: context.data.messageCount, tools: context.data.toolCount })}</li>}
-        {wire.success && <li>{t('chatMessages.diagnosticFingerprint', { fingerprint: wire.data.prefixFingerprint?.slice(0, 12) || '—' })}</li>}
-        {(context.success || wire.success) && <li>{usage?.cacheHitTokens === undefined
-          ? t('chatMessages.diagnosticCacheUnknown') : t('chatMessages.diagnosticCacheReported', { count: usage.cacheHitTokens })}</li>}
-        {memory && <li>{t('chatMessages.diagnosticMemory', { count: memory.linkedCount,
-          semantic: memory.failed ? t('chatMessages.memoryLoadFailed') : safeRecallSummary(memory.semantic),
-          lexical: memory.failed ? t('chatMessages.memoryLoadFailed') : safeRecallSummary(memory.lexical) })}</li>}
-        {policies.map((policy) => <li key={policy.id} data-exhausted={policy.exhausted || undefined}>
-          {t('chatMessages.diagnosticPolicy', { id: policy.id, attempts: policy.attempts, limit: policy.limit ?? '—' })}
-        </li>)}
-      </ul>
-    </section>
-  )
-}
 
 export function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, streaming }) {
   return segments.map((segment, index) => segment.kind === 'tools' ? (
@@ -75,8 +32,8 @@ function finiteOptionalNumber(value) {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-export function ExecutionDisclosure({ children, hasExecution, msg, running, t }) {
-  const [expanded, setExpanded] = useState(running)
+export function ExecutionDisclosure({ children, hasExecution, msg, running, preserveNarration = false, t }) {
+  const [expanded, setExpanded] = useState(running || preserveNarration)
   const wasRunning = useRef(running)
   const contentId = useId()
   const [fallbackStartedAt] = useState(() => Date.now())
@@ -98,32 +55,23 @@ export function ExecutionDisclosure({ children, hasExecution, msg, running, t })
   const elapsed = useElapsedMilliseconds({ elapsedMs, running, startedAt })
   const elapsedLabel = hasElapsedTime ? t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) }) : ''
   const toolCount = Array.isArray(msg.meta?.toolCalls) ? msg.meta.toolCalls.length : 0
-  const hasReasoningSummary = Boolean(String(msg.meta?.reasoning || '').trim())
-  const processLabel = toolCount > 0
-    ? t('chatMessages.execution')
-    : running || hasReasoningSummary
-      ? t(running ? 'chatMessages.reasoningActive' : 'chatMessages.reasoningCompleted')
-      : t('chatMessages.execution')
   const label = [
-    processLabel,
+    t('chatMessages.execution'),
     hasElapsedTime ? formatTaskDuration(elapsed, t) : '',
     toolCount > 0 ? t('chatMessages.executionToolCount', { count: toolCount }) : '',
   ].filter(Boolean).join(' · ')
   const resultSummary = !running && !expanded ? executionResultSummary(msg.meta?.toolCalls, t) : ''
 
   useEffect(() => {
-    // Keep live work visible, then fold the process exactly once when that
-    // turn completes so the final answer becomes the visual focus. A later
-    // manual expansion is preserved because completed rerenders do not touch
-    // the state again.
+    // Public narration is part of the conversation, not diagnostic detail.
+    // Keep it readable after completion/cancellation. A tool-only history can
+    // still fold once, and subsequent user disclosure choices remain intact.
     if (running && !wasRunning.current) setExpanded(true)
-    if (!running && wasRunning.current) setExpanded(false)
+    if (!running && wasRunning.current && !preserveNarration) setExpanded(false)
     wasRunning.current = running
-  }, [running])
+  }, [running, preserveNarration])
 
-  const hasDiagnostics = Boolean(msg.meta?.modelContextDiagnostics || msg.meta?.modelWireDiagnostics
-    || msg.meta?.serverFailure?.completionPolicies?.length)
-  if (!hasExecution && !hasDiagnostics) {
+  if (!hasExecution) {
     return elapsedLabel
       ? <div className="chat-task-duration" data-testid="task-duration-header">{elapsedLabel}</div>
       : null
@@ -145,7 +93,6 @@ export function ExecutionDisclosure({ children, hasExecution, msg, running, t })
       </button>
       {expanded && <div id={contentId} className="chat-execution-content" data-testid="execution-content">
         {children}
-        <ExecutionDiagnostics meta={msg.meta} t={t} />
       </div>}
     </section>
   )

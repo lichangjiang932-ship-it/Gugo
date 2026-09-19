@@ -13,6 +13,8 @@ import { discardContinuedAnswer } from './outputContinuation.js'
 import { assertContextRecoveryActive } from '../contextCompactionState.js'
 import { publicModelRequestDiagnostics, snapshotInterruptedModelRequest } from './modelGenerationRecovery.js'
 import { SEMANTIC_SUMMARY_CACHE_HIT, semanticSummaryError } from '../contextSemanticSummaryPolicy.js'
+import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { isContextOverflowWithoutGeneration } from '../../adapters/modelContextOverflow.js'
 import { assertCompactionRequestSettled, assertMainRequestSettled, cachedCompactionResponse, cacheCompactionResponse, compactionInvocationState, createCompactionRecoveryCheckpoint, restoreCompactionCheckpoint } from './compactionCheckpoint.js'
 
 export function resolveExecutionBudgetOptions(job, restoredBudget) {
@@ -297,10 +299,14 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
     }
     if (error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN' || error?.unsafeToReplay === true) throw error
     context.assertActive()
+    const failureUsage = error?.modelRequestOutcome === 'failed' && isContextOverflowWithoutGeneration(error)
+      ? normalizeModelUsage(error.usage) : null
+    if (failureUsage && checkpointed.failureUsageApplied !== true) s.budget.trackModelUsage?.(failureUsage)
     s.modelInvocation = {
       ...checkpointed,
       status: 'failed',
       errorCode: String(error?.code || 'MODEL_CALL_FAILED'),
+      ...(failureUsage ? { failureUsage, failureUsageApplied: true } : {}),
     }
     context.assertActive()
     await s.checkpointBarrier.flush({

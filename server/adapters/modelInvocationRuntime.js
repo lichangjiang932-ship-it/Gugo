@@ -8,8 +8,10 @@ import { fetchWithEnvProxy } from './proxyFetch.js'
 import { getEffectiveModelProviderProvenance, isNativeProviderKind } from './nativeModelProviders.js'
 import {
   parseModelProviderResponse,
+  modelHttpResponseError,
   stripEmbeddedReasoning,
 } from './modelProviderResponse.js'
+import { isParsedContextOverflow } from './modelContextOverflow.js'
 import { createEmptyModelResponseError } from './sseLifecycle.js'
 import { createTextToolCallDeltaFilter, extractTextToolCalls } from '../utils/textToolCalls.js'
 import { calculateModelCostUsd, recordUsage } from './modelUsage.js'
@@ -47,6 +49,15 @@ function withOutputTokenLimit(config, requestedLimit) {
   if (!Number.isFinite(requested) || requested <= 0) return config
   const configured = Math.floor(Number(config.maxTokens))
   return { ...config, maxTokens: configured > 0 ? Math.min(configured, requested) : requested }
+}
+
+function parseInvocationResponse(data, profile, { providerRequest, modelRequestId, signal }) {
+  try { return parseModelProviderResponse(data, profile, { providerRequest }) }
+  catch (error) {
+    if (!isParsedContextOverflow(error)) throw error
+    throw modelRequestOutcomeUnknown(error, { modelRequestId, phase: 'response', responseReceived: true,
+      externalAborted: signal?.aborted === true })
+  }
 }
 
 function providerAttemptNotSent(error) {
@@ -166,17 +177,15 @@ export async function callBackgroundModel({
         data = { raw: text }
       }
       if (!response.ok) {
-        const error = new Error(data?.error?.message || data?.message || response.statusText)
-        error.status = response.status
-        error.fromUpstream = true
-        error.retryAfter = response.headers?.get?.('retry-after') ?? null
+        const error = modelHttpResponseError(data, response)
         throw modelRequestOutcomeUnknown(error, {
           modelRequestId,
           phase: 'response',
           responseReceived: true,
+          externalAborted: signal?.aborted === true,
         })
       }
-      const parsed = parseModelProviderResponse(data, profile, { providerRequest })
+      const parsed = parseInvocationResponse(data, profile, { providerRequest, modelRequestId, signal })
       recordUsage(candidate.modelName, parsed.usage, { ownerId: usageOwnerId })
       if (!parsed.content) throw createEmptyModelResponseError(parsed.finishReason)
       return parsed.content
@@ -305,19 +314,15 @@ export async function callBackgroundModelWithTools({
         data = { raw: text }
       }
       if (!response.ok) {
-        const error = new Error(data?.error?.message || data?.message || response.statusText)
-        error.status = response.status
-        error.code = data?.error?.code || data?.code || ''
-        error.type = data?.error?.type || data?.type || ''
-        error.fromUpstream = true
-        error.retryAfter = response.headers?.get?.('retry-after') ?? null
+        const error = modelHttpResponseError(data, response)
         throw modelRequestOutcomeUnknown(error, {
           modelRequestId,
           phase: 'response',
           responseReceived: true,
+          externalAborted: signal?.aborted === true,
         })
       }
-      const parsed = parseModelProviderResponse(data, profile, { providerRequest })
+      const parsed = parseInvocationResponse(data, profile, { providerRequest, modelRequestId, signal })
       const compatibilityCall = parsed.nativeContent || parsed.toolCalls?.length ? null : extractTextToolCalls(parsed.content)
       const usage = parsed.usage
       const costUsd = calculateModelCostUsd({

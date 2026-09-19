@@ -1,6 +1,6 @@
 import MarkdownRenderer from '../../../../components/MarkdownRenderer.jsx'
 import ChoicePicker from '../../../../components/ChoicePicker.jsx'
-import { hasChoices, stripChoices } from '../../../../lib/choices.js'
+import { hasChoices } from '../../../../lib/choices.js'
 import {
   artifactReferenceOpenPayload,
   findArtifactReferenceByHref,
@@ -27,6 +27,7 @@ import {
 } from './FailureCards.jsx'
 import { failurePresentation } from './failurePresentation.js'
 import { assistantTimelinePresentation, stableTimelineSegments } from './timelinePresentation.js'
+import { assistantPublicTimeline } from '../../../../lib/assistantPublicTimeline.js'
 
 export default function AssistantAnswer({
   artifactPreview,
@@ -76,13 +77,10 @@ export default function AssistantAnswer({
   const authoredContent = hasStructuredOutcome && typeof msg.meta?.serverPartialText === 'string'
     ? msg.meta.serverPartialText
     : msg.content
-  const timeline = stableTimelineSegments(stripChoices(authoredContent), msg.meta?.toolCalls)
+  const publicView = assistantPublicTimeline(msg, authoredContent)
+  const timeline = stableTimelineSegments(publicView.content, publicView.toolCalls)
   const presentation = assistantTimelinePresentation(timeline)
   const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
-  const hasReasoningSummary = Boolean(String(msg.meta?.reasoning || '').trim())
-  const hasProcessSummary = hasExecution || hasReasoningSummary
-    || Boolean(msg.meta?.modelContextDiagnostics || msg.meta?.modelWireDiagnostics
-      || msg.meta?.serverFailure?.completionPolicies?.length)
   const preExecutionFailure = isPreExecutionFailure(msg)
   const { modelSetupFailure, runtimeRestartRequired } = failurePresentation(msg)
   const failedRetryRejection = hasStructuredFailure
@@ -111,11 +109,12 @@ export default function AssistantAnswer({
   return (
     <>
       <div data-quotable="true">
-        {!preExecutionFailure && hasProcessSummary && (
+        {!preExecutionFailure && hasExecution && (
           <ExecutionDisclosure
-            hasExecution={hasProcessSummary}
+            hasExecution={hasExecution}
             msg={msg}
             running={isCurrentStreamingMessage}
+            preserveNarration={presentation.hasPublicNarration}
             t={t}
           >
             <TimelineSegments
@@ -125,7 +124,7 @@ export default function AssistantAnswer({
               segments={presentation.execution}
               streaming={isCurrentStreamingMessage}
             />
-            {(isCurrentStreamingMessage || hasReasoningSummary) && <ActivityStream msg={msg} />}
+            {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
             {isCurrentStreamingMessage && <TaskProgressTable progress={msg.meta?.progress} />}
           </ExecutionDisclosure>
         )}

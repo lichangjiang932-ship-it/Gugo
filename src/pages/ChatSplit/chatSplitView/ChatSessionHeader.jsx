@@ -1,4 +1,4 @@
-import { Folder, MessageSquare, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { Folder, MessageSquare, PanelRight } from 'lucide-react'
 
 export function ChatSessionHeading({ hasWorkspace, title, ...headingAttributes }) {
   return <>
@@ -19,8 +19,9 @@ export function ChatWorkbenchToggle({ open, ...buttonAttributes }) {
   return <button
     {...buttonAttributes}
     type="button"
+    data-open={open || undefined}
     className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"
   >
-    {open ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+    <PanelRight className="h-[18px] w-[18px]" strokeWidth={1.5} aria-hidden="true" />
   </button>
 }

@@ -127,6 +127,11 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       merged.meta = { ...serverMeta, ...localMeta }
       delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
+        // Timeline coordinates are inseparable from their authoritative body.
+        // A missing/invalid new projection must not resurrect an older one.
+        const publicTimeline = localHasNewerTurnState ? localMeta.publicTimeline : serverMeta.publicTimeline
+        if (publicTimeline) merged.meta.publicTimeline = publicTimeline
+        else delete merged.meta.publicTimeline
         const serverOutcomeState = terminalOutcomeState(serverMeta)
         const preserveLocalTerminalEvidence = !!serverOutcomeState
           && serverOutcomeState === terminalOutcomeState(localMeta)

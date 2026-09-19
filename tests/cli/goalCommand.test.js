@@ -42,6 +42,28 @@ test('goal argument parsing validates subcommands and options', () => {
   }
 })
 
+test('goal help preflight validates syntax without opening or parsing steps content', () => {
+  assert.equal(parseGoalArgs([], { help: true }).subcommand, null)
+  assert.equal(parseGoalArgs(['create', '--steps-file', 'must-never-be-opened'], { help: true }).subcommand, 'create')
+  assert.equal(parseGoalArgs(['create', '--steps', 'not JSON'], { help: true }).options.steps, 'not JSON')
+  for (const argv of [
+    ['create', '--steps', '[]', '--steps-file', 'missing'],
+    ['list', '--limit', '0'], ['list', 'unexpected'], ['show', '--steps', '[]'],
+    ['step', '--status', 'unknown'], ['approve', '--expect-version', '9007199254740992'],
+  ]) assert.throws(() => parseGoalArgs(argv, { help: true }), CliUsageError, JSON.stringify(argv))
+})
+
+test('steps input bounds and typed acceptance are validated without runtime initialization', () => {
+  for (const steps of [
+    [{ title: 'x'.repeat(501) }], [{ title: 'x', acceptance: Array(21).fill('note') }],
+    [{ title: 'x', acceptance: [{ kind: 'file' }] }], [{ title: 'x', acceptance: { kind: 'manual' } }],
+  ]) assert.throws(() => resolveGoalSteps({ steps: JSON.stringify(steps) }), { code: 'GOAL_PLAN_INVALID_INPUT' })
+  assert.throws(() => resolveGoalSteps({ steps: ' '.repeat(1024 * 1024 + 1) }), { code: 'CLI_GOAL_STEPS_TOO_LARGE' })
+  assert.throws(() => resolveGoalSteps({ steps: '[{"title":"x"}]', stepsFile: 'missing' }), { code: 'CLI_GOAL_STEPS_CONFLICT' })
+  const steps = [{ title: 'x', acceptance: [{ kind: 'manual' }, { kind: 'file', path: 'fixture.txt' }] }]
+  assert.deepEqual(resolveGoalSteps({ steps: JSON.stringify(steps) }), steps)
+})
+
 test('the goal CLI creates, approves, and gates completion on evidence', async () => {
   const create = capture()
   assert.equal(await cmdGoal(['create', 'Fix the counter', '--steps', '[{"title":"Reproduce"},{"title":"Fix"}]'], { stdout: create.stream }), 0)

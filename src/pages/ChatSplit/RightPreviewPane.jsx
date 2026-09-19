@@ -154,7 +154,7 @@ export default function RightPreviewPane({
         t={t}
       />
       {activeArtifact.directFile ? (
-        <DirectFileContent file={activeArtifact.directFile} t={t} />
+        <DirectFileContent file={activeArtifact.directFile} pane={pane} t={t} />
       ) : activeArtifact.preview ? (
         <PreviewContent preview={activeArtifact.preview} content={activeArtifact.content} pane={pane} onMessage={onMessage} t={t} />
       ) : (
@@ -164,7 +164,7 @@ export default function RightPreviewPane({
   )
 }
 
-function DirectFileContent({ file, t }) {
+function DirectFileContent({ file, pane, t }) {
   const filename = String(file?.filename || file?.title || 'artifact')
   const extension = String(filename.split('.').pop() || '').toLowerCase()
   const rawType = String(file?.type || extension || 'file').toLowerCase()
@@ -173,9 +173,9 @@ function DirectFileContent({ file, t }) {
   const previewUrl = withArtifactPreviewMode(downloadUrl)
   return (
     <>
-      <DirectFileToolbar filename={filename} type={type} url={downloadUrl} t={t} />
+      <DirectFileToolbar filename={filename} type={type} file={file} url={downloadUrl} view={pane.view} setView={pane.setView} t={t} />
       <div className="chat-direct-file-content min-h-0 flex-1 overflow-hidden" data-testid="direct-file-content">
-        {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} t={t} /> : (
+        {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} view={pane.view} t={t} /> : (
           <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">
             <FileText className="h-10 w-10 text-ink-fade" />
             <p className="max-w-xs text-sm font-medium text-ink-soft">{filename}</p>

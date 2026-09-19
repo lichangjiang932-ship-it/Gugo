@@ -24,6 +24,7 @@ import {
   isValidFailedRetryAttemptRecord,
 } from './turnRecoveryProjection.js'
 import { assertLiveTurnExecutionLease } from './turnExecutionLeaseStore.js'
+import { persistTurnSessionWorkspace } from './turnSessionWorkspaceBinding.js'
 
 const TURN_BOUNDARY_TYPES = new Set([
   'turn.completed',
@@ -297,16 +298,10 @@ function commitTurnStartTransaction(runtime, {
     if (!currentSession) throw new Error('session not found')
     committed = runtime.appendEventsInTransaction([{ userId, event, checkpointState: null }], db)
     const inserted = committed.insertedEvents.length > 0
-    if (inserted && Object.hasOwn(event.payload || {}, 'workspacePath')) {
-      const updated = runtime.writeSessionWorkspace({
-        userId, sessionId, workspacePath: event.payload.workspacePath,
+    if (inserted) {
+      persistTurnSessionWorkspace({
+        userId, event, createdSession, writeSessionWorkspace: runtime.writeSessionWorkspace,
       })
-      if (!updated) {
-        throw persistenceError(
-          'TURN_STORAGE_SCOPE_MISMATCH',
-          'session workspace scope does not match event scope',
-        )
-      }
     }
     for (const message of scopedMessages) {
       if (inserted) runtime.writeMessage(message)

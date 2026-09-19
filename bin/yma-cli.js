@@ -4,6 +4,9 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { CliError, CliUsageError } from './cli/errors.js'
+import { resolveCommandHelp, SERVER_COMMAND_OPTIONS } from './cli/commandHelp.js'
+import { cmdConfig } from './cli/configCommand.js'
+import { parseCliRuntimeArgs, resolveCliRuntimeSelection } from './cli/runtimeSelection.js'
 import { cmdDoctorHeadless, parseDoctorArgs } from './cli/headlessDoctor.js'
 import { cmdTrace } from './cli/traceCommand.js'
 import { cmdGoal } from './cli/goalCommand.js'
@@ -37,72 +40,6 @@ import { collectAttachmentRequests } from './cli/cliAttachments.js'
 export { CliError, CliUsageError }
 export { resolveServerUrl } from './cli/serverCommands.js'
 
-const HELP = `gugo — server-first CLI for Gugo (legacy alias: yma-cli)
-
-Usage:
-  gugo login --email <email>
-  gugo verify --email <email> --code <code>
-  gugo session list [--archived true|false|all] [--limit <n>] [--offset <n>]
-  gugo session search --query <text> [--session-id <id>]
-                      [--limit <n>] [--offset <n>]
-  gugo session show <session-id> [--limit <n>] [--offset <n>]
-  gugo model list [--provider <id>] [--search <text>]
-  gugo agent list
-  gugo skill list
-  gugo status
-  gugo doctor [--json]
-  gugo doctor --headless [--model <name>] [--provider <id>]
-                      [--cwd <dir>] [--probe] [--integrity] [--json]
-  gugo trace <turnId> [--session-id <id>] [--limit <n>]
-                      [--export text|json|otel] [--json]
-  gugo goal create "<objective>" --steps <json> [--steps-file <path>]
-                      [--session-id <id>] [--no-approval]
-  gugo goal list [--status <status>] [--limit <n>]
-  gugo goal show <planId>
-  gugo goal approve <planId>
-  gugo goal step <planId> <stepId> --status <status>
-                      [--turn <turnId>] [--tool-call <id>] [--note <text>]
-                      [--manual-confirm] [--confirmed-by <who>]
-                      [--expect-version <n>]
-  gugo goal rewrite <planId> --steps <json> [--objective <text>] [--no-approval]
-                      [--expect-version <n>]
-  gugo goal prune [<planId>] [--keep <n>]
-  gugo memory reindex [--limit <n>] [--batch <n>]
-                      [--all-agents | --agent <agentId>]
-  gugo run "<prompt>" [--model <name>] [--provider <id>]
-                     [--mode normal|acceptEdits|plan|bypass]
-                     [--cwd <dir>] [--session-id <id>]
-                     [--timeout <ms>]
-                     [--output jsonl|text] [--progress]
-                     [--file <path>] [--image <path>] (repeatable, 8 total)
-  gugo run --resume <turnId> [--session-id <id>] [--cwd <dir>]
-                     [--timeout <ms>]
-                     [--output jsonl|text]
-  gugo chat [--model <name>] [--provider <id>]
-                     [--mode normal|acceptEdits|plan|bypass]
-                     [--cwd <dir>] [--session-id <id>]
-                     [--timeout <ms>] (per turn)
-                     [--file <path>] [--image <path>] (next turn only)
-  echo "<prompt>" | gugo run [options]
-  gugo --help
-  gugo --version
-
-Environment:
-  GUGO_SERVER_URL  absolute server URL (overrides SERVER_HOST/SERVER_PORT)
-  GUGO_CLI_HTTP_TIMEOUT_MS  API request timeout in milliseconds (default 10000)
-  GUGO_CLI_RUN_TIMEOUT_MS   optional Turn execution timeout in milliseconds
-  GUGO_CLI_INPUT    readline (default) or optional ink on Node 22+
-                   auto is a legacy alias for readline; no automatic selection
-  GUGO_CLI_HISTORY  set 0 to disable persisted input history
-  SERVER_PORT   server port (default 5173)
-  SERVER_HOST   server host (default 127.0.0.1)
-
-Auth tokens are isolated per server under ~/.yma-cli/tokens/ (chmod 0600).
-Run defaults to durable TurnEngine JSONL; use --output text for final text only.
-Chat: /sessions lists local history; /resume <session-id> selects a conversation.
-Use run --resume <turnId> only to recover a persisted turn, not to start a new reply.
-`
-
 const RUN_VALUE_FLAGS = new Set([
   'model', 'provider', 'mode', 'cwd', 'session-id', 'resume', 'timeout', 'output',
   'file', 'image',
@@ -124,6 +61,7 @@ export function parseRunArgs(argv = []) {
     model: null,
     modelProviderId: null,
     mode: 'normal',
+    modeExplicit: false,
     cwd: process.cwd(),
     cwdExplicit: false,
     sessionId: null,
@@ -136,7 +74,6 @@ export function parseRunArgs(argv = []) {
   }
   const positional = []
   let positionalOnly = false
-  let modeSpecified = false
   const specifiedValueFlags = new Set()
   for (let i = 0; i < argv.length; i++) {
     const raw = String(argv[i])
@@ -166,7 +103,7 @@ export function parseRunArgs(argv = []) {
       if (key === 'provider') options.modelProviderId = normalizedValue
       if (key === 'mode') {
         options.mode = normalizedValue
-        modeSpecified = true
+        options.modeExplicit = true
       }
       if (key === 'cwd') {
         options.cwd = resolve(normalizedValue)
@@ -192,7 +129,7 @@ export function parseRunArgs(argv = []) {
   if (options.resumeTurnId && (options.files.length || options.images.length)) {
     throw new CliUsageError('CLI_RESUME_ATTACHMENT_CONFLICT', 'attachments cannot be combined with --resume')
   }
-  if (options.resumeTurnId && modeSpecified) {
+  if (options.resumeTurnId && options.modeExplicit) {
     throw new CliUsageError(
       'CLI_RESUME_MODE_CONFLICT',
       '--mode cannot be combined with --resume; the persisted turn permission mode is restored',
@@ -210,7 +147,7 @@ export function parseRunArgs(argv = []) {
       '--model cannot be combined with --resume; the persisted model is restored',
     )
   }
-  if (options.resumeTurnId && !modeSpecified) options.mode = null
+  if (options.resumeTurnId && !options.modeExplicit) options.mode = null
   return options
 }
 
@@ -462,13 +399,22 @@ export function createRunShutdownController({
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  if (argv.length === 0) {
-    process.stdout.write(HELP)
-    return 0
+  const invocation = parseCliRuntimeArgs(argv)
+  argv = invocation.argv
+  let help
+  try {
+    help = resolveCommandHelp(argv, { parseRunArgs })
+  } catch (error) {
+    if (argv[0] !== 'run') throw error
+    // A rejected run help request keeps run's existing JSONL/text error
+    // contract, without installing signal handlers or touching stdin/runtime.
+    const output = formatRunError(error, { format: requestedRunOutputFormat(argv.slice(1)) })
+    if (output.stdout) process.stdout.write(output.stdout)
+    if (output.stderr) process.stderr.write(output.stderr)
+    return Number.isInteger(error?.exitCode) ? error.exitCode : 1
   }
-  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') {
-    parseCommandFlags(argv.slice(1), { command: 'help' })
-    process.stdout.write(HELP)
+  if (help !== null) {
+    process.stdout.write(help)
     return 0
   }
   if (argv[0] === '--version' || argv[0] === '-V') {
@@ -478,15 +424,23 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   const [cmd, sub, ...rest] = argv
+  // Capture launcher authority before startup can apply project/runtime layers.
+  const launcherEnv = Object.freeze({ ...process.env })
+  const runtime = resolveCliRuntimeSelection({ runtimeDir: invocation.runtimeDir, env: launcherEnv })
+  if (invocation.runtimeDir !== null && ['login', 'verify', 'session', 'model', 'agent', 'skill', 'status'].includes(cmd)) {
+    throw new CliUsageError('CLI_RUNTIME_DIR_LOCAL_ONLY', '--runtime-dir selects local commands; HTTP commands use GUGO_SERVER_URL')
+  }
+
+  if (cmd === 'config') return cmdConfig(argv.slice(1), { runtime, env: launcherEnv })
 
   if (cmd === 'login') {
-    const flags = parseCommandFlags(argv.slice(1), { command: 'login', valueFlags: ['email'] })
+    const flags = parseCommandFlags(argv.slice(1), SERVER_COMMAND_OPTIONS.login)
     if (!flags.email) throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', '--email is required')
     await cmdLogin(flags)
     return 0
   }
   if (cmd === 'verify') {
-    const flags = parseCommandFlags(argv.slice(1), { command: 'verify', valueFlags: ['email', 'code'] })
+    const flags = parseCommandFlags(argv.slice(1), SERVER_COMMAND_OPTIONS.verify)
     if (!flags.email || !flags.code) {
       throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', '--email and --code are required')
     }
@@ -495,30 +449,24 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (cmd === 'chat' || cmd === 'i') {
     const options = parseRunArgs(argv.slice(1))
-    return await cmdChat(options)
+    return await cmdChat(options, { runtimeCwd: runtime.cwd, env: launcherEnv })
   }
   if (cmd === 'run') {
     const shutdown = createRunShutdownController()
     try {
-      const exitCode = await cmdRun(argv.slice(1), { signal: shutdown.signal })
+      const exitCode = await cmdRun(argv.slice(1), { signal: shutdown.signal, runtimeCwd: runtime.cwd, env: launcherEnv })
       return shutdown.exitCode ?? exitCode
     } finally {
       shutdown.dispose()
     }
   }
   if (cmd === 'session' && sub === 'list') {
-    const flags = parseCommandFlags(rest, {
-      command: 'session list',
-      valueFlags: ['archived', 'limit', 'offset'],
-    })
+    const flags = parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['session list'])
     await cmdSessionList(flags)
     return 0
   }
   if (cmd === 'session' && sub === 'search') {
-    const flags = parseCommandFlags(rest, {
-      command: 'session search',
-      valueFlags: ['query', 'session-id', 'limit', 'offset'],
-    })
+    const flags = parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['session search'])
     await cmdSessionSearch(flags)
     return 0
   }
@@ -528,41 +476,41 @@ export async function main(argv = process.argv.slice(2)) {
     return 0
   }
   if (cmd === 'model' && sub === 'list') {
-    const flags = parseCommandFlags(rest, {
-      command: 'model list',
-      valueFlags: ['provider', 'search'],
-    })
+    const flags = parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['model list'])
     await cmdModelList(flags)
     return 0
   }
   if (cmd === 'agent' && sub === 'list') {
-    parseCommandFlags(rest, { command: 'agent list' })
+    parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['agent list'])
     await cmdAgentList()
     return 0
   }
   if (cmd === 'skill' && sub === 'list') {
-    parseCommandFlags(rest, { command: 'skill list' })
+    parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['skill list'])
     await cmdSkillList()
     return 0
   }
   if (cmd === 'status') {
-    parseCommandFlags(argv.slice(1), { command: 'status' })
+    parseCommandFlags(argv.slice(1), SERVER_COMMAND_OPTIONS.status)
     return cmdStatus()
   }
   if (cmd === 'doctor') {
     const options = parseDoctorArgs(argv.slice(1))
-    if (!options.headless) return cmdDoctor()
-    return cmdDoctorHeadless(options)
+    if (!options.headless) {
+      if (invocation.runtimeDir !== null) throw new CliUsageError('CLI_RUNTIME_DIR_LOCAL_ONLY', 'doctor requires --headless with --runtime-dir')
+      return cmdDoctor()
+    }
+    return cmdDoctorHeadless({ ...options, runtimeCwd: runtime.cwd, env: launcherEnv })
   }
 
   if (cmd === 'trace') {
-    return cmdTrace(argv.slice(1))
+    return cmdTrace(argv.slice(1), { cwd: runtime.cwd, env: launcherEnv })
   }
   if (cmd === 'goal') {
-    return cmdGoal(argv.slice(1))
+    return cmdGoal(argv.slice(1), { cwd: runtime.cwd, inputCwd: process.cwd(), env: launcherEnv })
   }
   if (cmd === 'memory') {
-    return cmdMemory(argv.slice(1))
+    return cmdMemory(argv.slice(1), { cwd: runtime.cwd, env: launcherEnv })
   }
 
   throw new CliUsageError('CLI_COMMAND_UNKNOWN', `Unknown command: ${argv.join(' ')}`)

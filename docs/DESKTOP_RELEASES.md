@@ -2,7 +2,7 @@
 
 `npm run desktop:dist` builds the web app, validates the Electron security boundary, and writes an NSIS installer plus `latest.yml` to `release/`. It is a local build command, not permission to publish. Production releases use the version-bound signing policy described below.
 
-Version 0.11.56 explicitly selects an **unsigned** Windows release, continuing the choice first made for 0.11.55. No signing certificate is being configured for this release. This accepts the absence of an Authenticode publisher identity; it does not declare the signing debt resolved.
+Version 0.11.57 explicitly selects an **unsigned** Windows release, continuing the reviewed choice for 0.11.55 and 0.11.56. No signing certificate is being configured for this release. This accepts the absence of an Authenticode publisher identity; it does not declare the signing debt resolved. GitHub API authorization is not an Authenticode certificate.
 
 The `v0.11.55` tag is retained as a failed publication attempt: CI, unsigned packaging, `NotSigned`, checksum and attestation checks completed, but the draft Release API stage failed and no public Release assets were published. Do not move or reuse that tag; the next release uses a separately verified `v0.11.56` commit.
 
@@ -28,9 +28,9 @@ The binaries remain ignored build artifacts. Keep the exact upstream version, do
 1. Update `package.json`, `package-lock.json`, and the `version` in `scripts/release/policy.json` to the same semantic version. Review and explicitly select `windowsSigning: "signed"` or `"unsigned"` in that committed policy for every version bump.
 2. For `signed`, configure the certificate and publisher described below. For `unsigned`, explicitly accept the publisher-identity and migration limitations; missing credentials are never a reason to change modes automatically.
 3. Merge the fully verified release commit, including its policy, into `main`.
-4. Create the matching tag from the merged `main` history, such as `v0.11.56`, and push it.
+4. Create the matching tag from the merged `main` history, such as `v0.11.57`, and push it.
 
-The Release workflow reads the checked-out policy and explicitly selects the matching build and verification path. A missing, invalid, or version-mismatched policy fails closed. The current policy binds `version: "0.11.56"` to `windowsSigning: "unsigned"`; a future version must have its own matching policy version. Neither unavailable secrets nor a failed signature check causes an automatic downgrade to unsigned.
+The Release workflow reads the checked-out policy and explicitly selects the matching build and verification path. A missing, invalid, or version-mismatched policy fails closed. The current policy binds `version: "0.11.57"` to `windowsSigning: "unsigned"`; a future version must have its own matching policy version. Neither unavailable secrets nor a failed signature check causes an automatic downgrade to unsigned.
 
 Validate the checked-out policy before packaging:
 
@@ -42,7 +42,7 @@ This read-only preflight also checks `RELEASE_TAG` when set and requires signing
 
 Both modes retain CI gates and publish the complete five-asset set: installer, block map, `latest.yml`, browser archive, and `SHA256SUMS.txt`. Each asset receives GitHub build provenance. Unsigned does not mean an unverified or partial upload, but those checks do not supply an Authenticode publisher identity.
 
-### Unsigned path for 0.11.56
+### Unsigned path for 0.11.57
 
 Use `npm run desktop:package:unsigned` for explicitly unsigned packaging. This path disables executable signing with `signExecutable: false`, while preserving the application icon and version resources. It does not disable resource editing as a shortcut to avoiding signing.
 
@@ -97,4 +97,4 @@ Windows or SmartScreen may show an unknown-publisher or reputation warning for t
 
 Installed apps remain local-first: they check and download only after the user explicitly chooses that action, and ask again before restarting to install it. After SHA-512 validation and before committing a downloaded installer to the update cache or reporting it ready, the downloader calls the current `NsisUpdater.verifySignature` implementation and honors its configured publisher policy. Signature verification is not globally disabled for unsigned releases or migration.
 
-A client correctly enforcing a signed publisher must reject an unsigned update. Moving such a client to 0.11.56 therefore requires an explicit manual installer migration after reviewing the unsigned-release risks and checks; repeatedly retrying automatic updates cannot make the publisher requirement match. Preserve the existing user-data directory and follow local security policy. The updated downloader only protects clients running that code: it cannot retroactively repair a previously distributed updater or establish trust for historical downloads.
+A client correctly enforcing a signed publisher must reject an unsigned update. Moving such a client to this unsigned release therefore requires an explicit manual installer migration after reviewing the unsigned-release risks and checks; repeatedly retrying automatic updates cannot make the publisher requirement match. Preserve the existing user-data directory and follow local security policy. The updated downloader only protects clients running that code: it cannot retroactively repair a previously distributed updater or establish trust for historical downloads.

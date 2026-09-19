@@ -1,5 +1,6 @@
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { modelAuthoredTurnEvidenceText } from '../../../shared/turnEvidenceText.js'
+import { normalizePublicTurnTimeline } from '../../../shared/publicTurnTimeline.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { DEFAULT_SNAPSHOT_PAGE_SIZE, DEFAULT_SNAPSHOT_REVISION_ATTEMPTS } from './turnTransport.js'
 import { fetchServerSessionSnapshotPages } from './sessionSnapshotFetch.js'
@@ -390,6 +391,10 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const toolCalls = message.role === 'assistant'
         ? toolCallsFromContext({ toolTrace })
         : []
+      const publicTimeline = message.role === 'assistant' && message.modelContext?.turnId
+        ? normalizePublicTurnTimeline(message.modelContext?.publicTimeline, {
+            turnId: message.modelContext?.turnId, canonicalText: message.content,
+          }) : null
       const serverDeliveryArtifactIds = message.role === 'assistant'
         ? optionalContextArtifactIds(message?.modelContext, 'deliveryArtifactIds')
         : undefined
@@ -484,6 +489,7 @@ export function normalizeServerSessionSnapshot(snapshot) {
             streaming: false,
             serverAuthoritative: true,
             toolCalls,
+            ...(publicTimeline ? { publicTimeline } : {}),
             ...(toolTrace.length ? { toolTrace } : {}),
             ...(hasAuthoritativeArtifactCollection || serverArtifacts.length
               ? { serverArtifacts }

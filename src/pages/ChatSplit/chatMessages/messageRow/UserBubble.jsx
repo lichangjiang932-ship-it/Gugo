@@ -26,6 +26,7 @@ export function UserBubble({ attachments, command, content, onOpenAttachment, t 
           <span
             id={contentId}
             data-testid="user-message-content"
+            data-quotable="true"
             className="block whitespace-pre-wrap break-words"
           >
             {visibleContent}{collapsed && <span aria-hidden="true">{'…'}</span>}

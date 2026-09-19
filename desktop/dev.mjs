@@ -2,6 +2,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { randomBytes } from 'node:crypto'
 import { getRuntimeEnv } from '../server/utils/runtimeEnv.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -13,7 +14,7 @@ const viteEntry = path.join(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
 const electronBinary = process.platform === 'win32'
   ? path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron')
-const desktopEnv = { ...process.env, YMA_DESKTOP_DEV_URL: devUrl }
+const desktopEnv = { ...process.env, YMA_DESKTOP_DEV_URL: devUrl, GUGO_DESKTOP_BRIDGE_SECRET: randomBytes(32).toString('hex') }
 const ffmpegSidecar = path.join(rootDir, 'resources', 'bin', 'ffmpeg.exe')
 const ffprobeSidecar = path.join(rootDir, 'resources', 'bin', 'ffprobe.exe')
 if (!desktopEnv.GUGO_FFMPEG_PATH && existsSync(ffmpegSidecar)) desktopEnv.GUGO_FFMPEG_PATH = ffmpegSidecar
@@ -62,7 +63,7 @@ process.once('SIGTERM', stopAll)
 process.once('exit', stopAll)
 
 try {
-  const vite = start(process.execPath, [viteEntry, '--configLoader', 'native'])
+  const vite = start(process.execPath, [viteEntry, '--configLoader', 'native'], { env: desktopEnv })
   await Promise.race([
     waitForServer(devUrl),
     new Promise((_, reject) => vite.once('error', reject)),

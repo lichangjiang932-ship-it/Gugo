@@ -52,6 +52,7 @@ export default function MessageRow({
   onManageModels,
   onEditMessage,
   onForkMessage,
+  onQuoteSelection,
   onRetryModelFailure,
   t,
 }) {
@@ -235,6 +236,7 @@ export default function MessageRow({
             msg={msg}
             onEditMessage={isLatestUserMessage ? onEditMessage : null}
             onForkMessage={onForkMessage}
+            onQuoteSelection={onQuoteSelection}
             t={t}
           />
         )}
@@ -245,6 +247,7 @@ export default function MessageRow({
             lang={lang}
             msg={msg}
             onForkMessage={onForkMessage}
+            onQuoteSelection={onQuoteSelection}
             onRetryModelFailure={isModelPreExecutionFailure(msg) ? onRetryModelFailure : null}
             showArtifactPreview={showArtifactPreview}
             t={t}

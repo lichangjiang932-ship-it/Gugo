@@ -1480,7 +1480,10 @@ test('a filename hidden in collapsed execution does not suppress the visible ver
       />,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'false')
+    const disclosure = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(disclosure?.getAttribute('aria-expanded'), 'true')
+    await act(async () => disclosure.click())
+    assert.equal(disclosure.getAttribute('aria-expanded'), 'false')
     assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
     const fallback = rootElement.querySelector('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]')
     assert.ok(fallback)

@@ -3,6 +3,7 @@ import { Check, Copy, GitFork, Pencil, RotateCcw } from 'lucide-react'
 import { copyTextToClipboard } from '../../../../lib/clipboard.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../../lib/messageTime.js'
 import { copyableMessageText } from '../messageContent.js'
+import MessageQuoteButton from './MessageQuoteButton.jsx'
 
 function finiteOptionalNumber(value) {
   if (value === undefined || value === null || value === '') return null
@@ -10,7 +11,7 @@ function finiteOptionalNumber(value) {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-export function UserMeta({ forking = false, lang, msg, onEditMessage, onForkMessage, t }) {
+export function UserMeta({ forking = false, lang, msg, onEditMessage, onForkMessage, onQuoteSelection, t }) {
   return (
     <div className="mt-1 flex min-h-5 items-center justify-end gap-3 text-xs leading-5 text-ink-fade tabular-nums">
       <span data-testid="user-message-time" className="chat-message-meta pointer-events-none opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100" title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
@@ -40,6 +41,7 @@ export function UserMeta({ forking = false, lang, msg, onEditMessage, onForkMess
               <Pencil className="h-3 w-3" aria-hidden="true" />{t('chatMessages.edit')}
             </button>
           )}
+          <MessageQuoteButton content={msg.content} onQuoteSelection={onQuoteSelection} t={t} />
           <CopyButton content={msg.content} t={t} />
         </div>
       )}
@@ -47,7 +49,7 @@ export function UserMeta({ forking = false, lang, msg, onEditMessage, onForkMess
   )
 }
 
-export function AssistantMeta({ forking = false, isCurrentStreamingMessage, lang, msg, onForkMessage, onRetryModelFailure, showArtifactPreview, t }) {
+export function AssistantMeta({ forking = false, isCurrentStreamingMessage, lang, msg, onForkMessage, onQuoteSelection, onRetryModelFailure, showArtifactPreview, t }) {
   const latency = finiteOptionalNumber(msg.meta?.latency)
   return (
     <div className={`${showArtifactPreview ? 'mt-2 px-2' : 'mt-1'} flex flex-wrap items-center gap-2 text-xs text-ink-fade/85 tabular-nums`}>
@@ -83,6 +85,7 @@ export function AssistantMeta({ forking = false, isCurrentStreamingMessage, lang
               <RotateCcw className="h-3 w-3" aria-hidden="true" />{t('chatMessages.resend')}
             </button>
           )}
+          <MessageQuoteButton content={msg.content} onQuoteSelection={onQuoteSelection} t={t} />
           <CopyButton content={msg.content} t={t} />
         </div>
       )}

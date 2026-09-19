@@ -47,6 +47,19 @@ test('isSensitiveEnvKey: harmless keys pass', () => {
   assert.equal(isSensitiveEnvKey('PASSWORD_RULES'), false)
 })
 
+test('desktop bridge signing secret cannot be inherited by an approved tool env_keys request', () => {
+  for (const key of ['GUGO_DESKTOP_BRIDGE_SECRET', 'gugo_desktop_bridge_secret']) {
+    assert.equal(isSensitiveEnvKey(key), true)
+    assert.equal(isProtectedExecutionEnvKey(key), true)
+    const env = sanitizeChildEnv({}, {
+      sourceEnv: { [key]: 'synthetic-bridge-secret', SAFE_FLAG: 'ok' },
+      inheritKeys: [key], platform: 'win32',
+    })
+    assert.equal(env[key], undefined)
+    assert.equal(env.SAFE_FLAG, 'ok')
+  }
+})
+
 test('isSensitiveEnvKey: edge cases', () => {
   assert.equal(isSensitiveEnvKey(''), false)
   assert.equal(isSensitiveEnvKey(null), false)

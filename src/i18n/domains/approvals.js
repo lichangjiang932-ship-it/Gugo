@@ -31,6 +31,21 @@ const translations = {
       "escalationPendingTitle": "权限升级等待审批",
       "escalationPendingBody": "当前权限未改变。请在审批收件箱批准后生效。"
     },
+    "errors": {
+      "unauthorized": "当前会话不可用或已过期。请刷新页面后重试。",
+      "forbidden": "当前会话无权操作此审批。请刷新并检查可用的审批。",
+      "notFound": "此审批不可用。请刷新审批列表。",
+      "expired": "此审批已过期。请刷新状态；仍需执行时，请重新发起审批。",
+      "conflict": "审批状态已变化，未能确认本次操作。请刷新状态后再决定。",
+      "stalePermissions": "此审批创建后权限已变化。请刷新状态并重新发起权限升级。",
+      "escalationRequired": "放宽权限需要你的明确批准。请先检查并确认权限升级请求。",
+      "editForbidden": "权限升级审批不能改写参数。请审核原请求，或重新发起审批。",
+      "rememberForbidden": "权限升级审批不能保存为长期授权。请单独审核本次请求。",
+      "invalidArguments": "改写参数必须是有效的 JSON 对象，并符合工具要求。",
+      "invalidRequest": "审批请求无效。请检查操作与参数，并刷新审批状态。",
+      "unavailable": "审批服务未能确认此次请求。请先刷新状态，不要重复提交。",
+      "unknown": "未能确认审批请求的结果。请先刷新状态，不要重复提交。"
+    },
     "inbox": {
       "title": "审批收件箱",
       "subtitle": "无人值守的后台任务和定时任务需要批准时，会排队到这里。日常对话里的审批直接在对话中完成。",
@@ -78,6 +93,21 @@ const translations = {
       "bypassJustification": "Enter a required reason for enabling “Bypass all”:",
       "escalationPendingTitle": "Permission upgrade pending",
       "escalationPendingBody": "Permissions are unchanged until you approve the request in the approval inbox."
+    },
+    "errors": {
+      "unauthorized": "Your session is unavailable or expired. Reload the page and try again.",
+      "forbidden": "Your session cannot access this approval. Refresh and review the available approvals.",
+      "notFound": "This approval is unavailable. Refresh the approval list.",
+      "expired": "This approval expired. Refresh its status and request a new approval if the action is still needed.",
+      "conflict": "The approval state changed, so this action could not be confirmed. Refresh its status before deciding again.",
+      "stalePermissions": "Permissions changed after this approval was created. Refresh the status and request a new permission upgrade.",
+      "escalationRequired": "Broader permissions require your explicit approval. Review and confirm the permission upgrade request first.",
+      "editForbidden": "Permission upgrade arguments cannot be edited. Review the original request or request a new approval.",
+      "rememberForbidden": "A permission upgrade cannot be saved as a standing grant. Review this request individually.",
+      "invalidArguments": "Edited arguments must be a valid JSON object that meets the tool requirements.",
+      "invalidRequest": "The approval request is invalid. Check the action and arguments, then refresh the approval status.",
+      "unavailable": "The approval service could not confirm this request. Refresh its status before submitting again.",
+      "unknown": "The approval request outcome could not be confirmed. Refresh its status before submitting again."
     },
     "inbox": {
       "title": "Approval inbox",

@@ -3,6 +3,8 @@ const path = require('node:path')
 const { listPackage } = require('@electron/asar')
 
 const REQUIRED_DESKTOP_ASAR_FILES = Object.freeze([
+  'desktop/fileActionSetup.js',
+  'desktop/fileActions.js',
   'server/start.js',
   'server/adapters/builtinSqliteTurnPersistenceBootstrap.js',
   'server/adapters/sqliteTurnPersistenceAdapter.js',
@@ -11,6 +13,7 @@ const REQUIRED_DESKTOP_ASAR_FILES = Object.freeze([
   'server/adapters/browserFrameAutomation.js',
   'server/adapters/browserUploadAutomation.js',
   'server/services/desktopParentGuard.js',
+  'server/services/desktopFileTargetService.js',
   'server/services/runtimeServerStartup.js',
   'server/services/pptxMarkdownCompatibility.js',
   'server/services/pptxMarkdownSource.js',
@@ -19,6 +22,8 @@ const REQUIRED_DESKTOP_ASAR_FILES = Object.freeze([
   'server/services/pptxArtifactValidation.js',
   'server/utils/windowsProcessGateChild.js',
   'server/utils/windowsProcessGateRuntime.js',
+  'server/utils/desktopFileProtocol.js',
+  'shared/desktopFileReference.js',
   'shared/runtimeConfigRecoveryProtocol.js',
   'src/i18n/domains/skillsMarket.js',
   'src/lib/officeExport/documentExport.js',

@@ -280,7 +280,6 @@ export default function SessionList({
         >
           <ProjectIcon data-project-state-icon={isCollapsed ? 'collapsed' : 'expanded'} className="left-rail-folder-icon h-4 w-4 shrink-0 text-ink-fade" strokeWidth={1.45} fill="currentColor" fillOpacity={0.1} aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate text-ui font-medium leading-5 text-ink" title={project.path}>{project.name}</span>
-          <span className="left-rail-project-count" aria-hidden="true">{project.sessions.length}</span>
         </button>
         <button
           type="button"

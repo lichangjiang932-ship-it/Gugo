@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { bootstrapAuth, resolveAuthMode } from '../adapters/authAccount.js'
 import { getTurnEngine } from './turnEngineHost.js'
 import { decideApproval } from './approvalStore.js'
+import { getApprovalMode } from './approvalSettingsStore.js'
 import { releaseApproval } from './approvalGate.js'
 import { turnEventForClient } from './turnEventStore.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
@@ -64,7 +65,7 @@ function configureWorkspace(rawCwd, env = process.env, { explicit = false } = {}
     // An explicit --cwd also decides the turn's project directory (and thus
     // which project instructions apply), instead of letting a configured
     // default output directory take over the workspace role.
-    ...(explicit ? { GUGO_CLI_WORKSPACE_ROOT: cwd } : {}),
+    GUGO_CLI_WORKSPACE_ROOT: explicit ? cwd : '',
   }
   Object.assign(env, workspaceEnv)
   if (env !== process.env) Object.assign(process.env, workspaceEnv)
@@ -253,6 +254,18 @@ async function prepareHeadlessTurn(input, dependencies) {
   }
   if (auth.token && auth.token !== input.token) await input.onToken(auth.token)
   const userId = auth.user.id
+  if (!input.resumeTurnId && input.modeExplicit === false) {
+    const savedMode = await (dependencies.readApprovalMode || getApprovalMode)({ userId })
+    if (!PERMISSION_MODES.has(savedMode)) {
+      throw new HeadlessTurnError('CLI_PERMISSION_MODE_UNAVAILABLE', 'the saved account permission mode is unavailable')
+    }
+    // Default CLI behavior stays normal; an already saved read-only restriction
+    // must still apply. Broader account settings require an explicit CLI choice.
+    input = { ...input, permissionMode: savedMode === 'plan' ? 'plan' : 'normal' }
+    if (savedMode === 'plan') {
+      await input.onDiagnostic('[permissions] using saved plan mode; choose --mode explicitly for a different per-turn mode.')
+    }
+  }
   const authMode = auth.mode || resolveAuthMode(executionEnv)
   const turnId = String(input.resumeTurnId || dependencies.idFactory?.() || randomUUID())
   const engine = dependencies.engine || await (dependencies.getEngine || getTurnEngine)()
@@ -420,6 +433,14 @@ async function startOrRecoverHeadlessTurn(runtime, controller, interactions) {
   await startHeadlessWithAttachments(runtime, {
       ...scope,
       content,
+      sessionWorkspaceMode: 'create-only',
+      // Chat pins its execution cwd even without a user project selection.
+      // Only an explicit selection becomes a new session's project metadata.
+      ...((input.sessionWorkspaceExplicit ?? input.workspaceExplicit) === true ? {
+        workspacePath: typeof runtime.workspace === 'string'
+          ? runtime.workspace
+          : runtime.workspace?.cwd || input.workspaceCwd || input.cwd,
+      } : {}),
       modelName: input.normalizedModel,
       modelProviderId: input.normalizedModelProviderId,
       intentMode: input.permissionMode === 'plan' ? 'answer' : 'auto',

@@ -5,6 +5,7 @@ import { act, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import SessionList from '../../src/components/leftRail/SessionList.jsx'
 import RailDisclosureIcon from '../../src/components/leftRail/RailDisclosureIcon.jsx'
+import { ChatWorkbenchToggle } from '../../src/pages/ChatSplit/chatSplitView/ChatSessionHeader.jsx'
 import { translateKey } from '../../src/i18n/translations.js'
 
 const t = (key, values = {}) => translateKey(key, 'en').replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? `{${name}}`))
@@ -127,6 +128,43 @@ test('empty project disclosure has a real controlled region, clear state label, 
     assert.equal(toggle.getAttribute('aria-label'), 'Expand “Root” (0 conversations)')
     assert.equal(region.hidden, true)
     assert.equal(toggle.querySelector('[data-project-state-icon]').getAttribute('data-project-state-icon'), 'collapsed')
+  })
+})
+
+test('project names omit the visible conversation count while preserving accessible disclosure and rows', async () => {
+  await withSidebar({ initialSessions: [
+    { id: 'first', title: 'One', workspacePath: 'D:\\project' },
+    { id: 'second', title: 'Two', workspacePath: 'D:\\project' },
+  ] }, async ({ element }) => {
+    const toggle = element.querySelector('[data-project-toggle]')
+    assert.equal(toggle.querySelector('.left-rail-project-count'), null)
+    assert.equal(toggle.textContent, 'project')
+    assert.match(toggle.getAttribute('aria-label'), /2 conversations/)
+    assert.equal(element.querySelectorAll('[data-session-row]').length, 2)
+    await act(async () => toggle.click())
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(element.querySelector('[data-project-sessions]').hidden, true)
+  })
+})
+
+test('workbench toggle uses one light right-pane icon and preserves button interaction and accessibility', async () => {
+  await withSidebar({ initialSessions: [] }, async ({ element, root }) => {
+    function Toggle() {
+      const [open, setOpen] = useState(false)
+      return <ChatWorkbenchToggle open={open} aria-expanded={open} aria-label={open ? 'Hide workbench' : 'Show workbench'}
+        aria-controls="right-workbench" onClick={() => setOpen((value) => !value)} />
+    }
+    await act(async () => root.render(<Toggle />))
+    const button = element.querySelector('button')
+    const icon = button.querySelector('svg')
+    assert.equal(icon.getAttribute('aria-hidden'), 'true')
+    assert.equal(icon.getAttribute('stroke-width'), '1.5')
+    assert.ok(icon.classList.contains('lucide-panel-right'))
+    assert.equal(button.getAttribute('aria-expanded'), 'false')
+    assert.equal(button.getAttribute('aria-controls'), 'right-workbench')
+    await act(async () => button.click())
+    assert.equal(button.getAttribute('aria-expanded'), 'true')
+    assert.equal(button.getAttribute('aria-label'), 'Hide workbench')
   })
 })
 

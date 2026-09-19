@@ -28,6 +28,7 @@ import { resetManualRetryVerificationBudget } from './turnFailedRetryPolicy.js'
 import { filterAuthorizedDirectoryResolutions } from './turnResolutionRuntime.js'
 import { normalizeTurnApprovalMode } from './turnStartRuntime.js'
 import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
+import { createTurnPublicTimeline } from './turnPublicTimeline.js'
 
 export function checkpointStateForFailedRetry(state, { manualRetry = false } = {}) {
   if (!state || typeof state !== 'object') return state || null
@@ -232,6 +233,9 @@ function createTurnExecutionState(runtime, input, recovery, prepared) {
       recovery.pendingRecoveryAttempt?.assistantText || restored?.retryAssistantText || '',
     ),
   }
+  state.publicTimeline = createTurnPublicTimeline({ userId: input.userId, sessionId: input.sessionId, turnId: input.turnId },
+    restored, state.streamedAssistantText)
+  if (!state.streamedAssistantText && state.publicTimeline) state.streamedAssistantText = state.publicTimeline.text
   const recordCanaryTerminal = (
     terminalState,
     errorCode = null,

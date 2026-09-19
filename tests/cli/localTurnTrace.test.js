@@ -7,9 +7,9 @@ import test, { after } from 'node:test'
 import { CliUsageError } from '../../bin/cli/errors.js'
 import { parseTraceArgs } from '../../bin/cli/traceCommand.js'
 import { summarizeTurnTrace, readLocalTurnTrace } from '../../server/services/localTurnTraceService.js'
-import { closeDb } from '../../server/db.js'
+import { closeDb, getDb } from '../../server/db.js'
 import { issueEmailCode, verifyEmailCode } from '../../server/adapters/authAccount.js'
-import { upsertSession } from '../../server/services/sessionStore.js'
+import { upsertSessionForAtomicCommit } from '../../server/services/sessionStore.js'
 import { appendTurnEvent } from '../../server/services/turnEventStore.js'
 import { createTurnEvent } from '../../shared/turnEvents.js'
 
@@ -63,7 +63,7 @@ test('summarizeTurnTrace aggregates model, tool, approval and usage facts', () =
 })
 
 test('readLocalTurnTrace reconstructs a persisted turn and reports missing turns', async () => {
-  upsertSession({ id: 'trace-session', userId, title: 'Trace' })
+  getDb().transaction(() => upsertSessionForAtomicCommit({ id: 'trace-session', userId, title: 'Trace' }))()
   const base = { sessionId: 'trace-session', turnId: 'trace-turn', userId, createdAt: 1 }
   const events = [
     { id: 'e0', sequence: 0, type: 'turn.started', payload: { approvalMode: 'plan' } },
@@ -75,6 +75,9 @@ test('readLocalTurnTrace reconstructs a persisted turn and reports missing turns
   for (const event of events) {
     appendTurnEvent({ userId, event: createTurnEvent({ ...base, ...event }) })
   }
+  // Runtime initialization owns identity creation; read-only trace must not.
+  getDb().prepare('INSERT INTO meta(key,value) VALUES(?,?)').run('local_auth_owner_user_id', userId)
+  closeDb()
 
   const trace = await readLocalTurnTrace({ turnId: 'trace-turn' })
   assert.equal(trace.ok, true)

@@ -111,6 +111,7 @@ function projectEvidence(runtime, options = {}) {
   }, {
     ...runtime.scope,
     checkpointMessages: state.checkpointMessages,
+    publicTimeline: state.publicTimeline,
     baselineToolCallIds: state.baselineToolCallIds,
     pluginPromptBlockIds: state.promptContextSnapshot?.pluginPromptBlockIds,
     checkpointRecovery: state.checkpointRecovery,

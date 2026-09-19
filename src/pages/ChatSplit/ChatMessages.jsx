@@ -1,4 +1,4 @@
-import { ChevronDown, Quote } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import MessageRow from './chatMessages/MessageRow.jsx'
 import ChatMiniTimeline from './chatMessages/ChatMiniTimeline.jsx'
@@ -27,18 +27,16 @@ export default function ChatMessages({
   routeHash = '',
 }) {
   const { t, lang } = useT()
-  const viewport = useChatMessageViewport({ messages, onQuoteSelection, routeHash })
+  const viewport = useChatMessageViewport({ messages, routeHash })
   const {
     hiddenCount,
     visibleMessages,
-    quoteBubble,
     atBottom,
     bindContainer,
     loadEarlierMessages,
     activeTurnIndex,
     scrollToTurn,
     scrollToBottom,
-    quoteSelection,
   } = viewport
   const generatingMessageId = isGenerating
     ? [...messages].reverse().find((message) => message?.role === 'assistant')?.id
@@ -83,6 +81,7 @@ export default function ChatMessages({
                 onManageModels={onManageModels}
                 onEditMessage={onEditMessage}
                 onForkMessage={sessionId && !isGenerating ? onForkMessage : null}
+                onQuoteSelection={onQuoteSelection}
                 onRetryModelFailure={onRetryModelFailure}
                 t={t}
               />
@@ -97,18 +96,6 @@ export default function ChatMessages({
         {!atBottom && messages.length > 0 && (
           <button onClick={scrollToBottom} className="chat-chrome-button absolute bottom-4 right-6 z-10 inline-flex h-8 items-center gap-1.5 rounded-pill border border-ink-fade/45 bg-paper px-3 text-xs text-ink-soft hover:border-ink-fade hover:text-ink" title={t('chatMessages.backToBottom')} aria-label={t('chatMessages.backToBottom')}>
             <ChevronDown className="h-3.5 w-3.5" />{t('chatMessages.backToBottom')}
-          </button>
-        )}
-        {quoteBubble && (
-          <button
-            type="button"
-            onMouseDown={(event) => { event.preventDefault(); quoteSelection() }}
-            style={{ top: quoteBubble.top, left: quoteBubble.left, transform: 'translateX(-50%)' }}
-            className="chat-chrome-button absolute z-20 inline-flex h-7 items-center gap-1 rounded-pill bg-ink px-2.5 text-xs font-medium text-accent-contrast hover:bg-accent"
-            title={t('nav.quoteSelectionTitle')}
-            aria-label={t('nav.quoteSelectionTitle')}
-          >
-            <Quote className="h-3 w-3" />{t('nav.quoteSelection')}
           </button>
         )}
       </div>

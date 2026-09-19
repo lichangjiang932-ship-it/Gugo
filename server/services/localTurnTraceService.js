@@ -3,16 +3,14 @@
  *
  * Reconstructs one turn's timeline and aggregate counters from the persisted
  * Turn events, so CLI/service/model/tool activity can be inspected with one
- * command instead of hand-joining sessionId/turnId/toolCallId. It opens the
- * local database read-only in spirit (migrations may still run) and never
- * mutates turn state.
+ * command instead of hand-joining sessionId/turnId/toolCallId. It uses the
+ * existing local identity and a read-only database snapshot. It never runs
+ * migrations, creates accounts/sessions, or changes process storage identity.
  */
-import { applyRuntimeStorageBootstrap } from '../utils/runtimeEnv.js'
-import { getDb } from '../db.js'
-import { bootstrapAuth } from '../adapters/authAccount.js'
 import { turnEventForClient } from './turnEventStore.js'
 import { listTurnEvents, resolveTurnSession } from './turnEventStore.js'
 import { buildTurnTraceSpans } from './turnTraceSpans.js'
+import { localTraceReadFailure, withLocalTurnTraceReader } from './localTurnTraceReader.js'
 
 const DEFAULT_LIMIT = 2_000
 const MAX_LIMIT = 10_000
@@ -120,55 +118,61 @@ export function summarizeTurnTrace(events = []) {
   return aggregates
 }
 
-/**
- * @returns {Promise<{ok: boolean, sessionId: string|null, turnId: string, events: object[], aggregates: object, blocking?: object}>}
- */
-export async function readLocalTurnTrace({
-  turnId = '',
-  sessionId = '',
-  cwd = process.cwd(),
-  env = process.env,
-  limit = DEFAULT_LIMIT,
-  bootstrapAuthImpl = bootstrapAuth,
-} = {}) {
-  const normalizedTurnId = String(turnId || '').trim()
-  if (!normalizedTurnId) {
-    return { ok: false, sessionId: null, turnId: '', events: [], aggregates: summarizeTurnTrace([]), blocking: { code: 'TURN_ID_REQUIRED', action: 'pass_turn_id' } }
+function unavailableTrace(turnId, blocking) {
+  return { ok: false, sessionId: null, turnId, events: [], aggregates: summarizeTurnTrace([]), blocking }
+}
+
+function boundedTraceEvents(scope, limit) {
+  const events = []
+  let after = -1
+  // The canonical store caps a page at 2000. Request one additional event to
+  // prove coverage rather than silently treating one page as the whole trace.
+  while (events.length <= limit) {
+    const count = Math.min(2_000, limit + 1 - events.length)
+    const page = listTurnEvents({ ...scope, after, limit: count })
+    events.push(...page)
+    if (page.length < count) break
+    after = page.at(-1).sequence
   }
-  applyRuntimeStorageBootstrap({ cwd, env })
-  getDb()
-  const session = bootstrapAuthImpl({ token: '', env })
-  if (!session?.authenticated || !session?.user?.id) {
-    return { ok: false, sessionId: null, turnId: normalizedTurnId, events: [], aggregates: summarizeTurnTrace([]), blocking: { code: 'AUTH_REQUIRED', action: 'login' } }
-  }
-  const userId = String(session.user.id)
-  let resolvedSessionId = String(sessionId || '').trim()
+  return { events: events.slice(0, limit).map(turnEventForClient), truncated: events.length > limit }
+}
+
+function reconstructTrace({ userId, databaseReadMode }, { turnId, sessionId, limit }) {
+  let resolvedSessionId = sessionId
   if (!resolvedSessionId) {
-    const resolved = resolveTurnSession({ userId, turnId: normalizedTurnId })
+    const resolved = resolveTurnSession({ userId, turnId })
     if (resolved?.status === 'found') resolvedSessionId = String(resolved.sessionId || '')
   }
-  if (!resolvedSessionId) {
-    return { ok: false, sessionId: null, turnId: normalizedTurnId, events: [], aggregates: summarizeTurnTrace([]), blocking: { code: 'TURN_NOT_FOUND', action: 'pass_session_id' } }
-  }
-  const events = listTurnEvents({
-    userId,
-    sessionId: resolvedSessionId,
-    turnId: normalizedTurnId,
-    after: -1,
-    limit: boundedLimit(limit),
-  }).map(turnEventForClient)
-  const { traceId, spans } = buildTurnTraceSpans({
-    events,
-    turnId: normalizedTurnId,
-    sessionId: resolvedSessionId,
-  })
+  const missing = { code: 'TURN_NOT_FOUND', action: 'pass_session_id' }
+  if (!resolvedSessionId) return unavailableTrace(turnId, missing)
+  const { events, truncated } = boundedTraceEvents({ userId, sessionId: resolvedSessionId, turnId }, limit)
+  if (!events.length) return unavailableTrace(turnId, missing)
+  const { traceId, spans } = buildTurnTraceSpans({ events, turnId, sessionId: resolvedSessionId })
+  const coverage = truncated ? 'partial' : 'complete'
+  const root = spans.find((span) => !span.parentSpanId)
+  if (root) root.attributes['gugo.trace.coverage'] = coverage
   return {
     ok: true,
     sessionId: resolvedSessionId,
-    turnId: normalizedTurnId,
+    turnId,
     traceId,
     events,
     spans,
+    coverage,
+    truncated,
+    databaseReadMode,
     aggregates: summarizeTurnTrace(events),
   }
+}
+
+/** Read only existing state; failures are explicit and never fall back to bootstrapping. */
+export async function readLocalTurnTrace({ turnId = '', sessionId = '', cwd = process.cwd(), env = process.env,
+  limit = DEFAULT_LIMIT } = {}) {
+  const normalizedTurnId = String(turnId || '').trim()
+  if (!normalizedTurnId) return unavailableTrace('', { code: 'TURN_ID_REQUIRED', action: 'pass_turn_id' })
+  try {
+    return await withLocalTurnTraceReader({ cwd, env }, (scope) => reconstructTrace(scope, {
+      turnId: normalizedTurnId, sessionId: String(sessionId || '').trim(), limit: boundedLimit(limit),
+    }))
+  } catch (error) { return unavailableTrace(normalizedTurnId, localTraceReadFailure(error)) }
 }

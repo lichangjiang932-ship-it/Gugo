@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { MoreHorizontal } from 'lucide-react'
 import { buildChatTurnMarkers, getBoundedChatTimeline } from './chatMiniTimeline.js'
 
 function TimelineWindowControl({ direction, target, onSelectTurn, t }) {
@@ -16,9 +17,21 @@ function TimelineWindowControl({ direction, target, onSelectTurn, t }) {
       data-testid={`chat-timeline-${direction}`}
       onClick={() => onSelectTurn(target.messageIndex)}
     >
-      <span aria-hidden="true">{isEarlier ? '▲' : '▼'}</span>
+      <MoreHorizontal className="h-3 w-3" strokeWidth={1.4} aria-hidden="true" />
     </button>
   )
+}
+
+function moveTimelineFocus(event) {
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+  const buttons = [...event.currentTarget.querySelectorAll('button')]
+  const current = buttons.indexOf(event.target.closest?.('button'))
+  if (current < 0) return
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+    : Math.max(0, Math.min(buttons.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)))
+  event.preventDefault()
+  buttons[next]?.focus()
 }
 
 export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTurn, t }) {
@@ -70,6 +83,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
       className="chat-mini-timeline absolute top-1/2 z-20 hidden -translate-y-1/2 md:flex"
       aria-label={t('chatTimeline.label')}
       data-testid="chat-mini-timeline"
+      onKeyDown={moveTimelineFocus}
     >
       <div
         ref={markerListRef}
@@ -107,7 +121,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
             >
               <span
                 aria-hidden="true"
-                className={`block h-[3px] rounded-pill transition-[width,background-color,transform] duration-200 ease-out motion-reduce:transition-none ${active ? 'w-4 bg-ink/80' : 'w-2.5 bg-ink/25 group-hover:w-4 group-hover:bg-ink/65 group-hover:translate-x-0.5 group-focus-visible:w-4 group-focus-visible:bg-ink/70'}`}
+                className={`block h-px rounded-pill transition-[width,background-color] duration-200 ease-out motion-reduce:transition-none ${active ? 'w-4 bg-ink/55' : 'w-2.5 bg-ink/20 group-hover:w-4 group-hover:bg-ink/45 group-focus-visible:w-4 group-focus-visible:bg-ink/55'}`}
               />
             </button>
           )
