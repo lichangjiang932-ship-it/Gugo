@@ -167,7 +167,7 @@ test('forkSession copies only persisted transcript with fresh message ids and sa
 
 test('forkSession can branch through an owned user or assistant message without copying the abandoned suffix', () => {
   const owner = issueTestSession({ email: `branch-node-owner-${process.pid}@example.com` })
-  upsertSession({ id: 'branch-node-source', userId: owner.userId, title: 'Node source' })
+  upsertSession({ id: 'branch-node-source', userId: owner.userId, title: 'Node source', createdAt: 1 })
   for (const [id, role, content, createdAt] of [
     ['node-user-1', 'user', 'first prompt', 10],
     ['node-assistant-1', 'assistant', 'first answer', 20],
@@ -182,6 +182,7 @@ test('forkSession can branch through an owned user or assistant message without 
     sessionId: 'branch-node-source',
     throughMessageId: 'node-user-2',
     label: 'Retry second prompt',
+    now: 100,
     idFactory: () => ids.shift(),
   })
   assert.equal(result.totalMessages, 3)
@@ -195,6 +196,7 @@ test('forkSession can branch through an owned user or assistant message without 
     sessionId: 'branch-node-source',
     throughMessageId: 'node-assistant-1',
     label: 'Continue after first answer',
+    now: 200,
     idFactory: () => assistantIds.shift(),
   })
   assert.equal(assistantResult.totalMessages, 2)
@@ -226,6 +228,48 @@ test('forkSession can branch through an owned user or assistant message without 
       && /user or assistant message in the source Session/.test(error.message),
   )
   assert.equal(getSession({ userId: owner.userId, sessionId: 'invalid-missing-message' }), null)
+})
+
+test('branch ordering is depth then time then id even when siblings share a millisecond', () => {
+  const owner = issueTestSession({ email: `branch-tie-owner-${process.pid}@example.com` })
+  const other = issueTestSession({ email: `branch-tie-other-${process.pid}@example.com` })
+  upsertSession({ id: 'branch-tie-root', userId: owner.userId, title: 'Same clock', createdAt: 1 })
+  const source = [
+    ['tie-user', 'user', 'first prompt', 10],
+    ['tie-assistant', 'assistant', 'first answer', 20],
+    ['tie-next-user', 'user', 'second prompt', 30],
+  ]
+  for (const [id, role, content, createdAt] of source) {
+    upsertMessage({ id, userId: owner.userId, sessionId: 'branch-tie-root', role, content, createdAt })
+  }
+  const fork = (sessionId, throughMessageId, now, ids) => forkSession({
+    userId: owner.userId, sessionId, throughMessageId, now, idFactory: () => ids.shift(),
+  })
+  // Reverse lexical creation order and an intentionally earlier grandchild
+  // timestamp expose depth and equal-time id ordering without wall-time races.
+  fork('branch-tie-root', 'tie-assistant', 100,
+    ['branch-tie-z', 'tie-z-user', 'tie-z-assistant'])
+  fork('branch-tie-root', 'tie-next-user', 100,
+    ['branch-tie-a', 'tie-a-user', 'tie-a-assistant', 'tie-a-next-user'])
+  fork('branch-tie-z', 'tie-z-user', 50,
+    ['branch-tie-0-grandchild', 'tie-grandchild-user'])
+  const expected = [
+    ['branch-tie-root', 0, null, 'second prompt', 'user', 3],
+    ['branch-tie-a', 1, 100, 'second prompt', 'user', 3],
+    ['branch-tie-z', 1, 100, 'first answer', 'assistant', 2],
+    ['branch-tie-0-grandchild', 2, 50, 'first prompt', 'user', 1],
+  ]
+  for (const [sessionId] of expected) {
+    const tree = getSessionBranches({ userId: owner.userId, sessionId })
+    assert.equal(tree.rootSessionId, 'branch-tie-root')
+    assert.equal(tree.truncated, false)
+    assert.deepEqual(tree.branches.map((branch) => [
+      branch.id, branch.depth, branch.forkedAt, branch.branchSummary, branch.branchTipRole, branch.messageCount,
+    ]), expected)
+    assert.equal(getSessionBranches({ userId: other.userId, sessionId }), null)
+  }
+  assert.deepEqual(listMessages({ userId: owner.userId, sessionId: 'branch-tie-root' })
+    .map(({ id, role, content, createdAt }) => [id, role, content, createdAt]), source)
 })
 
 test('branch file-operation summaries use successful durable evidence and exclude copied history', () => {

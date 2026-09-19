@@ -102,3 +102,15 @@ v0.11.59 已推送的提交 `65dd21f` 不改写。用于补跑的本机 `full-te
 v0.11.60 提交前定向结果：桌面关联 96/96，真实 Electron 短路径桥接退出 0；历史 policy 字节及升级回归 23/23；PPT 回归 13/13、生产 Windows 进程护栏 9/9、按 CI 串行执行的真实 CLI/PPT 链及参数修复 8/8。上述组有重叠，不相加为独立测试总数。整合策略/发布/桌面回归 74/74，全仓 lint、typecheck 及 14 个反向 fixture、debt、依赖清单及复杂度门禁均通过；两个独立只读复核未发现新增阻塞。最终冻结全量另记 `full-tests-release-60.log`，未完成前不宣称通过。
 
 最终冻结全量已于 2026-09-19T06:19:35Z 前完成：**1026 文件、9059 测试，9050 pass / 9 skip / 0 fail / 0 cancelled**，退出 0；104 个隔离 UI 文件全部完成。以 `full-tests-release-60.log` 为本地最终记录，不能替代后续同一版本的远程 Release CI 和下载资产核对。
+
+### 同毫秒分支排序测试追加
+
+v0.11.60 的 Release coverage job `105852847527` 和 Ubuntu job `105852847545` 均已通过（coverage 总计 78.57% lines / 78.06% branches / 78.45% functions）。但同一 SHA 的 main CI coverage job `105852858161` 失败；实际唯一失败是 `tests/sessionBranches.test.js` 的分支摘要有序断言，证据保留于 `coverage-60-main-job.log`。
+
+生产查询明确按 depth、forked_at/created_at、session id 排序。原测试连续两次调用 `forkSession` 的默认 `Date.now()`，错误地假定每次调用时间必然递增。若落在同一毫秒，词典序更小的第二个分支正确地排在前面。日志中源正文、两个分支的内容、摘要、角色和消息数均正确，只有列表顺序与测试假设不同。
+
+将 `Date.now` 冻结后，旧测试稳定复现相同失败（`branch-order-frozen-red.log`）。修复只给原正文用例显式不同时间，并增加故意逆序插入、同毫秒兄弟和更早时间孙分支的行为测试；从根及每个分支读取同一有序树，保留跨 owner 拒绝及源正文不变检查。没有修改生产排序、添加 sleep、排序实际结果来掩盖问题或移除既有断言。固定时钟下 2/2、完整分支文件 7/7 通过，定向 lint 通过。
+
+已在打包/发布前取消 v0.11.60 Release run `35426341193`，未生成公开 Release，保留标签和失败证据。v0.11.61 是仅含此测试确定性修复及版本/文档同步的下一候选，须按原门槛重新完成远程验收；不把上一版本成功的 coverage 当成它自己的结果。
+
+后续 v0.11.60 main Windows job `105852858112` 已完整通过 1026 文件，日志 `windows-60-main-job.log` 确认真实短路径、大小写、HTTP 签名桥接、PPT 生成与 LF checkout 用例均执行通过。v0.11.61 提交前分支/恢复/客户端/真实 UI/发布策略关联 9 文件 46/46；全仓 lint、typecheck 及 14 个反向 fixture、debt、依赖清单和复杂度检查均通过。独立只读复核确认原断言完整保留，depth/time/id 的各级优先级分别由新旧用例守护。冻结全量仍另用 `full-tests-release-61.log`，以实际结束结果为准。

@@ -2,13 +2,15 @@
 
 `npm run desktop:dist` builds the web app, validates the Electron security boundary, and writes an NSIS installer plus `latest.yml` to `release/`. It is a local build command, not permission to publish. Production releases use the version-bound signing policy described below.
 
-Version 0.11.60 explicitly selects an **unsigned** Windows release, continuing the reviewed choice for 0.11.55 and 0.11.56. No signing certificate is being configured for this release. This accepts the absence of an Authenticode publisher identity; it does not declare the signing debt resolved. GitHub API authorization is not an Authenticode certificate.
+Version 0.11.61 explicitly selects an **unsigned** Windows release, continuing the reviewed choice for 0.11.55 and 0.11.56. No signing certificate is being configured for this release. This accepts the absence of an Authenticode publisher identity; it does not declare the signing debt resolved. GitHub API authorization is not an Authenticode certificate.
 
 The `v0.11.57` tag is retained as a failed publication attempt: the required history secret scan flagged an old synthetic redaction-test JWT. The fixture had no JOSE algorithm and used the literal `SYNTHETIC_SIGNATURE`; it was not an issued credential. The follow-up constructs the fixture at runtime and records only that exact historical finding, without excluding the file, a rule, or a commit range. The history scan passed for `v0.11.58`.
 
 The `v0.11.58` tag is also retained as a failed publication attempt: the coverage runner applied the normal 20-minute batch watchdog to the complete 921-file instrumented batch. The watchdog stopped that process before it could finish; no coverage result was produced. The v0.11.59 follow-up keeps the complete batch and all coverage thresholds, gives that lane a finite 40-minute default, and streams progress while retaining diagnostics. Ordinary and isolated test timeouts stay unchanged.
 
 The complete v0.11.58 Windows results subsequently exposed three additional failure families: different realpath algorithms for signed desktop targets, Git rewriting exact-hash historical policy fixtures to CRLF, and a six-second PPT test-command budget that could expire during the real Windows process-guard cold start. The next v0.11.60 candidate aligns the desktop resolver with the service and saved grants, pins only those fixture bytes to LF, and gives the Windows fixture a finite startup-aware budget. It does not weaken file identity, authorization, delivery assertions, or production deadlines. Existing tags are not moved or reused; v0.11.60 must pass its complete Release workflow independently.
+
+The v0.11.60 Release coverage and Ubuntu full suite passed, but a separate main-branch coverage run exposed a clock-dependent branch-order test. Two forks created in the same millisecond correctly follow the existing session-id tie-breaker, while the test expected creation order. The publication workflow was canceled before packaging or publication; the tag and both outcomes remain intact. v0.11.61 gives the original fixture explicit times and separately verifies equal-time, depth-first ordering without changing production behavior, removing assertions, or adding sleeps. It must pass its own full workflow before publication.
 
 The `v0.11.55` tag is retained as a failed publication attempt: CI, unsigned packaging, `NotSigned`, checksum and attestation checks completed, but the draft Release API stage failed and no public Release assets were published. Do not move or reuse that tag; the next release uses a separately verified `v0.11.56` commit.
 
@@ -34,9 +36,9 @@ The binaries remain ignored build artifacts. Keep the exact upstream version, do
 1. Update `package.json`, `package-lock.json`, and the `version` in `scripts/release/policy.json` to the same semantic version. Review and explicitly select `windowsSigning: "signed"` or `"unsigned"` in that committed policy for every version bump.
 2. For `signed`, configure the certificate and publisher described below. For `unsigned`, explicitly accept the publisher-identity and migration limitations; missing credentials are never a reason to change modes automatically.
 3. Merge the fully verified release commit, including its policy, into `main`.
-4. Create the matching tag from the merged `main` history, such as `v0.11.60`, and push it.
+4. Create the matching tag from the merged `main` history, such as `v0.11.61`, and push it.
 
-The Release workflow reads the checked-out policy and explicitly selects the matching build and verification path. A missing, invalid, or version-mismatched policy fails closed. The current policy binds `version: "0.11.60"` to `windowsSigning: "unsigned"`; a future version must have its own matching policy version. Neither unavailable secrets nor a failed signature check causes an automatic downgrade to unsigned.
+The Release workflow reads the checked-out policy and explicitly selects the matching build and verification path. A missing, invalid, or version-mismatched policy fails closed. The current policy binds `version: "0.11.61"` to `windowsSigning: "unsigned"`; a future version must have its own matching policy version. Neither unavailable secrets nor a failed signature check causes an automatic downgrade to unsigned.
 
 Validate the checked-out policy before packaging:
 
@@ -48,7 +50,7 @@ This read-only preflight also checks `RELEASE_TAG` when set and requires signing
 
 Both modes retain CI gates and publish the complete five-asset set: installer, block map, `latest.yml`, browser archive, and `SHA256SUMS.txt`. Each asset receives GitHub build provenance. Unsigned does not mean an unverified or partial upload, but those checks do not supply an Authenticode publisher identity.
 
-### Unsigned path for 0.11.60
+### Unsigned path for 0.11.61
 
 Use `npm run desktop:package:unsigned` for explicitly unsigned packaging. This path disables executable signing with `signExecutable: false`, while preserving the application icon and version resources. It does not disable resource editing as a shortcut to avoiding signing.
 
