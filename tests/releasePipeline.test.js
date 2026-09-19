@@ -84,6 +84,17 @@ test('Web release staging refuses a build without dist/index.html', (t) => {
   )
 })
 
+test('Windows startup diagnostics are opt-in and cannot publish or replace release gates', () => {
+  const diagnostics = read('.github/workflows/windows-process-guard.yml')
+  assert.match(diagnostics, /^on:\s*\r?\n\s+workflow_dispatch:/m)
+  assert.doesNotMatch(diagnostics, /^\s+(?:push|pull_request|schedule|workflow_run|workflow_call):/m)
+  assert.match(diagnostics, /permissions:\s*\r?\n\s+contents: read/)
+  assert.match(diagnostics, /persist-credentials: false/)
+  assert.doesNotMatch(diagnostics, /(?:contents|id-token|attestations): write/)
+  assert.doesNotMatch(diagnostics, /publish-github-release|desktop:publish|git push/)
+  assert.match(read('.github/workflows/release.yml'), /needs:\s*ci/)
+})
+
 test('Release workflow is gated by reusable CI and never overwrites a published release', () => {
   const ci = read('.github/workflows/ci.yml')
   const release = read('.github/workflows/release.yml')

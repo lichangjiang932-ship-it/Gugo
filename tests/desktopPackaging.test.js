@@ -178,6 +178,10 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
     'server/services/pptxArtifactValidation.js',
     'server/utils/windowsProcessGateChild.js',
     'server/utils/windowsProcessGateRuntime.js',
+    'server/utils/windowsTreeKillRuntime.js',
+    'server/utils/windowsTreeKillWorkerSource.js',
+    'server/utils/windowsTreeKillNativeSource.js',
+    'server/utils/windowsTreeKillStartup.js',
     'server/utils/desktopFileProtocol.js',
     'shared/desktopFileReference.js',
     'shared/runtimeConfigRecoveryProtocol.js',
@@ -190,14 +194,14 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
   ])
 })
 
-test('desktop packaging covers the transitive artifact parsers and minimal skill localization runtime', () => {
+test('desktop packaging covers transitive artifact parsers, process isolation and minimal skill localization runtime', () => {
   const root = fileURLToPath(new URL('../', import.meta.url))
   const config = read('electron-builder.yml')
   const fileSection = config.match(/^files:\s*\r?\n((?:[ \t]+[^\r\n]*(?:\r?\n|$))*)/m)?.[1] || ''
   const patterns = [...fileSection.matchAll(/^\s*-\s+(\S+)\s*$/gm)].map((match) => match[1])
   const matches = (file, pattern) => file === pattern
     || (pattern.endsWith('/**/*') && file.startsWith(pattern.slice(0, -4)))
-  for (const entry of ['server/services/loop/heuristics/artifactPublishing.js', 'server/services/skillRegistry.js']) {
+  for (const entry of ['server/services/loop/heuristics/artifactPublishing.js', 'server/services/skillRegistry.js', 'server/utils/windowsTreeKillRuntime.js']) {
     const graph = collectStaticModuleGraph(path.join(root, entry))
     assert.deepEqual(graph.unresolvedLocalModules, [])
     for (const file of graph.files) {
@@ -215,7 +219,7 @@ test('desktop packaging covers the transitive artifact parsers and minimal skill
   }
 })
 
-test('desktop ASAR verification catches each missing bridge, skill copy or PPT compatibility module', async (t) => {
+test('desktop ASAR verification catches each missing bridge, process guard, skill copy or PPT compatibility module', async (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-asar-runtime-'))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
   const fixture = path.join(rootDir, 'app')
@@ -235,6 +239,10 @@ test('desktop ASAR verification catches each missing bridge, skill copy or PPT c
     'shared/desktopFileReference.js',
     'src/i18n/domains/skillsMarket.js',
     'server/services/pptxMarkdownCompatibility.js',
+    'server/utils/windowsTreeKillRuntime.js',
+    'server/utils/windowsTreeKillWorkerSource.js',
+    'server/utils/windowsTreeKillNativeSource.js',
+    'server/utils/windowsTreeKillStartup.js',
   ]
   for (const [index, file] of missingCandidates.entries()) {
     const target = path.join(fixture, file)

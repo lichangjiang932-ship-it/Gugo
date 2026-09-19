@@ -34,7 +34,8 @@ The `Windows process guard diagnostics` workflow provides a short hosted
 Windows/Node 22 check of these probes and the existing isolation, cancellation
 and CLI artifact regressions. It has read-only repository permissions. It is
 not a replacement for any required Release CI gate or installer validation.
-Relevant branch pushes and an explicit manual dispatch can run it; checkout
+It now runs only on explicit manual dispatch; the temporary branch-push trigger
+used during diagnosis has been removed to avoid duplicate hosted work. Checkout
 does not persist GitHub credentials. It neither tags nor publishes anything.
 
 ## Pin native compilation to the system dependency
@@ -95,3 +96,36 @@ autoload and compilation work); they do not distinguish its internal stages.
 The explicit-system-dependency implementation requires its own hosted result
 before it can be described as resolving this performance failure. The log is
 `windows-worker-baseline-cloud.log`; a later success must not erase it.
+
+Candidate `001be6a` subsequently passed hosted run `35435640465`, job
+`105877694650`, with unchanged startup/caller deadlines. READY was observed at
+3027ms, 234ms and 226ms, and cleanup was confirmed for all three workers.
+Explicit Utility import took 290/28/28ms; native compilation took 572/64/62ms.
+The same job completed 70 process-isolation and real CLI artifact regressions:
+68 passed, 2 platform-specific skips, 0 failures. This verifies that the pinned
+dependency path eliminates the reproduced slow unqualified lookup on that
+hosted run; it is not a promise that every future machine starts within a fixed
+latency. The baseline failure remains in the record.
+
+On the user's subsequent instruction, no further incremental version bump,
+push, tag or hosted build is allowed during repair. Final code, CLI/Web checks
+and packaging validation are to be completed locally first. Version naming and
+one consolidated delivery are to be confirmed after acceptance; existing tags
+are not rewritten. The current package version is not a new published Release.
+
+Final local acceptance completed after that instruction: 1029 files / 9074
+tests, with 9065 passed, 9 skipped, 0 failed and 0 cancelled. The desktop ASAR
+verifier now requires all four worker modules and tests each missing-file case.
+A newly built unsigned local package passed backend health and real command
+execution from Electron 43.3.0 / Node 24.18.1, plus pre-cancelled command refusal.
+Its six process-gate/worker source files matched the frozen workspace bytes.
+No further commit, push, tag, version change or remote build was performed;
+publication and final version naming remain separate from this local evidence.
+
+The user subsequently selected the existing 0.11.61 version for the consolidated
+delivery. The remote tag still named the failed `6e99b20dd1bcfe853e7ef58719cea9267fbf2bef`
+commit, and authenticated release discovery found no published or draft Release
+for it. Only that unpublished-release tag is to be aligned with the final
+validated commit using its exact old ref as a lease; branch updates must remain
+fast-forward. Earlier tags and commit history stay unchanged. The required
+Release CI, signing-policy, checksum and provenance gates remain unchanged.

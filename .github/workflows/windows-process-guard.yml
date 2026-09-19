@@ -2,16 +2,6 @@ name: Windows process guard diagnostics
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['**']
-    paths:
-      - '.github/workflows/windows-process-guard.yml'
-      - 'scripts/diagnostics/windows-worker-startup.js'
-      - 'scripts/diagnostics/windows-worker-lifecycle.js'
-      - 'server/utils/windowsTreeKill*.js'
-      - 'server/utils/windowsProcessGate*.js'
-      - 'tests/windowsTreeKill*.test.js'
-      - 'tests/windowsWorkerDiagnosticLifecycle.test.js'
 
 permissions:
   contents: read
