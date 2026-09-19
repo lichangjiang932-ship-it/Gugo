@@ -1,3 +1,5 @@
+import { windowsWorkerStartupMarker } from './windowsTreeKillStartup.js'
+
 export function windowsPowerShellPath() {
   const systemRoot = String(process.env.SystemRoot || process.env.WINDIR || '').trim()
   return systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : 'powershell.exe'
@@ -6,11 +8,14 @@ export function windowsPowerShellPath() {
 export function windowsTreeKillWorkerBootstrapScript() {
   return `
 $ErrorActionPreference = 'Stop'
+${windowsWorkerStartupMarker('bootstrap_entered')}
 $payload = [Console]::In.ReadLine()
 if ([String]::IsNullOrWhiteSpace($payload)) {
   throw 'Windows process-tree worker payload is missing.'
 }
+${windowsWorkerStartupMarker('payload_received')}
 $source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload))
+${windowsWorkerStartupMarker('payload_decoded')}
 & ([ScriptBlock]::Create($source))
 `.trim()
 }
@@ -18,6 +23,7 @@ $source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload))
 export function windowsTreeKillWorkerScript() {
   return `
 $ErrorActionPreference = 'Stop'
+${windowsWorkerStartupMarker('worker_entered')}
 $nativeSource = @'
 using System;
 using System.Collections.Generic;
@@ -549,7 +555,9 @@ public static class GugoProcessTreeNative {
   }
 }
 '@
+${windowsWorkerStartupMarker('add_type_begin')}
 $null = Add-Type -TypeDefinition $nativeSource
+${windowsWorkerStartupMarker('add_type_end')}
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::Out.WriteLine("READY" + [char]9 + "2")
 [Console]::Out.Flush()
