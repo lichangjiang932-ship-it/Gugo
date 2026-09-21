@@ -532,10 +532,12 @@ async function handleTurnResource(req, res, url, parts, runtime, userId) {
     return sendJson(res, 202, { steering })
   }
   if (req.method === 'POST'
-    && (parts[3] === 'cancel' || parts[3] === 'resume')
+    && (parts[3] === 'cancel' || parts[3] === 'resume' || parts[3] === 'pause')
     && parts.length === 4) {
     const body = await readJson(req)
-    const action = parts[3] === 'cancel' ? 'cancelTurn' : 'resumeTurn'
+    const action = parts[3] === 'cancel'
+      ? 'cancelTurn'
+      : parts[3] === 'pause' ? 'pauseTurn' : 'resumeTurn'
     const directoryPausedSequence = parts[3] === 'cancel' && Object.hasOwn(body, 'directoryPausedSequence')
       ? validateDirectoryPausedSequence(body.directoryPausedSequence)
       : undefined
@@ -549,7 +551,7 @@ async function handleTurnResource(req, res, url, parts, runtime, userId) {
       ...(parts[3] === 'resume' ? { retryFailed: body.retryFailed === true } : {}),
       authMode: resolveAuthMode(runtime.env),
     })
-    return sendJson(res, parts[3] === 'resume' ? 202 : 200, { turn })
+    return sendJson(res, parts[3] === 'resume' || parts[3] === 'pause' ? 202 : 200, { turn })
   }
   return null
 }

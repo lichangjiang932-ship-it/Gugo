@@ -30,6 +30,7 @@ test('composer primary action sends steering text while keeping stop independent
     'chatComposer.attachment': 'Attach',
     'chatComposer.send': 'Send',
     'chatComposer.stop': 'Stop',
+    'chatComposer.pause': 'Pause',
     'chat.modelPicker.unconfiguredSendBlocked': 'Configure a model first',
   })[key] || key
   const renderActions = ({
@@ -79,21 +80,26 @@ test('composer primary action sends steering text while keeping stop independent
     assert.equal(stops, 0)
 
     await act(async () => root.render(renderActions({ isGenerating: true, sendDisabled: true })))
-    const stopButton = rootElement.querySelector('[data-testid="composer-primary-action"]')
-    assert.equal(stopButton, sendButton)
-    assert.equal(stopButton.disabled, false)
-    assert.equal(stopButton.getAttribute('aria-label'), 'Stop')
-    assert.equal(stopButton.getAttribute('title'), 'Stop')
-    assert.ok(stopButton.querySelector('.lucide-square'))
-    await act(async () => stopButton.click())
+    const pauseButton = rootElement.querySelector('[data-testid="composer-primary-action"]')
+    assert.equal(pauseButton, sendButton)
+    assert.equal(pauseButton.disabled, false)
+    // Product change: an empty draft during a running turn offers *pause*, not
+    // stop. Same control, same onAbort path, renamed affordance.
+    assert.equal(pauseButton.getAttribute('aria-label'), 'Pause')
+    assert.equal(pauseButton.getAttribute('title'), 'Pause')
+    assert.ok(pauseButton.querySelector('.lucide-pause'))
+    await act(async () => pauseButton.click())
     assert.equal(sends, 1)
     assert.equal(stops, 1)
     assert.equal(rootElement.querySelector('[data-testid="composer-stop-action"]'), null)
 
+    // Steering by text keeps the send path. `sendDisabled` is intentionally not
+    // set here: when the composer reports send unavailable (e.g. an attachment
+    // is still uploading) the send button must be disabled — that rule is
+    // covered by ChatComposerFocus, and would make this click a no-op.
     await act(async () => root.render(renderActions({
       hasDraftText: true,
       isGenerating: true,
-      sendDisabled: true,
     })))
     const steerButton = rootElement.querySelector('[data-testid="composer-primary-action"]')
     const independentStopButton = rootElement.querySelector('[data-testid="composer-stop-action"]')

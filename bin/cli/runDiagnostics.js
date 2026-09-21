@@ -274,7 +274,7 @@ function completionPolicyIssues(...sources) {
   })
 }
 
-export function terminalDiagnostic(event) {
+export function terminalDiagnostic(event, { interactive = true } = {}) {
   const descriptor = terminalDescriptor(event)
   if (!descriptor) return null
   const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {}
@@ -282,6 +282,11 @@ export function terminalDiagnostic(event) {
   // `payload.error` is the canonical failure object. Top-level fields only
   // remain for replay compatibility and may contain an older generic value.
   const code = stableCode(nested.code || payload.code, descriptor.fallbackCode)
+  // A run without a terminal cannot ask anyone to approve, so the runtime denies
+  // every approval-requiring tool. Reporting the shared `approval_denied` advice
+  // here would tell a script to retry a decision it can never influence.
+  const noApprovalChannel = interactive === false
+    && code.toUpperCase() === 'APPROVAL_DENIED'
   const clarification = payload.clarification
   const clarificationMessage = typeof clarification === 'string'
     ? clarification
@@ -345,7 +350,10 @@ export function terminalDiagnostic(event) {
   if (retainedFiles.length > 0) details.push(`Saved files awaiting verification: ${retainedFiles.join(', ')}`)
   if (verificationIssues.length > 0) details.push(`Verification: ${verificationIssues.join('; ')}`)
   if (policyIssues.length > 0) details.push(`Completion policies: ${policyIssues.join(', ')}`)
-  if (nextAction) details.push(`Next: ${nextAction}`)
+  if (noApprovalChannel) {
+    details.push('Approval channel: no interactive terminal was available, so every approval-requiring tool was denied.')
+    details.push('Next: rerun in a terminal to approve, or use --mode acceptEdits or --mode bypass for unattended runs.')
+  } else if (nextAction) details.push(`Next: ${nextAction}`)
   else if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
   else if (manualRetryable) details.push('Next: verify the recorded outcome, then retry explicitly.')
   else if (missingRequirements.length > 0) details.push('Next: satisfy the missing requirements and run again.')
@@ -513,6 +521,12 @@ export function formatRunError(error, { format = 'jsonl' } = {}) {
       || recovery.nextAction || error?.action || serverFailure.action
       || recoveryFailure.action || recovery.action,
   )
+  // A locked database is contention with another runtime, not a broken turn:
+  // retrying from the checkpoint fails identically until that runtime stops.
+  const databaseInUse = code.toUpperCase() === 'TURN_EVENT_PERSISTENCE_FAILED'
+    && /SQLITE_BUSY|database (?:is )?locked|database table is locked/iu.test(
+      `${message} ${causeMessage}`,
+    )
   const details = [`Error [${code}]: ${message}`]
   if (causeMessage) details.push(`Detail: ${causeMessage}`)
   const explicitReason = incompleteReason || reason
@@ -523,7 +537,10 @@ export function formatRunError(error, { format = 'jsonl' } = {}) {
   if (retainedFiles.length > 0) details.push(`Saved files awaiting verification: ${retainedFiles.join(', ')}`)
   if (verificationIssues.length > 0) details.push(`Verification: ${verificationIssues.join('; ')}`)
   if (policyIssues.length > 0) details.push(`Completion policies: ${policyIssues.join(', ')}`)
-  if (nextAction) details.push(`Next: ${nextAction}`)
+  if (databaseInUse) {
+    details.push('Database: another Gugo runtime (the web service or desktop app) is using this runtime directory.')
+    details.push('Next: stop that runtime and retry, point --runtime-dir at an isolated directory, or use the running service over HTTP.')
+  } else if (nextAction) details.push(`Next: ${nextAction}`)
   else if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
   else if (manualRetryable) details.push('Next: verify the recorded outcome, then retry explicitly.')
   else if (missingRequirements.length > 0) details.push('Next: satisfy the missing requirements and run again.')

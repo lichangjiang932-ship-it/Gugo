@@ -79,8 +79,6 @@ export const VERIFICATION_TOOLS = new Set([
   'pdf_text',
   'archive_list',
 ])
-export const SHELL_VERIFICATION_COMMAND = /(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b|(?:^|\s)(?:pytest|vitest|jest|eslint|tsc|cargo\s+(?:test|check)|go\s+test|dotnet\s+test)\b|(?:^|\s)git\s+(?:status|diff)\b/i
-export const SHELL_PROJECT_CHECK_COMMAND = /(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b|(?:^|\s)(?:pytest|vitest|jest|eslint|tsc|cargo\s+(?:test|check)|go\s+test|dotnet\s+test)\b/i
 export const POWERSHELL_READ_ONLY_COMMAND = /\b(?:Get-Content|Get-FileHash|Get-ChildItem|Get-Item|Test-Path|Select-String|Measure-Object|Compare-Object)\b/i
 export const POWERSHELL_MUTATION_COMMAND = /\b(?:Set-Content|Add-Content|Clear-Content|Out-File|New-Item|Remove-Item|Copy-Item|Move-Item|Rename-Item|Set-Item|Set-ItemProperty|New-ItemProperty|Remove-ItemProperty|Set-Acl|Start-Process|Invoke-Expression)\b|(?:^|[^>])>{1,2}(?!=)/i
 export const PYTHON_INLINE_READ_EVIDENCE = /(?:\b(?:fitz|pymupdf)\.open\s*\(|\bImage\.open\s*\(|\bopen\s*\(|\bos\.path\.(?:exists|isfile|getsize)\s*\(|\bPath\s*\([^)]*\)\.(?:exists|is_file|stat|read_text|read_bytes)\s*\(|\.read\s*\(|\.verify\s*\()/i

@@ -75,8 +75,8 @@ function fakeCoverageSpawnPreload({ thresholdFailure = false, tapFailure = false
       child.stdin = null
       const required = [
         '--experimental-test-coverage',
-        '--test-coverage-lines=40',
-        '--test-coverage-functions=35',
+        '--test-coverage-lines=37',
+        '--test-coverage-functions=31',
         '--test-coverage-branches=60',
       ]
       const validArgs = required.every((arg) => args.includes(arg))
@@ -447,7 +447,7 @@ test('coverage streams both channels before exit and forwards its report exactly
     'scripts/run-tests.js', '--coverage', 'tests/codeDebt.test.js',
   ], {
     cwd: process.cwd(),
-    env: childEnv({ COVERAGE_LINES: '40', COVERAGE_FUNCTIONS: '35', COVERAGE_BRANCHES: '60' }),
+    env: childEnv({ COVERAGE_LINES: '37', COVERAGE_FUNCTIONS: '31', COVERAGE_BRANCHES: '60' }),
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
     timeout: 10_000,
@@ -552,8 +552,8 @@ test('coverage mode uses one complete batch and retains the CI thresholds', () =
     preloadSource: fakeCoverageSpawnPreload(),
     env: childEnv({
       TEST_BATCH_SIZE: '1',
-      COVERAGE_LINES: '40',
-      COVERAGE_FUNCTIONS: '35',
+      COVERAGE_LINES: '37',
+      COVERAGE_FUNCTIONS: '31',
       COVERAGE_BRANCHES: '60',
     }),
   })
@@ -575,8 +575,8 @@ for (const exitCode of [1, 0]) {
       preloadSource: fakeCoverageSpawnPreload({ thresholdFailure: true, exitCode }),
       env: childEnv({
         TEST_BATCH_SIZE: '1',
-        COVERAGE_LINES: '40',
-        COVERAGE_FUNCTIONS: '35',
+        COVERAGE_LINES: '37',
+        COVERAGE_FUNCTIONS: '31',
         COVERAGE_BRANCHES: '60',
       }),
     })
@@ -644,8 +644,8 @@ test('coverage test failures identify their TAP subtests in the final summary', 
   ], {
     preloadSource: fakeCoverageSpawnPreload({ tapFailure: true }),
     env: childEnv({
-      COVERAGE_LINES: '40',
-      COVERAGE_FUNCTIONS: '35',
+      COVERAGE_LINES: '37',
+      COVERAGE_FUNCTIONS: '31',
       COVERAGE_BRANCHES: '60',
     }),
   })

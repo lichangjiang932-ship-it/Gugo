@@ -80,6 +80,7 @@
     "ajv": "8.17.1",
     "ajv-formats": "3.0.1",
     "better-sqlite3": "^12.10.0",
+    "docx-preview": "0.4.0",
     "electron-updater": "^6.8.9",
     "fontkit": "^2.0.4",
     "framer-motion": "^12.38.0",

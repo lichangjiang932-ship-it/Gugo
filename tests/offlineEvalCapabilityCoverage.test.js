@@ -9,6 +9,15 @@ const GLOBAL_MINIMUM_TASK_SCENARIOS = 3
 // assertion below makes a newly discovered suite fail until its task-level
 // coverage contract is reviewed and registered here.
 const OFFLINE_EVAL_SUITE_CONTRACTS = Object.freeze({
+  'approval-gated-execution': {
+    minimumCases: 3,
+    requiredCategories: ['denied-mutation', 'parameter-edited-approval', 'denied-verification'],
+    coverageSignals: [
+      ['APPROVAL-01', 'denied-mutation'],
+      ['APPROVAL-02', 'parameter-edited-approval'],
+      ['APPROVAL-03', 'denied-verification'],
+    ],
+  },
   capability: {
     minimumCases: 15,
     requiredCategories: [

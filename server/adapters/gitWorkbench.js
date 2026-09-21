@@ -29,7 +29,7 @@ function workspaceRoot(env = getRuntimeEnv()) {
   return path.resolve(env.WORKSPACE_ROOT?.trim() || process.cwd())
 }
 
-function getRoot({
+export function getRoot({
   userId = null,
   cwd: rawCwd = null,
   env = getRuntimeEnv(),
@@ -57,7 +57,7 @@ function getRoot({
   return resolved.fullPath
 }
 
-function requireGitEnabled(env = getRuntimeEnv()) {
+export function requireGitEnabled(env = getRuntimeEnv()) {
   if (env.WORKSPACE_GIT_ENABLED !== '1') {
     throw badReq('WORKSPACE_GIT_ENABLED=1 未启用,无法使用 Git 工作台。在项目根目录的 .env 里加上这一行后重启服务。', 403)
   }
@@ -72,6 +72,7 @@ function requireMutationEnabled(env = getRuntimeEnv()) {
 
 // ★ P0:统一从 sanitizeChildEnv 取,自动覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD
 // 老实现只屏蔽 3 个固定 key,换用户配 ANTHROPIC_API_KEY/GITHUB_TOKEN 就漏了
+import { assertSelectedFilesAreCommittable } from './gitCommitPathGuard.js'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 function commandEnv() {
   return sanitizeChildEnv()
@@ -104,7 +105,7 @@ function runFile(file, args, { cwd = workspaceRoot(), timeout = DEFAULT_TIMEOUT,
   })
 }
 
-async function runGit(args, opts = {}) {
+export async function runGit(args, opts = {}) {
   return runFile('git', args, opts)
 }
 
@@ -130,7 +131,7 @@ export function npmCommandArgs(scriptName, {
   return { file: 'npm', args: ['run', scriptName] }
 }
 
-function normalizeRepoPath(rawPath) {
+export function normalizeRepoPath(rawPath) {
   if (rawPath == null || rawPath === '') return ''
   if (typeof rawPath !== 'string') throw badReq('path must be a string')
   const p = rawPath.replace(/\\/g, '/').trim()
@@ -199,7 +200,7 @@ async function validateBranchName(rawBranch, cwd) {
   return branch
 }
 
-function clip(text, max = MAX_OUTPUT) {
+export function clip(text, max = MAX_OUTPUT) {
   const value = String(text || '')
   return value.length > max ? value.slice(0, max) + '\n...[truncated]' : value
 }
@@ -288,6 +289,7 @@ export async function gitCommitTool(
   if (msg.length < 3 || msg.length > 200) throw badReq('commit message must be 3-200 characters')
   const statusFiles = await currentStatusFiles(root)
   const selected = validateSelectedFiles(files, statusFiles)
+  assertSelectedFilesAreCommittable(selected)
   await runGit(['add', '-A', '--', ...selected], { cwd: root })
   const hasStaged = await runGit(['diff', '--cached', '--quiet', '--', ...selected], { cwd: root, rejectOnError: false })
   if (hasStaged.exitCode === 0) throw badReq('selected files have no staged changes')

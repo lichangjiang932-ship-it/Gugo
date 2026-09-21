@@ -9,6 +9,7 @@ export const SETTINGS_TAB_AGENT_PRESETS = 'agent-presets'
 export const SETTINGS_TAB_INTEGRATIONS = 'integrations'
 export const SETTINGS_TAB_DATA = 'data'
 export const SETTINGS_TAB_RECOVERY = 'recovery'
+export const SETTINGS_TAB_USAGE = 'usage'
 export const SETTINGS_TAB_ABOUT = 'about'
 
 // Retained for old bookmarks and internal links created before grouped settings.
@@ -29,6 +30,7 @@ const SETTINGS_SECTIONS = new Set([
   SETTINGS_TAB_INTEGRATIONS,
   SETTINGS_TAB_DATA,
   SETTINGS_TAB_RECOVERY,
+  SETTINGS_TAB_USAGE,
   SETTINGS_TAB_ABOUT,
 ])
 

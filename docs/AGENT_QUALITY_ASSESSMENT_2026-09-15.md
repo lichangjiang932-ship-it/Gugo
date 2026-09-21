@@ -59,8 +59,12 @@
 ### 现状（中上）
 - 短期：当前轮上下文 + 有界历史窗口（80 条）+ 压缩归档。
 - 长期：SQLite `memories` + `memory_links` + 知识图谱（`entities/relations/observations`）。
+  注意这是两个不同的东西：`memories`/`memory_links` 是长期记忆本体，检索会用到；而知识图谱
+  （`server/services/knowledgeGraph.js` + `server/routes/knowledgeGraphRoutes.js`）目前**只由 REST 写入、
+  不参与检索、也不暴露为模型工具**（`toolSchemaCatalog.js` 无图谱工具），即没有被自动构建。
 - 检索：CJK 二元组 + 词项提取 + 打分排序（`scoreMemoryRelevance`）+ SQL 预筛 + 图谱一跳扩展 +
   新鲜度分级 + 矛盾抑制 + token 上限适配（`memoryContextService.js`）。
+  这里的“图谱一跳扩展”指的是 `memory_links` 上的 `traverseMemoryGraph`，**不是**上面的知识图谱。
 - 注入失败降级为空上下文，不阻断模型调用。
 
 ### 已确认不足

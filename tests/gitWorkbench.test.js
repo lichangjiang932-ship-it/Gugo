@@ -480,3 +480,73 @@ test('git_rollback refuses dirty worktrees and non-HEAD commits', async () => {
     assert.equal(fs.readFileSync(path.join(cwd, 'dirty.txt'), 'utf8'), 'keep me\n')
   })
 })
+
+test('git_commit refuses credential filenames the repository never ignored', async () => {
+  // No .gitignore on purpose: these are exactly the files git status lists and
+  // the tool used to commit, which is the gap this guard closes. An ignored
+  // credential never reaches here because status omits it.
+  const cwd = withTempRepo()
+  const headBefore = git(cwd, ['rev-parse', 'HEAD']).trim()
+  fs.writeFileSync(path.join(cwd, '.env'), 'MODEL_API_KEY=sk-live-CANARY\n', 'utf8')
+  fs.writeFileSync(path.join(cwd, '.netrc'), 'machine example.com password canary\n', 'utf8')
+  fs.writeFileSync(path.join(cwd, 'id_rsa'), '-----BEGIN OPENSSH PRIVATE KEY-----\n', 'utf8')
+  fs.writeFileSync(path.join(cwd, 'notes.pem'), 'canary\n', 'utf8')
+  fs.writeFileSync(path.join(cwd, 'server.key'), 'canary\n', 'utf8')
+
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_GIT_MUTATION_ENABLED: '1' }, async () => {
+    for (const file of ['.env', '.netrc', 'id_rsa', 'notes.pem', 'server.key']) {
+      await assert.rejects(
+        () => gitCommitTool({ message: `feat: add ${file}`, files: [file] }),
+        (error) => error?.code === 'GIT_COMMIT_SENSITIVE_FILES' && error.files.includes(file),
+        `expected ${file} to be refused`,
+      )
+    }
+    assert.equal(git(cwd, ['rev-parse', 'HEAD']).trim(), headBefore, 'a refused file must not reach HEAD')
+    fs.writeFileSync(path.join(cwd, 'app.txt'), 'ordinary change\n', 'utf8')
+    // A batch that mixes a credential with an ordinary changed file is refused
+    // whole, so the ordinary file is not committed either.
+    await assert.rejects(
+      () => gitCommitTool({ message: 'feat: mixed batch', files: ['app.txt', '.env'] }),
+      (error) => error?.code === 'GIT_COMMIT_SENSITIVE_FILES' && error.files.includes('.env'),
+    )
+    const ordinary = await gitCommitTool({ message: 'feat: ordinary file', files: ['app.txt'] })
+    assert.equal(ordinary.ok, true, 'an ordinary file still commits after a refusal')
+  })
+})
+
+test('git_commit keeps accepting the documented credential templates', async () => {
+  const cwd = withTempRepo()
+  fs.writeFileSync(path.join(cwd, '.env.example'), 'MODEL_API_KEY=\n', 'utf8')
+  fs.writeFileSync(path.join(cwd, '.env.sample'), 'MODEL_API_KEY=\n', 'utf8')
+  fs.writeFileSync(path.join(cwd, 'deploy.pub'), 'ssh-rsa AAAAB3Nza canary\n', 'utf8')
+
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_GIT_MUTATION_ENABLED: '1' }, async () => {
+    for (const file of ['.env.example', '.env.sample', 'deploy.pub']) {
+      const commit = await gitCommitTool({ message: `docs: add ${file}`, files: [file] })
+      assert.equal(commit.ok, true, `${file} must stay committable`)
+    }
+  })
+})
+
+test('git_commit still refuses an ignored path, and keeps updating tracked ones', async () => {
+  const cwd = withTempRepo()
+  fs.writeFileSync(path.join(cwd, 'legacy.cfg'), 'v1\n', 'utf8')
+  git(cwd, ['add', 'legacy.cfg'])
+  git(cwd, ['commit', '-m', 'feat: legacy config'])
+  fs.writeFileSync(path.join(cwd, '.gitignore'), 'secret.txt\nlegacy.cfg\n', 'utf8')
+  git(cwd, ['add', '.gitignore'])
+  git(cwd, ['commit', '-m', 'chore: ignore rules'])
+  fs.writeFileSync(path.join(cwd, 'secret.txt'), 'canary\n', 'utf8')
+  fs.writeFileSync(path.join(cwd, 'legacy.cfg'), 'v2\n', 'utf8')
+
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_GIT_MUTATION_ENABLED: '1' }, async () => {
+    // An ignored path is not in status, so it is refused before this guard runs.
+    await assert.rejects(
+      () => gitCommitTool({ message: 'feat: add secret', files: ['secret.txt'] }),
+      /selected file is not changed/,
+    )
+    // A rule added after a file was tracked must not freeze it out of commits.
+    const tracked = await gitCommitTool({ message: 'feat: bump legacy config', files: ['legacy.cfg'] })
+    assert.equal(tracked.ok, true)
+  })
+})

@@ -204,6 +204,8 @@ const FULL_TOOL_SPECS = [
   getBuiltinSpec('run_project_check'),
   getBuiltinSpec('git_status'),
   getBuiltinSpec('git_diff'),
+  getBuiltinSpec('git_log'),
+  getBuiltinSpec('git_blame'),
   // ★ M2: Codex 风格多文件原子 patch
   ...APPLY_PATCH_TOOL_SPECS,
   getBuiltinSpec('Agent'),

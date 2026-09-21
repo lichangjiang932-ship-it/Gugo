@@ -18,6 +18,7 @@ import approvals from './approvals.js'
 import toolApproval from './toolApproval.js'
 import access from './access.js'
 import chatMessages from './chatMessages.js'
+import agentReport from './agentReport.js'
 import toolActivity from './toolActivity.js'
 import history from './history.js'
 import hooks from './hooks.js'
@@ -58,6 +59,7 @@ import chat from './chat.js'
 import foundation from './foundation.js'
 import settingsTools from './settingsTools.js'
 import reasonix from './reasonix.js'
+import usage from './usage.js'
 
 const domains = [
   ['webSearch', webSearch],
@@ -80,6 +82,7 @@ const domains = [
   ['toolApproval', toolApproval],
   ['access', access],
   ['chatMessages', chatMessages],
+  ['agentReport', agentReport],
   ['toolActivity', toolActivity],
   ['history', history],
   ['hooks', hooks],
@@ -120,6 +123,7 @@ const domains = [
   ['foundation', foundation],
   ['settingsTools', settingsTools],
   ['reasonix', reasonix],
+  ['usage', usage],
 ]
 
 export const translations = { zh: {}, en: {} }

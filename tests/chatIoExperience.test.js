@@ -117,12 +117,22 @@ test('composer sends steering drafts while preserving an independent stop action
   assert.match(composerActionsSource, /<ModelPicker/)
   assert.match(composerActionsSource, /data-testid="context-ring"/)
   assert.match(composerSource, /hasDraftText=\{Boolean\(String\(input \|\| ''\)\.trim\(\)\)\}/)
-  assert.match(composerActionsSource, /const primaryActionStopsTurn = isGenerating && !hasDraftText/)
+  assert.match(composerSource, /hasAttachments=\{Array\.isArray\(attachments\) && attachments\.length > 0\}/)
+  // An empty draft during a running turn offers *pause*; any draft — typed text
+  // or an attachment — keeps send, so a stray tap cannot freeze a turn the user
+  // was still composing for.
+  assert.match(composerActionsSource, /const hasDraftContent = hasDraftText \|\| hasAttachments/)
+  assert.match(composerActionsSource, /const primaryActionPausesTurn = isGenerating && !hasDraftContent/)
   assert.match(composerActionsSource, /data-testid="composer-stop-action"[\s\S]*?onClick=\{onAbort\}/)
-  assert.match(composerActionsSource, /onClick=\{primaryActionStopsTurn \? onAbort : onSend\}/)
-  assert.match(composerActionsSource, /disabled=\{!isGenerating && sendDisabled\}/)
-  assert.match(composerActionsSource, /\{primaryActionStopsTurn[\s\S]*?<Square[\s\S]*?<Send/)
-  assert.doesNotMatch(composerActionsSource, /chatComposer\.steer|<Pause/)
+  assert.match(composerActionsSource, /onClick=\{primaryActionPausesTurn \? requestPause : onSend\}/)
+  // Pause is its own action: the primary pauses, while the independent control
+  // still cancels. Without a pause handler the primary degrades to onAbort
+  // instead of becoming a dead button.
+  assert.match(composerActionsSource, /const requestPause = typeof onPause === 'function' \? onPause : onAbort/)
+  assert.match(composerActionsSource, /disabled=\{primaryActionPausesTurn \? false : sendDisabled\}/)
+  assert.match(composerActionsSource, /\{primaryActionPausesTurn[\s\S]*?<Pause[\s\S]*?<Send/)
+  assert.match(composerActionsSource, /chatComposer\.pause/)
+  assert.doesNotMatch(composerActionsSource, /chatComposer\.steer/)
   assert.doesNotMatch(composerSource, />Enter<\/span>/)
 })
 

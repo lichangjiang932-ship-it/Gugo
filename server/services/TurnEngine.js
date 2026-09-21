@@ -451,6 +451,11 @@ export class TurnEngine {
     })
   }
 
+  /** Stop the running turn so the user can continue the same task later. */
+  async pauseTurn({ userId, sessionId, turnId, authMode = null }) {
+    return this.cancellationRuntime.pause({ userId, sessionId, turnId, authMode })
+  }
+
   waitForTurn({ userId, sessionId, turnId }) {
     return this.active.get(activeKey(userId, sessionId, turnId))?.promise || Promise.resolve()
   }

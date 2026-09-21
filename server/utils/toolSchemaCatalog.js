@@ -8,6 +8,7 @@ import { PDF_TOOL_SPECS } from '../adapters/pdfTools.js'
 import { BATCH_FILE_TOOL_SPECS } from '../adapters/batchFileTools.js'
 import { FS_SHELL_TOOL_SPECS } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS } from '../adapters/gitWorkbench.js'
+import { GIT_HISTORY_TOOL_SPECS } from '../adapters/gitHistoryTools.js'
 import { CODING_AGENT_TOOL_SPECS } from '../adapters/codingAgentTools.js'
 import { CODE_SEARCH_TOOL_SPECS } from './codeSearch.js'
 import { LSP_TOOL_SPECS } from './lspTool.js'
@@ -533,6 +534,7 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
   ...specsByName(BATCH_FILE_TOOL_SPECS),
   ...specsByName(FS_SHELL_TOOL_SPECS),
   ...specsByName(GIT_TOOL_SPECS),
+  ...specsByName(GIT_HISTORY_TOOL_SPECS),
   ...specsByName(CODING_AGENT_TOOL_SPECS),
   ...specsByName(CODE_SEARCH_TOOL_SPECS),
   ...specsByName(LSP_TOOL_SPECS),

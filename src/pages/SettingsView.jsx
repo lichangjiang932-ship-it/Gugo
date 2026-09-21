@@ -8,6 +8,7 @@ import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPa
 import SettingsModelsPanel from '../components/settings/SettingsModelsPanel.jsx'
 import SettingsNetworkPolicyPanel from '../components/settings/SettingsNetworkPolicyPanel.jsx'
 import SettingsSideEffectRecoveryPanel from '../components/settings/SettingsSideEffectRecoveryPanel.jsx'
+import SettingsUsagePanel from '../components/settings/SettingsUsagePanel.jsx'
 import {
   SettingsAgentPresetsPanel,
   SettingsAppearancePanel,
@@ -34,6 +35,7 @@ import {
   SETTINGS_TAB_PERMISSIONS,
   SETTINGS_TAB_PLUGINS,
   SETTINGS_TAB_RECOVERY,
+  SETTINGS_TAB_USAGE,
   SETTINGS_TAB_WEB_SEARCH,
 } from '../lib/settingsNavigation.js'
 import useSettingsNavigation from '../lib/useSettingsNavigation.js'
@@ -227,6 +229,8 @@ export default function SettingsView() {
         return <SettingsIntegrationsPanel navigate={navigate} t={t} />
       case SETTINGS_TAB_DATA:
         return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
+      case SETTINGS_TAB_USAGE:
+        return <SettingsUsagePanel t={t} />
       case SETTINGS_TAB_RECOVERY:
         return <SettingsSideEffectRecoveryPanel
           lang={lang}

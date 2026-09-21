@@ -59,8 +59,23 @@ export async function fetchConnectorJson(url, init = {}, {
   }, Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS))
   let dispatcher = null
   try {
-    if (fetchImpl === globalThis.fetch) {
-      const target = await assertSafeOutboundUrl(String(url))
+    // The URL is validated for every implementation. An injected fetch is free
+    // to ignore undici's `dispatcher`, so DNS resolution and IP pinning are
+    // limited to the global fetch, but protocol, credential, metadata-host and
+    // literal address checks must never be skipped: before this they were, which
+    // let a wrapper reach cloud metadata or loopback.
+    const usesGlobalFetch = fetchImpl === globalThis.fetch
+    const target = await assertSafeOutboundUrl(String(url), { resolveDns: usesGlobalFetch })
+    // The guard may await DNS, so an upstream abort can arrive first. Starting
+    // the request anyway would run a call the caller already cancelled.
+    if (upstream?.aborted) {
+      throw new ConnectorHttpError('Connector request was cancelled.', {
+        code: 'connector_request_aborted',
+        statusCode: 499,
+        retryable: false,
+      })
+    }
+    if (usesGlobalFetch) {
       dispatcher = new Agent({ connect: { lookup: pinnedLookup(target.lockedIp) } })
     }
     const response = await fetchImpl(url, {

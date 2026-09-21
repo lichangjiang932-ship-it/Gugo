@@ -1,5 +1,6 @@
 import {
   Files,
+  GitBranch,
   Globe2,
   MessageSquare,
   RotateCcw,
@@ -8,7 +9,7 @@ import {
 } from 'lucide-react'
 import { clampWidth, MIN_WIDTH } from './rightWorkbenchLayout.js'
 
-const TABS = { files: Files, chat: MessageSquare, browser: Globe2, terminal: TerminalSquare }
+const TABS = { files: Files, chat: MessageSquare, browser: Globe2, terminal: TerminalSquare, git: GitBranch }
 
 export default function RightWorkbenchFrame({
   activeTab,

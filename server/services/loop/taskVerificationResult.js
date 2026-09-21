@@ -59,8 +59,12 @@ export function isDeterministicVerificationSuccess(result) {
   }
   if (Object.hasOwn(result || {}, 'passed')) return result.passed === true
   if (result?.verificationVerdict) return result.verificationVerdict === 'passed'
-  if (result?.exitCode == null) return true
-  return Number(result.exitCode) === 0
+  // An unprojected result without an exit code proves nothing. Callers are
+  // expected to project a verdict first (projectVerificationFields); this stays
+  // fail-closed so a raw tool result can never be credited as a pass.
+  if (result?.exitCode == null) return false
+  const exitCode = Number(result.exitCode)
+  return Number.isInteger(exitCode) && exitCode === 0
 }
 
 export function compactVerificationDiagnostic(

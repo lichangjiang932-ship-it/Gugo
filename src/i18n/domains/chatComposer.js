@@ -10,6 +10,7 @@ const translations = {
     "attachment": "附件",
     "context": "上下文 · {count}",
     "stop": "停止",
+    "pause": "暂停",
     "send": "发送",
     "steer": "追加指令"
   },
@@ -24,6 +25,7 @@ const translations = {
     "attachment": "Attach",
     "context": "Context · {count}",
     "stop": "Stop",
+    "pause": "Pause",
     "send": "Send",
     "steer": "Add instruction"
   }

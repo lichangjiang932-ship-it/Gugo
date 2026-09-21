@@ -36,6 +36,7 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
     'AGENT_PRESETS',
     'INTEGRATIONS',
     'DATA',
+    'USAGE',
     'RECOVERY',
     'ABOUT',
   ]
@@ -53,6 +54,7 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
     AGENT_PRESETS: /case SETTINGS_TAB_AGENT_PRESETS:\s*return <SettingsAgentPresetsPanel/,
     INTEGRATIONS: /case SETTINGS_TAB_INTEGRATIONS:\s*return <SettingsIntegrationsPanel/,
     DATA: /case SETTINGS_TAB_DATA:\s*return <SettingsDataExport/,
+    USAGE: /case SETTINGS_TAB_USAGE:\s*return <SettingsUsagePanel/,
     RECOVERY: /case SETTINGS_TAB_RECOVERY:\s*return <SettingsSideEffectRecoveryPanel/,
     ABOUT: /case SETTINGS_TAB_ABOUT:\s*default:\s*return renderAbout\(\)/,
   }

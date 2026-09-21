@@ -8,6 +8,7 @@ process.env.GUGO_LOAD_DOTENV = '0'
 const initialCwd = process.cwd()
 process.chdir(process.env.APP_DATA_DIR)
 const { runHeadlessTurn } = await import('../server/services/headlessTurnRuntime.js')
+const { NO_APPROVAL_CHANNEL_DECIDED_BY } = await import('../server/services/headlessApprovalChannel.js')
 test.after(() => process.chdir(initialCwd))
 
 const scope = { userId: 'inline-user', sessionId: 'inline-session', turnId: 'inline-turn' }
@@ -207,4 +208,45 @@ test('verified unknown outcome uses a separate exact recovery port and resumes t
     assert.equal(runtime.resumes[0].retryRecovery, true)
     assert.equal(runtime.resumes[0].turnId, scope.turnId)
   }
+})
+
+// An automatic deny is not a user decision. `decided_by` is audit data, so the
+// two cases must stay distinguishable instead of both reading as "the user
+// refused" — a script that trusts the ledger would retry a decision it cannot
+// influence.
+const approvalPayload = { approvalId: 'inline-approval-1', toolName: 'write_file', args: {} }
+
+async function runWithApproval(input) {
+  const runtime = fakeRuntime({ type: 'approval.required', payload: approvalPayload })
+  const decisions = []
+  runtime.dependencies.decideApproval = async (value) => { decisions.push(value); return { ok: true } }
+  runtime.dependencies.releaseApproval = async () => {}
+  try {
+    await runHeadlessTurn({ prompt: 'write a file', workspaceCwd: process.env.APP_DATA_DIR, ...input }, runtime.dependencies)
+  } catch {
+    // The fixture never emits a terminal event; the decision is what matters.
+  }
+  // `queueApproval` resolves on a later microtask than the turn itself.
+  for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setTimeout(resolve, 1))
+  return decisions
+}
+
+test('a non-interactive approval deny is attributed to the runtime, not the user', async () => {
+  const decisions = await runWithApproval({ interactive: false })
+  assert.equal(decisions.length, 1, 'the approval was decided')
+  assert.equal(decisions[0].decision, 'deny')
+  assert.equal(decisions[0].decidedBy, NO_APPROVAL_CHANNEL_DECIDED_BY)
+  assert.notEqual(decisions[0].decidedBy, scope.userId)
+})
+
+test('an approval answered in the terminal stays attributed to the user', async () => {
+  let prompted = 0
+  const decisions = await runWithApproval({
+    interactive: true,
+    onApproval: async () => { prompted += 1; return { decision: 'deny' } },
+  })
+  assert.equal(prompted, 1, 'an interactive run must actually ask')
+  assert.equal(decisions.length, 1)
+  assert.equal(decisions[0].decision, 'deny')
+  assert.equal(decisions[0].decidedBy, scope.userId)
 })

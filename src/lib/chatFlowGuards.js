@@ -1,5 +1,10 @@
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 import { modelProviderStopDiagnostic } from '../../shared/modelProviderStopDiagnostic.js'
+import {
+  PERMANENT_FAILED_RETRY_REJECTION_CODES,
+  TURN_ENGINE_SHUTDOWN_FAILURE_CODES,
+  TURN_HOST_PRE_EXECUTION_FAILURE_CODES,
+} from '../../shared/turnFailureCodes.js'
 
 const SKILL_ARTIFACT_TYPES = {
   ppt: 'pptx',
@@ -33,32 +38,6 @@ const MODEL_SETUP_FAILURE_CODES = new Set([
   'MODEL_FIRST_TOKEN_TIMEOUT',
   'MODEL_TIMEOUT',
   'MODEL_UPSTREAM_ERROR',
-])
-
-const TURN_HOST_PRE_EXECUTION_FAILURE_CODES = new Set([
-  'RUNTIME_NOT_READY',
-  'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
-  'COMPACTION_ARCHIVE_PORT_NOT_CONFIGURED',
-  'TURN_PERSISTENCE_ENGINE_ALREADY_ACTIVE',
-  'TURN_ENGINE_SHUTTING_DOWN',
-  'TURN_ENGINE_HOST_PENDING_INITIALIZATION_CLEANUP_FAILED',
-  'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
-  'TURN_ENGINE_HOST_CLEANUP_FAILED',
-])
-
-const RUNTIME_INTERRUPTION_FAILURE_CODES = new Set([
-  'TURN_ENGINE_SHUTDOWN',
-])
-
-const PERMANENT_FAILED_RETRY_REJECTION_CODES = new Set([
-  'TURN_FAILED_RETRY_NOT_ALLOWED',
-  'TURN_FAILED_RETRY_LIMIT_REACHED',
-  'TURN_FAILED_RETRY_UNSUPPORTED',
-  'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
-  'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
-  'TURN_FAILED_RETRY_EVENT_INVALID',
-  'TURN_FAILED_RETRY_ATTEMPT_INVALID',
-  'TURN_FAILED_RETRY_PROJECTION_INVALID',
 ])
 
 // These failures are produced by deterministic loop guards after execution
@@ -161,6 +140,9 @@ export function getVisibleTurnClarification(clarification, t) {
   const reasonCode = String(
     clarification?.reason_code || clarification?.reasonCode || 'clarification_required',
   ).trim().toLowerCase()
+  // A user pause is not a question and not a cancellation: say only what
+  // happened, so the UI does not present a resume-able turn as a failure.
+  if (reasonCode === 'user_paused') return translated(t, 'chat.serverTurn.pausedByUser')
   if (reasonCode === 'clarification_required') {
     return translated(t, 'errors.clarificationRequired')
   }
@@ -243,7 +225,7 @@ export function isRuntimeUnavailableFailure(value) {
 }
 
 export function isRuntimeInterruptionFailure(value) {
-  return RUNTIME_INTERRUPTION_FAILURE_CODES.has(failureCode(value))
+  return TURN_ENGINE_SHUTDOWN_FAILURE_CODES.has(failureCode(value))
     && executionStartedState(value) !== false
 }
 
@@ -310,7 +292,7 @@ export function isModelPreExecutionFailure(value) {
 export function isTurnHostPreExecutionFailure(value) {
   if (directFailureCode(value) === 'TURN_ENGINE_SHUTDOWN') {
     return executionStartedState(value) === false
-      && isPreExecutionFailureForCodes(value, RUNTIME_INTERRUPTION_FAILURE_CODES)
+      && isPreExecutionFailureForCodes(value, TURN_ENGINE_SHUTDOWN_FAILURE_CODES)
   }
   return isPreExecutionFailureForCodes(value, TURN_HOST_PRE_EXECUTION_FAILURE_CODES)
 }

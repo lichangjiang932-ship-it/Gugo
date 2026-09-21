@@ -383,9 +383,12 @@ test('bounded verification overflow requires a covering successful check to reco
   }
 })
 
-test('verification command parser rejects compound, mutating, and output-producing variants', () => {
+test('verification command parser rejects unknown, mutating, and output-producing variants', () => {
   const commands = [
-    'npm test && npm lint',
+    // A chain is only a verification when every segment is a verification of
+    // its own: an untrusted launcher or a watch-mode check voids the whole chain.
+    'npm test && npx eslint src',
+    'npm run lint && npm run typecheck -- --watch',
     'cd packages/api && npm test && del victim.txt',
     'npm test || del victim.txt',
     'npm test; del victim.txt',

@@ -103,12 +103,16 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
   const workbench = read('../src/pages/ChatSplit/RightWorkbench.jsx')
   const rail = read('../src/components/LeftRail.jsx')
+  // Notice docks were extracted to keep the chat view inside its size budget;
+  // the sizing requirements are unchanged.
+  const noticesSource = read('../src/pages/ChatSplit/chatSplitView/ChatNoticeDocks.jsx')
 
   assert.match(view, /flex min-w-0 flex-\[1_1_640px\] flex-col overflow-hidden/)
-  const notices = [...view.matchAll(/className="(chat-notice-dock[^"]+)"/g)]
+  const notices = [...noticesSource.matchAll(/className="(chat-notice-dock[^"]+)"/g)]
   assert.equal(notices.length, 2)
   for (const [, classes] of notices) assert.match(classes, /w-full min-w-0 max-w-\[780px\]/)
   assert.doesNotMatch(view, /calc\(100vw-320px\)/)
+  assert.doesNotMatch(noticesSource, /calc\(100vw-320px\)/)
   assert.match(workbench, /h-full min-w-0 max-w-\[calc\(100vw-60px\)\] shrink flex-col overflow-hidden/)
   assert.doesNotMatch(workbench, /h-full shrink-0 flex-col/)
   assert.match(rail, /NARROW_RAIL_QUERY = '\(max-width: 959px\)'/)

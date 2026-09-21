@@ -6,13 +6,18 @@ const source = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')
 
 test('approval and resume notices fit the actual chat pane rather than subtracting a desktop sidebar', () => {
   const view = source('../src/pages/ChatSplit/ChatSplitView.jsx')
+  // The notices live in their own component now; they are still the only two
+  // notice docks and still size against the real chat pane.
+  const noticesSource = source('../src/pages/ChatSplit/chatSplitView/ChatNoticeDocks.jsx')
   assert.doesNotMatch(view, /calc\(100vw-320px\)/)
-  const notices = [...view.matchAll(/className="(chat-notice-dock[^"]+)"/g)]
+  assert.doesNotMatch(noticesSource, /calc\(100vw-320px\)/)
+  const notices = [...noticesSource.matchAll(/className="(chat-notice-dock[^"]+)"/g)]
   assert.equal(notices.length, 2)
   for (const [, classes] of notices) {
     assert.match(classes, /w-full min-w-0 max-w-\[780px\]/)
   }
-  assert.match(view, /data-testid="chat-resume-dock"[\s\S]*?flex flex-wrap items-center/)
+  assert.match(noticesSource, /data-testid="chat-resume-dock"[\s\S]*?flex flex-wrap items-center/)
+  assert.match(noticesSource, /data-testid="chat-continue-dock"[\s\S]*?chat\.serverTurn\.continueSameTask/)
 })
 
 test('chat header distinguishes ordinary conversations from a selected project', () => {

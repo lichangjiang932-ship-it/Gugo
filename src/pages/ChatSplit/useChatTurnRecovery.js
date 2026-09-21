@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { decideChatDirectory } from './chatDirectoryDecisions.js'
 import {
   isResumeNudge,
@@ -13,14 +13,19 @@ import {
   streamResumeDismissalKey,
   updateStreamResumeStates,
 } from './streamResumeState.js'
-import { cancelTurnRun, hasTurnRun } from './turnRunRegistry.js'
+import { cancelTurnRun, getTurnRun, hasTurnRun } from './turnRunRegistry.js'
+import { pauseServerTurn } from '../../lib/turnClient/turnRequests.js'
 import useManualRecoveryRouteResume from './useManualRecoveryRouteResume.js'
 import useServerTurnResume from './useServerTurnResume.js'
 import { streamResumeOwnerScope } from '../../lib/streamResumeDismissals.js'
 import useStreamResumeDismissals from './useStreamResumeDismissals.js'
 import useScopedChatRecoveryState from './useScopedChatRecoveryState.js'
 import { safeSideEffectResumeDescriptor } from '../../lib/sideEffectRecoveryClient.js'
-import { matchesManualRecoveryResume } from './serverTurnResumePolicy.js'
+import {
+  USER_PAUSED_TURN_CODE,
+  latestUserPausedTurn,
+  matchesManualRecoveryResume,
+} from './serverTurnResumePolicy.js'
 
 export function inlineSideEffectResumeForCurrentMessage({
   state, ownerScope, submittedOwnerScope, message, record, resume, running = false,
@@ -187,6 +192,28 @@ export default function useChatTurnRecovery({
     }
     if (!cancelTurnRun(activeSessionId)) abortCtrlRef.current?.abort()
   }, [abortCtrlRef, activeSessionId, dismissSessionResume])
+  // Pause must reach the server so the turn is persisted as resumable; the
+  // local abort below only detaches this client's stream. Cancelling here
+  // instead would make the turn terminal and unresumable.
+  const handlePause = useCallback(() => {
+    const run = getTurnRun(activeSessionId)
+    if (run?.turnId) {
+      pauseServerTurn({ sessionId: activeSessionId, turnId: run.turnId }).catch(() => {})
+    }
+    if (!cancelTurnRun(activeSessionId) && !run?.turnId) abortCtrlRef.current?.abort()
+  }, [abortCtrlRef, activeSessionId])
+  // A hand-paused turn is continued only when the user asks for it: it is not
+  // recoverable-on-its-own, so nothing resumes it automatically.
+  const pausedTurn = useMemo(() => latestUserPausedTurn(messages), [messages])
+  const continueSameTaskAvailable = !!pausedTurn && !isGenerating
+  const handleContinueSameTask = useCallback(() => {
+    if (!pausedTurn) return
+    setFailedTurnRetry({
+      sessionId: activeSessionId,
+      turnId: pausedTurn.turnId,
+      code: USER_PAUSED_TURN_CODE,
+    })
+  }, [activeSessionId, pausedTurn, setFailedTurnRetry])
   const handleDismissResume = useCallback(() => {
     if (activeSessionId) dismissSessionResume(activeSessionId)
   }, [activeSessionId, dismissSessionResume])
@@ -203,6 +230,9 @@ export default function useChatTurnRecovery({
 
   return {
     handleAbort,
+    handlePause,
+    continueSameTaskAvailable,
+    handleContinueSameTask,
     handleAuthorizeDirectoryRequest,
     handleRejectDirectoryRequest,
     handleSideEffectResolved,

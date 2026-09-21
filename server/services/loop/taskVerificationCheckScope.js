@@ -24,6 +24,12 @@ import {
 
 const TASK_CHECK_KINDS = new Set(['test', 'lint', 'build', 'check', 'typecheck'])
 const MAX_TARGET_PATHS = 16
+// A chain is only accepted when every segment is a verification of its own, so
+// this bounds the descriptor fan-out of one command rather than a trust
+// boundary. Realistic batches reach five (`lint && typecheck && test && build &&
+// check`), and a chain just above the bound would fall back to the same
+// misclassification this parser exists to avoid.
+const MAX_VERIFICATION_COMMAND_SEGMENTS = 8
 const TRUSTED_VERIFICATION_ENV_VALUES = new Map([
   ['CI', new Set(['1', 'true'])],
   ['NODE_ENV', new Set(['test'])],
@@ -92,11 +98,26 @@ function stripInlineEnvironmentPrefix(segment) {
   }
 }
 
+// Package managers hide the real check behind a launcher, and every command
+// profile is anchored, so an un-stripped launcher turns a genuine check into an
+// unknown command. Only install-free launchers are listed: `npx <bin>`,
+// `npx -y`, `pnpm dlx` and a bare `uv run` may fetch a remote package, so they
+// stay unverified rather than counting as a local check.
+const TOOL_RUNNER_PREFIX = new RegExp(
+  '^(?:'
+  + 'npx\\s+--no-install'
+  + '|pnpm\\s+exec'
+  + '|yarn\\s+exec'
+  + '|poetry\\s+run'
+  + '|pdm\\s+run'
+  + '|uv\\s+run\\s+--no-sync'
+  + ')(?:\\s+|$)',
+  'iu',
+)
+
 function stripToolRunnerPrefix(segment) {
   const value = String(segment || '').trim()
-  const prefix = value.match(
-    /^(?:npx\s+--no-install|pnpm\s+exec|yarn\s+exec)\s+/iu,
-  )
+  const prefix = value.match(TOOL_RUNNER_PREFIX)
   return prefix
     ? { value: value.slice(prefix[0].length).trim(), prefixed: true }
     : { value, prefixed: false }
@@ -425,21 +446,27 @@ export function commandCheckDescriptors(command) {
   if (!value || /[|;<>`\r\n]/u.test(value) || /\|\||\$\(/u.test(value)) return []
   const segments = value.split(/\s*&&\s*/u).map((segment) => segment.trim()).filter(Boolean)
   if (segments.length === 0
-    || segments.length > 2
+    || segments.length > MAX_VERIFICATION_COMMAND_SEGMENTS
     || segments.some((segment) => /&/u.test(segment))) return []
   const descriptors = new Map()
   const preludes = []
   let cwdSuffix = ''
   let environmentPrelude = false
-  for (const [index, segment] of segments.entries()) {
-    const prelude = commandPrelude(segment)
-    if (prelude && descriptors.size === 0 && index === 0 && segments.length === 2) {
-      preludes.push(segment)
-      cwdSuffix = prelude.cwdSuffix
-      environmentPrelude = prelude.kind === 'environment'
-      continue
+  for (const segment of segments) {
+    // A `cd`/env prelude may only lead the chain and scopes every check after
+    // it. A prelude that follows a check is not modelled and stays non-verdict.
+    if (descriptors.size === 0) {
+      const prelude = commandPrelude(segment)
+      if (prelude) {
+        preludes.push(segment)
+        cwdSuffix = prelude.cwdSuffix
+        environmentPrelude = prelude.kind === 'environment'
+        continue
+      }
     }
-    if (index !== segments.length - 1 || descriptors.size > 0) return []
+    // Each remaining segment must be a recognized check on its own. One unknown
+    // or mutating segment voids the whole chain, so `npm test && rm -rf x` and
+    // `npm test && del victim.txt` never read as verification.
     const descriptor = commandCheckDescriptor(segment)
     if (!descriptor) return []
     const { kind, coverage, targetPaths = [], verifierFamily: explicitVerifierFamily } = descriptor

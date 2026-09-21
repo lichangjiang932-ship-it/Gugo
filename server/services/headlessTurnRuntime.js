@@ -8,6 +8,7 @@ import { getApprovalMode } from './approvalSettingsStore.js'
 import { releaseApproval } from './approvalGate.js'
 import { turnEventForClient } from './turnEventStore.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { resolveHeadlessApprovalDecision } from './headlessApprovalChannel.js'
 import { createHeadlessTurnInteractions } from './headlessTurnInteractions.js'
 import { startHeadlessWithAttachments } from './headlessAttachmentStart.js'
 
@@ -142,12 +143,6 @@ async function resolveResumeSessionId({ persistenceAdapter, userId, turnId }) {
     )
   }
   return normalizedSessionId
-}
-
-function normalizeApprovalDecision(value) {
-  const decision = typeof value === 'string' ? value : value?.decision
-  if (decision === 'approve' || decision === 'deny') return decision
-  return 'deny'
 }
 
 function completedEventSucceeded(event) {
@@ -328,21 +323,21 @@ function createHeadlessEventController(runtime) {
     const approvalId = String(event?.payload?.approvalId || '')
     if (!approvalId || state.handledApprovalIds.has(approvalId)) return
     state.handledApprovalIds.add(approvalId)
-    let decision = 'deny'
-    if (input.interactive && typeof input.onApproval === 'function') {
-      try {
-        decision = normalizeApprovalDecision(await input.onApproval(event))
-      } catch (error) {
-        input.onDiagnostic(`approval prompt failed; denied ${approvalId}: ${error?.message || error}`)
-      }
-    }
+    const { decision, decidedBy } = await resolveHeadlessApprovalDecision({
+      interactive: input.interactive,
+      onApproval: input.onApproval,
+      onDiagnostic: input.onDiagnostic,
+      event,
+      approvalId,
+      userId: scope.userId,
+    })
     if (state.closed) return
     try {
       await runtime.decide({
         userId: scope.userId,
         id: approvalId,
         decision,
-        decidedBy: scope.userId,
+        decidedBy,
       })
     } finally {
       await runtime.release(approvalId)

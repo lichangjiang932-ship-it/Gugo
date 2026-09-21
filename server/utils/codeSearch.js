@@ -3,7 +3,9 @@
  *
  * 设计权衡:
  *   - 用 rg --json 拿结构化结果,不要 grep -n 那种文本拼接
- *   - 不解析 AST(那是 M1.5 tree-sitter 的事),用启发式多语言正则定位 symbol
+ *   - symbol 定位分两段:JS 族(.js/.mjs/.cjs)的候选用 acorn 真解析确认(javaScriptSymbols),
+ *     因为正则既会把字符串/注释里的伪定义当成定义,也描述不了类方法与对象方法;
+ *     其余语言(含 .ts/.jsx —— 解析器不支持其扩展语法)仍用启发式多语言正则,待 tree-sitter
  *   - 全部只读,沙箱在 WORKSPACE_ROOT 内,沿用 fsShellTools 的路径解析
  *   - 不读 .git / node_modules / dist / .next 等,默认走 .gitignore
  *
@@ -21,6 +23,8 @@ import { sanitizeChildEnv } from './sensitiveEnv.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 export { CODE_SEARCH_TOOL_SPECS } from './codeSearchToolSpecs.js'
+import { refineSymbolMatches } from './jsSymbolIndex.js'
+import { buildSymbolRegex } from './symbolSearchPatterns.js'
 
 export function resolveRipgrepExecutablePath(candidate) {
   const marker = `${path.sep}app.asar${path.sep}`
@@ -396,56 +400,28 @@ export async function grepCodeTool({
 
 /* ─── 工具 2:find_symbol ─── */
 
-// 多语言符号识别正则(启发式,M1.5 接 tree-sitter 之前的过渡方案)
-// 注意:这里只匹配"定义",不匹配引用 — 引用走 grep_code 即可
-const SYMBOL_PATTERNS = {
-  // JS/TS
-  function: [
-    String.raw`\b(?:export\s+(?:default\s+)?)?(?:async\s+)?function\*?\s+__NAME__\b`,
-    String.raw`\b(?:export\s+)?const\s+__NAME__\s*=\s*(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_$][\w$]*)\s*=>`,
-    String.raw`\b(?:export\s+)?const\s+__NAME__\s*=\s*(?:async\s+)?function\b`,
-    // Python def
-    String.raw`^\s*(?:async\s+)?def\s+__NAME__\s*\(`,
-    // Go func
-    String.raw`^\s*func\s+(?:\([^)]+\)\s+)?__NAME__\s*\(`,
-    // Rust fn
-    String.raw`^\s*(?:pub\s+(?:\([^)]+\)\s+)?)?(?:async\s+)?fn\s+__NAME__\b`,
-    // Java/C# method - 粗略,会漏修饰符组合,可接受
-    String.raw`\b(?:public|private|protected|static|final|\s)+[\w<>\[\],?\s]+\s+__NAME__\s*\([^)]*\)\s*\{`,
-  ],
-  class: [
-    String.raw`\b(?:export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+__NAME__\b`,
-    // Python
-    String.raw`^\s*class\s+__NAME__\s*[\(:]`,
-    // Rust struct/enum/trait
-    String.raw`^\s*(?:pub\s+(?:\([^)]+\)\s+)?)?(?:struct|enum|trait)\s+__NAME__\b`,
-    // Go type
-    String.raw`^\s*type\s+__NAME__\s+(?:struct|interface)\b`,
-  ],
-  const: [
-    String.raw`\b(?:export\s+)?(?:const|let|var)\s+__NAME__\s*=`,
-    // Python module-level
-    String.raw`^__NAME__\s*=\s*[^=]`,
-    // Go
-    String.raw`^\s*(?:const|var)\s+__NAME__\b`,
-    // Rust
-    String.raw`^\s*(?:pub\s+(?:\([^)]+\)\s+)?)?(?:const|static)\s+__NAME__\s*:`,
-  ],
+/**
+ * Confirm ripgrep's symbol candidates.
+ *
+ * The prefilter is deliberately *wider* than a definition pattern: it only asks
+ * whether the name occurs at all, because a named declaration always contains
+ * its own name. That is what lets the parse find declarations the patterns never
+ * describe (class and object methods). Non-JavaScript files cannot be parsed, so
+ * their candidate lines are filtered by the definition pattern exactly as before.
+ */
+function confirmSymbolMatches(matches, { name, kind, definitionRegex }) {
+  const root = getWorkspaceRoot()
+  const fromAst = refineSymbolMatches(matches, {
+    name,
+    kind,
+    readFile: (file) => fs.readFileSync(path.join(root, file), 'utf8'),
+  })
+  return fromAst.filter((match) => match.astKind || definitionRegex.test(match.text || ''))
 }
 
-function buildSymbolRegex(name, kind) {
-  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const kinds = kind === 'all' || !kind
-    ? ['function', 'class', 'const']
-    : [kind]
-  const patterns = []
-  for (const k of kinds) {
-    const arr = SYMBOL_PATTERNS[k]
-    if (!arr) continue
-    for (const p of arr) patterns.push(p.replace(/__NAME__/g, esc))
-  }
-  // rg 用 | 联结成一个 PCRE-like 正则
-  return patterns.map((p) => `(?:${p})`).join('|')
+function mentionRegexSource(name) {
+  const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  return `\\b${escaped}\\b`
 }
 
 export async function findSymbolTool({
@@ -464,6 +440,7 @@ export async function findSymbolTool({
   const target = resolveInWorkspace(rawPath, { userId })
   const limit = Math.min(Math.max(Number(max_results) || 20, 1), 100)
   const regex = buildSymbolRegex(name, kind)
+  const definitionRegex = new RegExp(regex, 'i')
 
   const args = [
     '--json',
@@ -483,19 +460,19 @@ export async function findSymbolTool({
     if (!/^[a-z0-9+-]+$/i.test(String(language))) throw badReq('language 非法')
     args.push(`--type=${language}`)
   }
-  args.push('--', regex, toRelative(target) || '.')
+  args.push('--', mentionRegexSource(name), toRelative(target) || '.')
 
   const result = await runRg(args)
   if (!result.ok) {
     if (isRgUnavailable(result)) {
-      const matches = searchFilesFallback({
+      const matches = confirmSymbolMatches(searchFilesFallback({
         pattern: regex,
         target,
         maxResults: limit,
         context: 1,
         fileType: language,
         caseSensitive: true,
-      })
+      }), { name, kind, definitionRegex }).slice(0, limit)
       return {
         ok: true,
         name,
@@ -513,7 +490,8 @@ export async function findSymbolTool({
     }
     return { ok: false, error: result.error, symbols: [] }
   }
-  const matches = parseRgJson(result.stdout, limit)
+  const candidates = parseRgJson(result.stdout, Math.min(limit * 4, 400))
+  const matches = confirmSymbolMatches(candidates, { name, kind, definitionRegex }).slice(0, limit)
   return {
     ok: true,
     name,

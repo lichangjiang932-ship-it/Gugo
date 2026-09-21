@@ -11,6 +11,7 @@ import { cmdDoctorHeadless, parseDoctorArgs } from './cli/headlessDoctor.js'
 import { cmdTrace } from './cli/traceCommand.js'
 import { cmdGoal } from './cli/goalCommand.js'
 import { cmdMemory } from './cli/memoryCommand.js'
+import { cmdUsage } from './cli/usageCommand.js'
 import { startInteractiveSession } from './cli/interactiveSession.js'
 import { loadBuiltinHeadlessRuntime } from './cli/headlessRuntimeLoader.js'
 import { createRunInteractionPorts } from './cli/runInteractionPorts.js'
@@ -236,9 +237,14 @@ export async function cmdRun(argv, {
   env = process.env,
   signal = null,
 } = {}) {
+  // A run without two live terminals cannot answer an approval prompt. The
+  // runtime then denies every approval-requiring tool, and the failure summary
+  // must say that instead of reporting a user decision.
+  const interactive = stdin.isTTY === true && stderr.isTTY === true
   const output = createRunOutputFormatter({
     format: requestedRunOutputFormat(argv),
     progress: argv.includes('--progress'),
+    interactive,
     stdout,
     stderr,
   })
@@ -289,7 +295,6 @@ export async function cmdRun(argv, {
       ? (signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal)
       : signal
     const runtime = runTurn || await loadBuiltinHeadlessRuntime({ runtimeCwd, env })
-    const interactive = stdin.isTTY === true && stderr.isTTY === true
     const interactionPorts = createRunInteractionPorts({
       stdin, diagnostics: stderr, signal: runtimeSignal,
     })
@@ -511,6 +516,9 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (cmd === 'memory') {
     return cmdMemory(argv.slice(1), { cwd: runtime.cwd, env: launcherEnv })
+  }
+  if (cmd === 'usage') {
+    return cmdUsage(argv.slice(1), { cwd: runtime.cwd, env: launcherEnv })
   }
 
   throw new CliUsageError('CLI_COMMAND_UNKNOWN', `Unknown command: ${argv.join(' ')}`)

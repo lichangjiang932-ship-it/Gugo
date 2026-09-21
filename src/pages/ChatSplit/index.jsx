@@ -90,10 +90,10 @@ export default function ChatSplit() {
     workbenchOpen, onSessionChange: clearMessageEditForSessionChange,
   })
   const {
-    handleAbort, handleAuthorizeDirectoryRequest, handleDismissResume, handleResume,
+    handleAbort, handlePause, handleAuthorizeDirectoryRequest, handleDismissResume, handleResume,
     handleRejectDirectoryRequest,
     handleSideEffectResolved, recoveryOwnerScope,
-    handleTurnResult, handleTurnStart, manualRetryAvailable, resumeAvailable, showPendingDirectoryGuidance,
+    handleTurnResult, handleTurnStart, manualRetryAvailable, resumeAvailable, showPendingDirectoryGuidance, continueSameTaskAvailable, handleContinueSameTask,
   } = useChatTurnRecovery({
     abortCtrlRef, activeSessionId, approvals, dispatch, isGenerating, messages,
     resumingTurnIdsRef, setInput, setWorkbenchMessage, state, stateRef, t, toast,
@@ -252,7 +252,7 @@ export default function ChatSplit() {
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       contextWindowAuthoritative={selectedContextWindowAuthoritative}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
-      modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onApprovalModeChange={approvals.changeApprovalMode}
+      modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onPause={handlePause} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
       onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}
       onRejectDirectoryRequest={handleRejectDirectoryRequest}
@@ -284,8 +284,8 @@ export default function ChatSplit() {
       onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={handleWorkbenchSend}
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
-      resumeAvailable={resumeAvailable}
-      manualRetryAvailable={manualRetryAvailable}
+      resumeAvailable={resumeAvailable} continueSameTaskAvailable={continueSameTaskAvailable}
+      handleContinueSameTask={handleContinueSameTask} manualRetryAvailable={manualRetryAvailable}
       runtimeSkillIds={runtimeSkills.filter((skill) => skill.runnable !== false).map((skill) => skill.id)}
       selectedModel={effectiveSelectedModel} selectedModelProviderId={effectiveSelectedModelProviderId}
       selectedWorkspacePath={selectedWorkspacePath} recentWorkspaces={recentWorkspaces}

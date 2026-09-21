@@ -9,6 +9,7 @@ import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
 import { ChatSessionHeading, ChatWorkbenchToggle } from './chatSplitView/ChatSessionHeader.jsx'
 import SessionBranchNavigator from './chatSplitView/SessionBranchNavigator.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
+import ChatNoticeDocks from './chatSplitView/ChatNoticeDocks.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
 
 export { ChatRightPanels }
@@ -31,6 +32,7 @@ export default function ChatSplitView({
   messages, messageRouteHash, modelReadiness,
   modelOptions,
   onAbort,
+  onPause,
   onApprovalModeChange,
   onClearWorkspace,
   onAuthorizeDirectoryRequest,
@@ -78,6 +80,8 @@ export default function ChatSplitView({
   onWorkbenchToggle,
   manualRetryAvailable,
   resumeAvailable,
+  continueSameTaskAvailable,
+  handleContinueSameTask,
   runtimeSkillIds,
   selectedModel,
   selectedModelProviderId,
@@ -208,22 +212,16 @@ export default function ChatSplitView({
             />
           </div>
         )}
-        {resumeAvailable && !isGenerating && (
-          <div className="chat-notice-dock mx-auto w-full min-w-0 max-w-[780px] px-4 pb-1.5 sm:px-6" data-testid="chat-resume-dock">
-            <div className="flex flex-wrap items-center gap-2 rounded-control border border-ink/10 border-l-2 border-l-warning/55 bg-paper-2/45 px-3 py-2 text-xs">
-              <span className="min-w-0 basis-48 flex-1 leading-relaxed text-ink-soft">{t(manualRetryAvailable
-                ? 'toast.chatTaskRetryHint'
-                : 'toast.chatResumeHint')}</span>
-              <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-accent text-accent-contrast">
-                {t(manualRetryAvailable ? 'toast.chatTaskRetryButton' : 'toast.chatResumeButton')}
-              </button>
-              <button type="button" onClick={onDismissResume} className="h-7 px-2 text-ink-fade hover:text-ink">
-                {t('toast.chatResumeDismiss')}
-              </button>
-            </div>
-          </div>
-        )}
-
+        <ChatNoticeDocks
+          continueSameTaskAvailable={continueSameTaskAvailable}
+          handleContinueSameTask={handleContinueSameTask}
+          isGenerating={isGenerating}
+          manualRetryAvailable={manualRetryAvailable}
+          onDismissResume={onDismissResume}
+          onResume={onResume}
+          resumeAvailable={resumeAvailable}
+          t={t}
+        />
         <ChatComposer
           input={input}
           editingMessageId={editingMessageId}
@@ -239,7 +237,7 @@ export default function ChatSplitView({
           selectedModel={selectedModel}
           selectedModelProviderId={selectedModelProviderId}
           isGenerating={isGenerating}
-          onAbort={onAbort}
+          onAbort={onAbort} onPause={onPause}
           onCancelMessageEdit={onCancelMessageEdit}
           onFileChange={onFileChange}
           onToggleContext={toggleContextPanel}

@@ -181,7 +181,7 @@ test('subagent policies reuse canonical catalog objects without expanding their 
       ? [
           ...readonlyNames,
           'remember', 'write_file', 'edit_file',
-          'bash_exec', 'run_command', 'run_test', 'run_project_check', 'git_status', 'git_diff',
+          'bash_exec', 'run_command', 'run_test', 'run_project_check', 'git_status', 'git_diff', 'git_log', 'git_blame',
           'apply_patch', 'Agent',
         ]
       : readonlyNames

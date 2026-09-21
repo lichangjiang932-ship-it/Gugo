@@ -56,3 +56,31 @@ test('connector outbound guard rejects private IPs and DNS answers and pins publ
   })
   assert.equal(result.lockedIp, '93.184.216.34')
 })
+
+test('an injected fetch implementation does not skip the outbound URL guard', async () => {
+  let called = 0
+  const fakeFetch = async () => {
+    called += 1
+    return new Response('{"ok":true}')
+  }
+
+  for (const [url, pattern] of [
+    ['http://169.254.169.254/latest/meta-data/iam/', /metadata/i],
+    ['https://127.0.0.1/rest/api/3', /private|loopback/i],
+    ['http://[::1]/rest/api/3', /private|loopback/i],
+    ['http://10.0.0.5/rest/api/3', /private|loopback/i],
+    ['file:///etc/passwd', /http\/https/i],
+    ['https://user:secret@jira.example/rest/api/3', /credential/i],
+  ]) {
+    await assert.rejects(
+      fetchConnectorJson(url, {}, { fetchImpl: fakeFetch }),
+      (error) => pattern.test(error.message),
+      url,
+    )
+  }
+  assert.equal(called, 0)
+
+  const allowed = await fetchConnectorJson('https://jira.example/rest/api/3', {}, { fetchImpl: fakeFetch })
+  assert.deepEqual(allowed.data, { ok: true })
+  assert.equal(called, 1)
+})

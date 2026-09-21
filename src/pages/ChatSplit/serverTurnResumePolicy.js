@@ -9,6 +9,37 @@ function nonEmptyTaskVerification(value) {
     : null
 }
 
+/** Resume intent code for a turn the user paused by hand. */
+export const USER_PAUSED_TURN_CODE = 'USER_PAUSED'
+
+function clarificationReasonCode(message) {
+  const clarification = message?.meta?.serverClarification
+  if (!clarification || typeof clarification !== 'object' || Array.isArray(clarification)) return ''
+  return String(clarification.reason_code || clarification.reasonCode || '').trim().toLowerCase()
+}
+
+/**
+ * A hand-paused turn: stopped by the user, resumable, and never auto-resumed.
+ * `serverConnectionState` stays out of the recoverable set on purpose, so only
+ * an explicit action continues it.
+ */
+export function isUserPausedMessage(message) {
+  return message?.meta?.paused === true && clarificationReasonCode(message) === 'user_paused'
+}
+
+/**
+ * The most recent hand-paused turn in a session, if it is the latest assistant
+ * message (an older pause has been superseded by newer work).
+ */
+export function latestUserPausedTurn(messages = []) {
+  const list = Array.isArray(messages) ? messages : []
+  const message = [...list].reverse().find((candidate) => candidate?.role === 'assistant')
+  if (!message || !isUserPausedMessage(message)) return null
+  const turnId = message?.meta?.serverTurnId
+  if (typeof turnId !== 'string' || !turnId.trim()) return null
+  return { turnId, messageId: message.id, code: USER_PAUSED_TURN_CODE }
+}
+
 export function reduceResumedAssistantText(currentText, event) {
   if (event?.type === 'turn.attempt' && event.payload?.resetStreaming) {
     return String(event.payload?.assistantText || '')
@@ -138,6 +169,14 @@ export function matchesManualRecoveryResume(session, message, resume, { ownerSco
 }
 
 export function matchesFailedTurnRetryResume(session, message, retry) {
+  // A user pause is an explicit, deliberate resume: the same task continues
+  // from its checkpoint, so it must not be gated behind a *failure* payload the
+  // way automatic truncation recovery is.
+  if (retry?.code === USER_PAUSED_TURN_CODE) {
+    return sameNonEmptyId(retry?.sessionId, session?.id)
+      && sameNonEmptyId(retry?.turnId, message?.meta?.serverTurnId)
+      && isUserPausedMessage(message)
+  }
   const failure = message?.meta?.serverFailure
   const sameFailureCode = typeof retry?.code === 'string'
     && retry.code.length > 0

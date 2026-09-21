@@ -604,3 +604,62 @@ test('terminal diagnostics surface exhausted completion policies', () => {
   const event = JSON.parse(jsonl.stdout.trim())
   assert.deepEqual(event.error.completionPolicies, policies)
 })
+
+function approvalDeniedEvent() {
+  return {
+    type: 'turn.failed',
+    payload: {
+      error: { code: 'approval_denied' },
+      incompleteReason: 'approval_denied',
+      missingRequirements: ['user_direction'],
+      nextAction: 'retry_turn',
+    },
+  }
+}
+
+test('a non-interactive approval denial names the real remedy instead of retry_turn', () => {
+  const diagnostic = formatRunEvent(approvalDeniedEvent(), { format: 'text', interactive: false }).stderr
+  assert.match(diagnostic, /Failed \[APPROVAL_DENIED\]/u)
+  assert.match(diagnostic, /Reason: approval_denied/u)
+  assert.match(diagnostic, /Missing: user_direction/u)
+  assert.match(diagnostic, /no interactive terminal was available/u)
+  assert.match(diagnostic, /--mode acceptEdits or --mode bypass/u)
+  assert.doesNotMatch(
+    diagnostic,
+    /Next: retry_turn/u,
+    'a script cannot retry a decision that no one was ever asked to make',
+  )
+})
+
+test('an interactive approval denial keeps the shared user-decision advice', () => {
+  const diagnostic = formatRunEvent(approvalDeniedEvent(), { format: 'text', interactive: true }).stderr
+  assert.match(diagnostic, /Missing: user_direction/u)
+  assert.match(diagnostic, /Next: retry_turn/u)
+  assert.doesNotMatch(diagnostic, /no interactive terminal was available/u)
+})
+
+test('a locked database reports the contention instead of a pointless retry', () => {
+  const diagnostic = formatRunError({
+    code: 'TURN_EVENT_PERSISTENCE_FAILED',
+    message: 'Failed to persist 1 turn event(s) after 1 attempt(s): database is locked',
+    retryable: true,
+  }, { format: 'text' }).stderr
+  assert.match(diagnostic, /Error \[TURN_EVENT_PERSISTENCE_FAILED\]/u)
+  assert.match(diagnostic, /another Gugo runtime/u)
+  assert.match(diagnostic, /--runtime-dir/u)
+  assert.doesNotMatch(
+    diagnostic,
+    /retry this turn from its durable checkpoint/u,
+    'retrying cannot succeed while the other runtime still holds the database',
+  )
+})
+
+test('another persistence failure keeps the generic retry advice', () => {
+  const diagnostic = formatRunError({
+    code: 'TURN_EVENT_PERSISTENCE_FAILED',
+    message: 'Failed to persist 2 turn event(s) after 3 attempt(s): disk I/O error',
+    retryable: true,
+  }, { format: 'text' }).stderr
+  assert.match(diagnostic, /Next: retry this turn from its durable checkpoint/u)
+  assert.doesNotMatch(diagnostic, /another Gugo runtime/u)
+})

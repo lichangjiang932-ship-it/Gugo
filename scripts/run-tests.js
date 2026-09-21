@@ -95,14 +95,21 @@ const batchNodeArgs = nodeArgs.some((arg) => arg.startsWith('--test-concurrency'
   ? nodeArgs
   : [`--test-concurrency=${testConcurrency}`, ...nodeArgs]
 
+// Thresholds are a ratchet: raise them as coverage improves, never lower them to
+// make a red run green. These values re-baseline the include set that now also
+// covers `src/pages/**` (~60k lines of UI that had no measurement at all), so
+// they are lower than the previous backend-only numbers on purpose. Measured on
+// that widened set: lines 37.40, branches 60.16, functions 31.48.
 const coverageArgs = coverageMode
   ? [
       '--experimental-test-coverage',
-      `--test-coverage-lines=${process.env.COVERAGE_LINES || '40'}`,
-      `--test-coverage-functions=${process.env.COVERAGE_FUNCTIONS || '35'}`,
+      `--test-coverage-lines=${process.env.COVERAGE_LINES || '37'}`,
+      `--test-coverage-functions=${process.env.COVERAGE_FUNCTIONS || '31'}`,
       `--test-coverage-branches=${process.env.COVERAGE_BRANCHES || '60'}`,
       '--test-coverage-include=server/**/*.js',
       '--test-coverage-include=src/lib/**/*.js',
+      '--test-coverage-include=src/pages/**/*.jsx',
+      '--test-coverage-include=src/pages/**/*.js',
       '--test-coverage-include=shared/**/*.js',
     ]
   : []
@@ -175,6 +182,34 @@ function chunkFiles(source, size) {
     chunks.push(source.slice(index, index + size))
   }
   return chunks
+}
+
+// Windows caps a process command line near 32 KiB; POSIX allows far more. The
+// coverage gate hands every selected file to one invocation, and ~936 relative
+// paths sit right at the Windows ceiling, so adding a handful of test files used
+// to end in an opaque ENAMETOOLONG. Say what the limit is and what the options
+// are instead: splitting the selection would check each slice's percentage
+// against the same thresholds (a weaker gate), and merging the files into one
+// process broke test isolation outright.
+const COMMAND_LINE_LIMIT = process.platform === 'win32' ? 32_767 : 2_000_000
+
+function commandLineLength(args) {
+  return args.reduce((total, arg) => total + String(arg).length + 1, 0)
+}
+
+function assertCoverageBatchFitsPlatform(batch) {
+  const projected = commandLineLength([
+    ...testSetupArgs, '--test', ...coverageArgs, ...batchNodeArgs, ...batch,
+  ])
+  if (projected <= COMMAND_LINE_LIMIT) return
+  console.error(`[run-tests] COVERAGE_SELECTION_TOO_LARGE: ${batch.length} files need `
+    + `${projected} characters on one command line, above this platform's limit of ${COMMAND_LINE_LIMIT}.`)
+  console.error('[run-tests] The coverage gate must reach every selected file in one invocation, so it cannot be '
+    + 'split without weakening the thresholds, and running the files in a single process breaks their isolation.')
+  console.error('[run-tests] Run the coverage gate where the limit is larger (Linux CI). To inspect a slice locally, '
+    + 'name test files instead, for example `npm test -- --coverage presentationPromptPolicy`; that reports the '
+    + "slice's own percentages, so it does not satisfy the whole-suite thresholds.")
+  process.exit(2)
 }
 
 function reportProcessError(result, label, timeoutMs) {
@@ -334,6 +369,7 @@ function reportCoverageFailure(result) {
 }
 
 if (batchFiles.length) {
+  if (coverageMode) assertCoverageBatchFitsPlatform(batchFiles)
   const batches = chunkFiles(batchFiles, batchSize)
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index]

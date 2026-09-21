@@ -5,6 +5,7 @@ import {
 import { UiContributionRenderer } from '../../../plugins/uiContributionRegistry.js'
 import WorkbenchBrowser from './WorkbenchBrowser.jsx'
 import WorkbenchFiles from './WorkbenchFiles.jsx'
+import WorkbenchGit from './WorkbenchGit.jsx'
 
 function ChatPanel({ isGenerating, messages, setSideInput, sideInput, submitSideChat, t }) {
   return (
@@ -54,6 +55,7 @@ export default function RightWorkbenchContent(props) {
       {activeTab === 'chat' && <ChatPanel {...props} />}
       {activeTab === 'browser' && <WorkbenchBrowser {...props} />}
       {activeTab === 'terminal' && <TerminalPanel {...props} />}
+      {activeTab === 'git' && <WorkbenchGit t={t} />}
       {contributedTabs.map((contribution) => activeTab === contribution.tabId && (
         <UiContributionRenderer
           key={contribution.key}

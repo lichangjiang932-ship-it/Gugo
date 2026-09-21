@@ -1,3 +1,11 @@
+import {
+  TURN_ENGINE_RESTARTING_FAILURE_CODES,
+  TURN_ENGINE_SHUTDOWN_FAILURE_CODES,
+  TURN_HOST_UNAVAILABLE_FAILURE_CODES,
+} from '../../shared/turnFailureCodes.js'
+
+// Keyed by literal code so a reader sees the pairing, and pinned to the shared
+// contract by the coverage test in tests/turnFailureCodes.test.js.
 const HOST_CONFIGURATION_MESSAGES = new Map([
   [
     'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
@@ -17,22 +25,8 @@ const HOST_TRANSIENT_MESSAGES = new Map([
 ])
 
 const HOST_RESTARTING_ERROR_CODES = new Set([
-  'TURN_PERSISTENCE_ENGINE_ALREADY_ACTIVE',
-  'TURN_ENGINE_SHUTTING_DOWN',
-  'TURN_ENGINE_SHUTDOWN',
-])
-
-const HOST_CLEANUP_ERROR_CODES = new Set([
-  'TURN_ENGINE_HOST_PENDING_INITIALIZATION_CLEANUP_FAILED',
-  'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
-  'TURN_ENGINE_HOST_CLEANUP_FAILED',
-])
-
-const HOST_UNAVAILABLE_ERROR_CODES = new Set([
-  ...HOST_CONFIGURATION_MESSAGES.keys(),
-  ...HOST_TRANSIENT_MESSAGES.keys(),
-  ...HOST_RESTARTING_ERROR_CODES,
-  ...HOST_CLEANUP_ERROR_CODES,
+  ...TURN_ENGINE_RESTARTING_FAILURE_CODES,
+  ...TURN_ENGINE_SHUTDOWN_FAILURE_CODES,
 ])
 
 function errorCode(error) {
@@ -40,7 +34,7 @@ function errorCode(error) {
 }
 
 export function isTurnEngineHostUnavailableError(error) {
-  return HOST_UNAVAILABLE_ERROR_CODES.has(errorCode(error))
+  return TURN_HOST_UNAVAILABLE_FAILURE_CODES.has(errorCode(error))
 }
 
 /**
@@ -51,7 +45,7 @@ export function isTurnEngineHostUnavailableError(error) {
  */
 export function describeTurnEngineHostUnavailableError(error) {
   const code = errorCode(error)
-  if (!HOST_UNAVAILABLE_ERROR_CODES.has(code)) return null
+  if (!TURN_HOST_UNAVAILABLE_FAILURE_CODES.has(code)) return null
 
   const configurationMessage = HOST_CONFIGURATION_MESSAGES.get(code)
   const transientMessage = HOST_TRANSIENT_MESSAGES.get(code)

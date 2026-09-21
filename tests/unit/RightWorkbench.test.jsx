@@ -115,7 +115,7 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     const navigation = rootElement.querySelector('[data-testid="workbench-navigation"]')
     assert.ok(navigation)
     assert.match(navigation.className, /flex/)
-    assert.equal(navigation.querySelectorAll(':scope > button').length, 4)
+    assert.equal(navigation.querySelectorAll(':scope > button').length, 5)
     const activeNavigation = navigation.querySelector('[aria-current="page"]')
     assert.equal(activeNavigation.getAttribute('aria-label'), '相关文件')
     assert.equal(activeNavigation.querySelector('span.sr-only').textContent, '相关文件')
@@ -739,6 +739,72 @@ test('right workbench preserves side chat input when send rejects', async () => 
     })
     assert.equal(textarea.value, 'keep after error')
   } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('the changes tab is wired to the git panel and reads real status and diff', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const selectedTabs = []
+  const calls = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    const target = String(url)
+    calls.push(target)
+    if (target.includes('/git/status')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        branch: 'feature/git-panel',
+        files: [{ status: 'M', path: 'src/app.js' }],
+      }), { headers: { 'Content-Type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({ ok: true, diff: '-const one = 1\n+const one = 2' }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  const render = (activeTab) => (
+    <RightWorkbench
+      messages={[]}
+      activeTab={activeTab}
+      onTabChange={(tab) => selectedTabs.push(tab)}
+      onClose={() => {}}
+      onOpenArtifact={() => {}}
+      onSendMessage={() => {}}
+      isGenerating={false}
+    />
+  )
+
+  try {
+    await act(async () => { root.render(render('files')) })
+    const gitTab = rootElement.querySelector('[data-testid="workbench-tab-git"]')
+    assert.ok(gitTab, 'the tab bar must offer the changes tab')
+    // The label comes from the real translation table, so a missing key would
+    // surface here as the raw key rather than a sentence.
+    assert.equal(gitTab.getAttribute('aria-label'), '变更')
+    await act(async () => { gitTab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+    assert.deepEqual(selectedTabs, ['git'], 'the tab id must match the panel the content renders')
+
+    await act(async () => { root.render(render('git')) })
+    await act(async () => { await Promise.resolve() })
+    const panel = rootElement.querySelector('[data-testid="workbench-git"]')
+    assert.ok(panel, 'selecting the tab must render the git panel')
+    assert.deepEqual(calls, ['/api/workbench/git/status'])
+    assert.match(panel.textContent, /feature\/git-panel/)
+    assert.match(panel.textContent, /变更文件/)
+
+    await act(async () => {
+      panel.querySelector('[data-testid="workbench-git-file"]')
+        .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    assert.deepEqual(calls[1], '/api/workbench/git/diff')
+    const diff = panel.querySelectorAll('[data-testid="workbench-git-diff"] pre')
+    assert.deepEqual([...diff].map((line) => line.textContent), ['-const one = 1', '+const one = 2'])
+  } finally {
+    globalThis.fetch = originalFetch
     await act(async () => root.unmount())
     dom.window.close()
   }

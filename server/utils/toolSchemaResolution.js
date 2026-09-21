@@ -23,6 +23,8 @@ const CODE_MODE_TOOLS = [
   'run_command',
   'git_status',
   'git_diff',
+  'git_log',
+  'git_blame',
   'run_project_check',
   'run_test',
   'docker_exec',

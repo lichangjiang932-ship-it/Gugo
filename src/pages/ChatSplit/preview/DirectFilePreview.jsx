@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
+import { DOCX_PREVIEW_OPTIONS, buildDocxSrcdoc } from '../../../lib/docxPreview.js'
 import { DocxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
 import PptxFilePreview from './PptxFilePreview.jsx'
 import { InteractiveHtmlFilePreview } from './HtmlFilePreview.jsx'
@@ -78,8 +79,81 @@ function HtmlPreviewRenderer({ file, t, url }) {
   return <InteractiveHtmlFilePreview key={`html:${url}`} file={file} url={url} t={t} />
 }
 
-function DocxFileRenderer({ preview }) {
-  return <DocxPreview blocks={preview.blocks || []} title={preview.title} />
+function DocxFileRenderer({ preview, file, url, t }) {
+  // Keyed like DirectFilePreviewRequest: the loading state is derived from
+  // whether the current url has produced a result yet, so the effect never
+  // writes state synchronously.
+  const requestKey = String(url || '')
+  const [docxState, setDocxState] = useState({ key: '', status: 'ready', html: '', error: '' })
+  const current = docxState.key === requestKey ? docxState : null
+  useEffect(() => {
+    if (!requestKey) return undefined
+    let cancelled = false
+    const render = async () => {
+      const body = document.createElement('div')
+      const styles = document.createElement('div')
+      const response = await fetch(requestKey)
+      if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`)
+      // Read bytes, not a Blob: docx-preview hands the package to JSZip, which
+      // prefers an ArrayBuffer/Uint8Array. A Blob would force JSZip through
+      // FileReader, which fails whenever the Blob and the document come from
+      // different realms (browser shell vs. embedded preview host).
+      const bytes = await response.arrayBuffer()
+      // Imported lazily: the preview panel is not on the startup path, and the
+      // renderer is only needed for an actual docx.
+      const { renderAsync } = await import('docx-preview')
+      await renderAsync(bytes, body, styles, DOCX_PREVIEW_OPTIONS)
+      if (cancelled) return
+      setDocxState({
+        key: requestKey,
+        status: 'ready',
+        html: buildDocxSrcdoc({
+          bodyHtml: body.innerHTML,
+          // textContent, not innerHTML: docx-preview fills the style container
+          // with a <style> element, and nesting that inside our own <style>
+          // turns the rules into text.
+          styleText: styles.textContent || '',
+          title: file?.filename || preview?.title || '',
+        }),
+        error: '',
+      })
+    }
+    render().catch((cause) => {
+      if (!cancelled) {
+        setDocxState({ key: requestKey, status: 'error', html: '', error: cause?.message || String(cause) })
+      }
+    })
+    return () => { cancelled = true }
+  }, [requestKey, file?.filename, preview?.title])
+
+  if (!requestKey) {
+    return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} />
+  }
+  if (!current) {
+    return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.docxRendering')} />
+  }
+  if (current.status === 'ready') {
+    return (
+      <iframe
+        data-testid="docx-layout-frame"
+        // Empty sandbox: no scripts, no same-origin, no forms, no downloads.
+        sandbox=""
+        srcDoc={current.html}
+        title={file?.filename || preview?.title || 'document'}
+        className="h-full w-full border-0 bg-paper"
+      />
+    )
+  }
+  // Never lose the document because the faithful renderer failed: fall back to
+  // the extracted blocks and say so.
+  return (
+    <div className="flex h-full flex-col overflow-auto">
+      <p className="px-4 pt-3 text-xs text-ink-fade" data-testid="docx-render-degraded">
+        {t('chatPreview.docxRenderingFallback')}
+      </p>
+      <DocxPreview blocks={preview?.blocks || []} title={preview?.title} />
+    </div>
+  )
 }
 
 function PptxFileRenderer(props) {

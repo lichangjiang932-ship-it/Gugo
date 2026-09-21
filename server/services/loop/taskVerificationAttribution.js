@@ -31,12 +31,28 @@ function normalizePathList(value, limit = 16) {
   return [...paths]
 }
 
+const MAX_DIAGNOSTIC_SCAN_CHARS = 20_000
+// A passing line and a failing line for the same file differ only by this
+// marker. Both ends of the log are scanned because a failing check reports at
+// the end while an early configuration error prints at the start.
+const FAILURE_LINE_RE = /(?:^|\s)(?:FAIL|FAILED|FAILURES|ERROR|AssertionError|Traceback)\b/u
+
 export function diagnosticPaths(result) {
-  const source = [result?.stderr, result?.stdout, result?.error]
+  const text = [result?.stderr, result?.stdout, result?.error]
     .map((value) => String(value || ''))
     .join('\n')
-    .slice(0, 20_000)
-  return normalizePathList(source.match(DIAGNOSTIC_PATH_PATTERN) || [])
+  const window = [
+    text.slice(-MAX_DIAGNOSTIC_SCAN_CHARS),
+    text.slice(0, MAX_DIAGNOSTIC_SCAN_CHARS),
+  ].join('\n')
+  // Failure lines take the bounded path budget first: otherwise a long run of
+  // passing cases fills it and attribution degrades to every in-scope target.
+  const failurePaths = window
+    .split('\n')
+    .filter((line) => FAILURE_LINE_RE.test(line))
+    .join('\n')
+    .match(DIAGNOSTIC_PATH_PATTERN) || []
+  return normalizePathList([...failurePaths, ...(window.match(DIAGNOSTIC_PATH_PATTERN) || [])])
 }
 
 function comparablePath(value) {

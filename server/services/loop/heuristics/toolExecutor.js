@@ -7,6 +7,7 @@ import { dispatchCodeSearchTool } from '../../../utils/codeSearch.js'
 import { dispatchCodingAgentTool } from '../../../adapters/codingAgentTools.js'
 import { dispatchFsShellTool } from '../../../adapters/fsShellTools.js'
 import { dispatchGitTool } from '../../../adapters/gitWorkbench.js'
+import { dispatchGitHistoryTool, isGitHistoryTool } from '../../../adapters/gitHistoryTools.js'
 import { dispatchImageTool } from '../../../adapters/imageTools.js'
 import { dispatchMediaTool } from '../../../adapters/mediaTools.js'
 import { dispatchMemoryTool } from '../../../utils/memoryTools.js'
@@ -350,6 +351,13 @@ async function executeAgentOrExternalTool(context, registeredTool) {
         signal,
         budget,
         approvalContext,
+      })
+    } catch (error) { return { ok: false, error: error?.message || String(error) } }
+  }
+  if (isGitHistoryTool(name)) {
+    try {
+      return await dispatchGitHistoryTool(name, args || {}, {
+        userId: job?.userId || null, cwd: args?.cwd,
       })
     } catch (error) { return { ok: false, error: error?.message || String(error) } }
   }

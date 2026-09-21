@@ -17,6 +17,7 @@ import {
 import { ArtifactReferenceLinks } from '../ArtifactCards.jsx'
 import ActivityStream from '../ActivityStream.jsx'
 import TaskProgressTable from './TaskProgressTable.jsx'
+import TrajectoryEntries from './TrajectoryEntries.jsx'
 import {
   ExecutionDisclosure,
   TimelineSegments,
@@ -28,6 +29,7 @@ import {
 import { failurePresentation } from './failurePresentation.js'
 import { assistantTimelinePresentation, stableTimelineSegments } from './timelinePresentation.js'
 import { assistantPublicTimeline } from '../../../../lib/assistantPublicTimeline.js'
+import { parseAgentReportSections } from '../../../../../shared/agentReportSections.js'
 
 export default function AssistantAnswer({
   artifactPreview,
@@ -80,7 +82,22 @@ export default function AssistantAnswer({
   const publicView = assistantPublicTimeline(msg, authoredContent)
   const timeline = stableTimelineSegments(publicView.content, publicView.toolCalls)
   const presentation = assistantTimelinePresentation(timeline)
-  const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
+  // The model writes plain-text ReAct sections; the front end owns grouping and
+  // markup. A message without markers (older turns, other flows) keeps the
+  // previous rendering exactly: the report falls back to the whole answer.
+  const sections = parseAgentReportSections(presentation.answer)
+  const hasReport = sections.hasMarkers && sections.reportFound
+  // Three cases, and each one is deliberate:
+  //   markers + report  -> top level is the report, steps are folded.
+  //   markers, no report -> the model wrote only steps, so the steps *are* the
+  //     answer: keep them open instead of showing raw `【Thought】` as prose.
+  //   no markers        -> unchanged legacy rendering (the whole answer).
+  const reportText = hasReport
+    ? sections.report
+    : (sections.hasMarkers ? '' : presentation.answer)
+  const hasTrajectory = sections.trajectory.length > 0
+  const keepStepsOpen = sections.hasMarkers ? !hasReport : presentation.hasPublicNarration
+  const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0 || hasTrajectory
   const preExecutionFailure = isPreExecutionFailure(msg)
   const { modelSetupFailure, runtimeRestartRequired } = failurePresentation(msg)
   const failedRetryRejection = hasStructuredFailure
@@ -92,10 +109,10 @@ export default function AssistantAnswer({
   // failed, interrupted, paused, cancelled, and recovery-blocked turns.
   // Derive missing presentation copy at render time so reloads and language
   // changes never treat server-localized error prose as assistant output.
-  const visibleAnswer = (presentation.answer
-    ? (failedRetryRejectionDetail && !presentation.answer.includes(failedRetryRejectionDetail)
-        ? `${presentation.answer}\n\n${failedRetryRejectionDetail}`
-        : presentation.answer)
+  const visibleAnswer = (reportText
+    ? (failedRetryRejectionDetail && !reportText.includes(failedRetryRejectionDetail)
+        ? `${reportText}\n\n${failedRetryRejectionDetail}`
+        : reportText)
     : '')
     || (msg.meta?.paused === true
       ? getVisibleTurnClarification(msg.meta?.serverClarification, t)
@@ -114,7 +131,7 @@ export default function AssistantAnswer({
             hasExecution={hasExecution}
             msg={msg}
             running={isCurrentStreamingMessage}
-            preserveNarration={presentation.hasPublicNarration}
+            preserveNarration={keepStepsOpen}
             t={t}
           >
             <TimelineSegments
@@ -124,6 +141,7 @@ export default function AssistantAnswer({
               segments={presentation.execution}
               streaming={isCurrentStreamingMessage}
             />
+            <TrajectoryEntries entries={sections.trajectory} t={t} />
             {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
             {isCurrentStreamingMessage && <TaskProgressTable progress={msg.meta?.progress} />}
           </ExecutionDisclosure>

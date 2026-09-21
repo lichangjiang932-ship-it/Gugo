@@ -393,7 +393,17 @@ export function setGoalStepStatus({
   }
   const stepRow = db.prepare('SELECT * FROM goal_plan_steps WHERE plan_id = ? AND id = ?')
     .get(String(planId), String(stepId))
-  if (!stepRow) fail(GOAL_PLAN_ERROR_CODES.STEP_NOT_FOUND, 'goal plan step not found')
+  if (!stepRow) {
+    // The service assigns step ids, so a caller that supplied its own ids in
+    // `steps` never sees them again. Naming the real ones turns a dead end into
+    // a one-line fix instead of a bare "not found".
+    const available = db.prepare(
+      'SELECT id, title FROM goal_plan_steps WHERE plan_id = ? ORDER BY ordinal LIMIT 10',
+    ).all(String(planId)).map((row) => `${row.id} (${row.title})`)
+    const requested = String(stepId || '').trim() || '(none supplied)'
+    const known = available.length > 0 ? `; this plan has ${available.join(', ')}` : ''
+    fail(GOAL_PLAN_ERROR_CODES.STEP_NOT_FOUND, `goal plan step not found: ${requested}${known}`)
+  }
   const nextStatus = String(status || '').trim()
   if (!GOAL_STEP_STATUSES.includes(nextStatus)) {
     fail(GOAL_PLAN_ERROR_CODES.INVALID_INPUT, `invalid step status ${status}`)

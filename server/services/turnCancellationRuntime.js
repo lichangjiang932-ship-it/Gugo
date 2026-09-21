@@ -39,6 +39,19 @@ function cancellationAbortError() {
   })
 }
 
+/**
+ * A user pause is a *stop that can be continued*, not a cancellation: the loop
+ * finishes the turn as `paused` (non-terminal, checkpoint kept) so resuming
+ * continues the same task instead of restarting it. The distinct code is what
+ * the iteration boundary keys on.
+ */
+export function pauseAbortError() {
+  return Object.assign(new Error('Paused by user'), {
+    name: 'AbortError',
+    code: 'TURN_PAUSE_REQUESTED',
+  })
+}
+
 function replayedAssistantText(events) {
   let text = ''
   for (const event of Array.isArray(events) ? events : []) {
@@ -77,6 +90,14 @@ async function cancellingProjection(getTurn, scope) {
   const lastEvent = turn?.lastEvent
   const settledStatus = settledTurnStatus(lastEvent)
   return settledStatus ? { ...turn, status: settledStatus } : { ...turn, status: 'cancelling' }
+}
+
+async function pausingProjection(getTurn, scope) {
+  const turn = await getTurn(scope)
+  const lastEvent = turn?.lastEvent
+  return lastEvent && isTerminalTurnEventType(lastEvent.type)
+    ? { ...turn, status: settledTurnStatus(lastEvent) || turn.status }
+    : { ...turn, status: 'pausing' }
 }
 
 export function validateDirectoryPausedSequence(value) {
@@ -359,6 +380,37 @@ export function createTurnCancellationRuntime({
       }
 
       return cancelWithExecutionLease(ports, scope, cancellationLease)
+    },
+
+    /**
+     * Stop the running turn so the user can continue it later.
+     *
+     * Only the process that owns the turn can pause it: pause has to reach the
+     * live loop and let it persist a resumable checkpoint, which a remote
+     * worker cannot do on this process's behalf. Reporting a conflict is honest;
+     * silently doing nothing would leave a button that lies.
+     */
+    async pause({ userId, sessionId, turnId, authMode = null }) {
+      const scope = { userId, sessionId, turnId }
+      if (!await ports.readSession({ userId, sessionId }) && authMode === 'local') {
+        await ports.claimLegacySession({ userId, sessionId, authMode })
+      }
+      const running = ports.readActiveTurn(scope)
+      if (running) {
+        ports.abortActiveTurn(running, pauseAbortError())
+        ports.releaseApproval(scope)
+        return pausingProjection(ports.getTurn, scope)
+      }
+      const last = await ports.lastEvent(scope)
+      if (!last) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
+      if (isTerminalTurnEventType(last.type)) return await ports.getTurn(scope)
+      const error = new TurnEngineError(
+        'TURN_PAUSE_UNAVAILABLE',
+        'this turn is not running here, so it cannot be paused; only cancel/resume apply',
+        409,
+      )
+      error.retryable = false
+      throw error
     },
   })
 }

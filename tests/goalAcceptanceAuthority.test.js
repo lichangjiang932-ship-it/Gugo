@@ -139,3 +139,31 @@ test('goal bookkeeping cannot certify work or reset a real failure sequence', ()
   assert.equal(state.failureRecovery.count, 2)
   assert.equal(state.pendingFailureRecoveryPrompt, true)
 })
+
+test('an unknown step id names the plan steps that do exist', () => {
+  const plan = createGoalPlan({ userId, sessionId: 'authority-session', objective: 'Name the steps',
+    requireApproval: false, steps: [{ title: 'First step' }, { title: 'Second step' }] })
+  let error = null
+  try {
+    setGoalStepStatus({ userId, planId: plan.id, stepId: 'hand-authored-id', status: 'in_progress' })
+  } catch (thrown) {
+    error = thrown
+  }
+  assert.equal(error?.code, 'GOAL_PLAN_STEP_NOT_FOUND')
+  // The service assigns step ids, so a caller that supplied its own needs the
+  // real ones to recover instead of a bare "not found".
+  assert.match(error.message, /hand-authored-id/u)
+  for (const step of plan.steps) {
+    assert.ok(error.message.includes(step.id), `the error must list ${step.id}`)
+    assert.ok(error.message.includes(step.title), `the error must name ${step.title}`)
+  }
+})
+
+test('a missing step id is reported as not supplied, not as an empty match', () => {
+  const plan = createGoalPlan({ userId, sessionId: 'authority-session', objective: 'Missing step id',
+    requireApproval: false, steps: [{ title: 'Only step' }] })
+  assert.throws(
+    () => setGoalStepStatus({ userId, planId: plan.id, stepId: '', status: 'in_progress' }),
+    (error) => error?.code === 'GOAL_PLAN_STEP_NOT_FOUND' && /none supplied/u.test(error.message),
+  )
+})

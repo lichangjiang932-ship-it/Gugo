@@ -31,6 +31,7 @@ export default function ChatComposer({
   selectedModelProviderId,
   isGenerating,
   onAbort,
+  onPause,
   onCancelMessageEdit,
   onFileChange,
   onToggleContext,
@@ -269,12 +270,14 @@ export default function ChatComposer({
             contextPanelOpen={contextPanelOpen}
             contextUsage={contextUsage}
             hasDraftText={Boolean(String(input || '').trim())}
+            hasAttachments={Array.isArray(attachments) && attachments.length > 0}
             fileInputRef={fileInputRef}
             isGenerating={isGenerating}
             modelOptions={modelOptions}
             modelReadiness={modelReadiness}
             modelPickerOpen={modelPickerOpen}
             onAbort={onAbort}
+            onPause={onPause}
             onApprovalModeChange={onApprovalModeChange}
             onCloseModelPicker={onCloseModelPicker}
             onFileChange={onFileChange}

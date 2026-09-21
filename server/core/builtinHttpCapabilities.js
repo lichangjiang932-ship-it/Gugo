@@ -26,6 +26,7 @@ import { handleMcpRequest } from '../routes/mcpRoutes.js'
 import { handleSubagentRequest } from '../routes/subagentRoutes.js'
 import { handleCompactionRequest } from '../routes/compactionRoutes.js'
 import { handleKnowledgeGraphRequest } from '../routes/knowledgeGraphRoutes.js'
+import { handleUsageRequest } from '../routes/usageRoutes.js'
 import { handleReasonixRequest } from '../routes/reasonixRoutes.js'
 import { handleNotificationRequest } from '../routes/notificationRoutes.js'
 import { handleApprovalRequest } from '../routes/approvalRoutes.js'
@@ -126,6 +127,7 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.turns', 5_700, ['/api/turns']),
   descriptor('builtin.side-effects', 5_650, ['/api/side-effects']),
   descriptor('builtin.audit', 5_600, ['/api/audit']),
+  descriptor('builtin.usage', 5_550, ['/api/usage/']),
   descriptor('builtin.evolution', 5_500, ['/api/evolution']),
 ])
 
@@ -217,6 +219,11 @@ export function createBuiltinHttpCapabilities({
         '/api/system/user-data',
       ]),
       (req, res) => handleRuntimeConfigRequest(req, res, { cwd, env: getEnv() }),
+    ),
+    capability(
+      'builtin.usage',
+      (req) => req.url?.startsWith('/api/usage/'),
+      (req, res) => handleUsageRequest(req, res),
     ),
     capability(
       'builtin.system.diagnostics',

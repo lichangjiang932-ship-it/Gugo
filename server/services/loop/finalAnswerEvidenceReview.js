@@ -8,7 +8,10 @@ const MAX_ARGUMENT_CHARS = 800
 const MAX_RESULT_CHARS = 1_600
 const MEDIA_MIME_RE = /^(?:image|audio|video)\//iu
 const MEDIA_KIND_RE = /^(?:image|audio|video|media)$/iu
-const MEDIA_CONTAINER_RE = /^(?:image|audio|video|media)$/iu
+// Matches a field name whose children are media, which is usually plural.
+// Without the plural forms `{ images: [{ data: '<base64>' }] }` kept its payload
+// because a bare `images` key never matched the single-value kind pattern.
+const MEDIA_CONTAINER_RE = /^(?:images?|audios?|videos?|media|attachments?)$/iu
 const MEDIA_PAYLOAD_RE = /^(?:data|base64|dataUrl|dataUri)$/iu
 const INLINE_MEDIA_RE = /^data:(?:image|audio|video)\/[^;,]+;base64,/iu
 

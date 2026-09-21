@@ -4,6 +4,7 @@ import { parseConfigArgs } from './configCommand.js'
 import { GOAL_BOOLEAN_FLAGS, parseGoalArgs } from './goalCommand.js'
 import { MEMORY_BOOLEAN_FLAGS, parseMemoryArgs } from './memoryCommand.js'
 import { TRACE_BOOLEAN_FLAGS, parseTraceArgs } from './traceCommand.js'
+import { USAGE_BOOLEAN_FLAGS, parseUsageArgs } from './usageCommand.js'
 import { parseCommandFlags, sessionShowArgs } from './serverCommands.js'
 
 const HELP_FLAGS = new Set(['--help', '-h'])
@@ -69,10 +70,18 @@ const COMMANDS = {
     usage: ['trace <turnId> [--session-id <id>] [--limit <n>] [--export text|json|otel] [--json]'],
     notes: ['--json is shorthand for --export json. It cannot be combined with another export format.'],
   },
+  usage: {
+    description: 'Report persisted token usage and cache hits without running a turn.',
+    usage: ['usage [--session-id <id>] [--since <yyyy-mm-dd[Thh:mm]|epochMs>] [--limit <n>] [--export text|json|csv] [--json]'],
+    notes: ['Usage is derived from persisted Turn events, so turns recorded before this command existed are included.',
+      'Turn totals are authoritative; the per-model breakdown covers surviving model phases and can be smaller after context compaction.',
+      '--json is shorthand for --export json. It cannot be combined with another export format.'],
+  },
   'goal create': {
     description: 'Create a local goal plan with explicit steps.',
     usage: ['goal create ("<objective>" | --objective <text>) (--steps <json> | --steps-file <path>) [--session-id <id>] [--no-approval]'],
     notes: ['Choose one objective source and one steps source. Steps must be a non-empty JSON array.',
+      'Each step supplies title and optional acceptance; the service assigns step ids, so an id in the JSON is ignored.',
       'Plans require approval by default; --no-approval only changes plan approval, not tool permissions.'],
   },
   'goal list': {
@@ -91,7 +100,8 @@ const COMMANDS = {
       '          [--turn <turnId>] [--tool-call <id>] [--note <text>]',
       '          [--manual-confirm] [--confirmed-by <who>] [--expect-version <n>]',
     ],
-    notes: ['Completion requires matching persisted evidence; a status flag alone is not proof of completion.'],
+    notes: ['Completion requires matching persisted evidence; a status flag alone is not proof of completion.',
+      '<stepId> is the id assigned at creation; read it from `goal show <planId>`.'],
   },
   'goal rewrite': {
     description: 'Replace the steps of a local goal plan.',
@@ -214,6 +224,7 @@ function booleanFlags(command) {
   if (command.startsWith('goal')) return GOAL_BOOLEAN_FLAGS
   if (command.startsWith('memory')) return MEMORY_BOOLEAN_FLAGS
   if (command === 'trace') return TRACE_BOOLEAN_FLAGS
+  if (command === 'usage') return USAGE_BOOLEAN_FLAGS
   if (command === 'doctor') return ['--headless', '--probe', '--integrity', '--json']
   if (command === 'config') return ['--json']
   if (command === 'run' || command === 'chat') return ['--progress']
@@ -249,6 +260,7 @@ function validateHelpArgs({ command, args }, parseRunArgs) {
   if (command === 'doctor') return parseDoctorArgs(args)
   if (command === 'config') return parseConfigArgs(args)
   if (command === 'trace') return parseTraceArgs(args, { help: true })
+  if (command === 'usage') return parseUsageArgs(args, { help: true })
   if (command.startsWith('goal ')) return parseGoalArgs([command.slice(5), ...args], { help: true })
   if (command.startsWith('memory ')) return parseMemoryArgs([command.slice(7), ...args], { help: true })
   if (command === 'session show') {

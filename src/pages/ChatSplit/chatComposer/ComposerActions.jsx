@@ -1,4 +1,4 @@
-import { Plus, Send, Square } from 'lucide-react'
+import { Pause, Plus, Send, Square } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import PermissionModeSwitcher from '../../../components/PermissionModeSwitcher.jsx'
 import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
@@ -34,11 +34,13 @@ export default function ComposerActions({
   contextUsage,
   fileInputRef,
   hasDraftText = false,
+  hasAttachments = false,
   isGenerating,
   modelReadiness = { kind: 'ready', canSend: true },
   modelOptions,
   modelPickerOpen,
   onAbort,
+  onPause,
   onApprovalModeChange,
   onCloseModelPicker,
   onFileChange,
@@ -55,9 +57,16 @@ export default function ComposerActions({
 }) {
   const contextPopoverRef = useRef(null)
   const readinessMessageKey = modelReadinessMessageKey(modelReadiness)
-  const primaryActionStopsTurn = isGenerating && !hasDraftText
-  const primaryActionLabel = primaryActionStopsTurn
-    ? t('chatComposer.stop')
+  // A ready or pending attachment is draft content: the product rule is that an
+  // attachment never turns send into pause, so a stray tap cannot freeze a turn
+  // the user was still composing for. Only an empty draft pauses.
+  // Pausing is its own action; without a handler it degrades to the previous
+  // stop behaviour rather than becoming a dead button.
+  const requestPause = typeof onPause === 'function' ? onPause : onAbort
+  const hasDraftContent = hasDraftText || hasAttachments
+  const primaryActionPausesTurn = isGenerating && !hasDraftContent
+  const primaryActionLabel = primaryActionPausesTurn
+    ? t('chatComposer.pause')
     : !isGenerating && readinessMessageKey
       ? t(readinessMessageKey)
       : t('chatComposer.send')
@@ -162,14 +171,14 @@ export default function ComposerActions({
         <button
           type="button"
           data-testid="composer-primary-action"
-          onClick={primaryActionStopsTurn ? onAbort : onSend}
-          disabled={!isGenerating && sendDisabled}
+          onClick={primaryActionPausesTurn ? requestPause : onSend}
+          disabled={primaryActionPausesTurn ? false : sendDisabled}
           title={primaryActionLabel}
           aria-label={primaryActionLabel}
           className="chat-composer-primary-action flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-35"
         >
-          {primaryActionStopsTurn
-            ? <Square className="h-3.5 w-3.5 fill-current text-paper" />
+          {primaryActionPausesTurn
+            ? <Pause className="h-3.5 w-3.5 text-paper" />
             : <Send className="h-3.5 w-3.5 text-paper" />}
         </button>
       </div>

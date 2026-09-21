@@ -17,7 +17,7 @@ import {
 
 export { CliOutputError } from './runOutputStream.js'
 export { formatProgressEvent, formatRunError, normalizeRunOutputFormat } from './runDiagnostics.js'
-export function formatRunEvent(event, { format = 'jsonl' } = {}) {
+export function formatRunEvent(event, { format = 'jsonl', interactive = true } = {}) {
   const resolvedFormat = normalizeRunOutputFormat(format)
   if (resolvedFormat === 'jsonl') {
     return Object.freeze({ stdout: `${JSON.stringify(event)}\n`, stderr: null })
@@ -25,7 +25,7 @@ export function formatRunEvent(event, { format = 'jsonl' } = {}) {
   if (completedEventSucceeded(event)) {
     return Object.freeze({ stdout: line(event?.payload?.text), stderr: null })
   }
-  const diagnostic = terminalDiagnostic(event)
+  const diagnostic = terminalDiagnostic(event, { interactive })
   if (!diagnostic) return Object.freeze({ stdout: null, stderr: null })
   // Text mode treats stdout as a successful-result channel. Partial model
   // output remains available in JSONL but must not look like a completed
@@ -77,6 +77,7 @@ export function createRunOutputFormatter({
   format = 'jsonl',
   progress = false,
   liveText = false,
+  interactive = true,
   stdout = process.stdout,
   stderr = process.stderr,
 } = {}) {
@@ -123,7 +124,7 @@ export function createRunOutputFormatter({
     if (rejected) throw rejected.reason
   }
   const writeEvent = (event) => {
-    const output = formatRunEvent(event, { format: resolvedFormat })
+    const output = formatRunEvent(event, { format: resolvedFormat, interactive })
     const progressLine = progress ? formatProgressEvent(event) : null
     return enqueue(async () => {
       if (live && finalized) return output
@@ -176,7 +177,7 @@ export function createRunOutputFormatter({
       && (returnedTerminal.type === 'turn.completed' || terminalDescriptor(returnedTerminal))) {
       terminalObserver.observe(returnedTerminal)
       observedTurnTerminal = terminalObserver.terminal
-      const returnedOutput = formatRunEvent(returnedTerminal, { format: resolvedFormat })
+      const returnedOutput = formatRunEvent(returnedTerminal, { format: resolvedFormat, interactive })
       if (resolvedFormat === 'text') {
         pendingCompletedText = returnedOutput.stdout
         pendingTerminalDiagnostic = returnedOutput.stderr

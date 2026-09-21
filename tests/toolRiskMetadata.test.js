@@ -48,7 +48,7 @@ test('every builtin spec carries a complete explicit risk declaration', () => {
   const names = listBuiltinNames()
   // A count guard, not a frozen list: any new built-in tool must be declared
   // here with complete risk metadata before it can ship.
-  assert.equal(names.length, 64)
+  assert.equal(names.length, 66)
   for (const name of names) {
     const spec = getBuiltinSpec(name)
     assert.ok(spec?.metadata, `${name} metadata`)
