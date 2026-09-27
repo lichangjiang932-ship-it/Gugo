@@ -6,11 +6,18 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Preparing 0.11.63. Tag `v0.11.62` remains at main commit `d353d78` as the record of a failed
-publication attempt: its required-gates stage stopped at the offline capability eval, which requires
-the plugin host version to match the package version — a sync the local suite cannot catch, because
-the test runner excludes that eval file. No Release and no release assets were published for
-`v0.11.62`, its tag is not moved or reused, and 0.11.63 carries its own release verification.
+Preparing 0.11.64. Two publication attempts are on record and neither is moved or reused:
+
+- `v0.11.62` (main commit `d353d78`) stopped at the required-gates stage: the offline capability eval
+  requires the plugin host version to match the package version, a sync the bump left behind, and the
+  test runner excludes that eval file — so the local suite could not catch it.
+- `v0.11.63` (main commit `7d3afa5`) stopped at the same stage on a platform-bound test: the desktop
+  terminal host's assertion compared the reported ConPTY metadata against a literal Windows build
+  number, which no Linux runner can produce. The test now compares against the resolver's own answer
+  for that platform, and the offline eval is part of the verified-green line in every release commit.
+
+No Release and no release assets were published for either tag; 0.11.64 carries its own release
+verification.
 
 This release carries the desktop browser and sidebar work, the real terminal, the conversation change
 review, the experience-to-memory pipeline, and the Git workbench's commit and push actions. The

@@ -106,7 +106,10 @@ test('a session is started for the trusted frame only, sized within limits', () 
   assert.equal(started.ok, true)
   assert.equal(started.id, 'terminal-1')
   assert.equal(started.shell, 'C:\\Windows\\system32\\cmd.exe')
-  assert.deepEqual(started.windowsPty, { backend: 'conpty', buildNumber: 26200 })
+  // Compared against the resolver's own answer for this host's platform: the
+  // build number comes from the machine actually running the test, so a literal
+  // would only pass on the maintainer's Windows box.
+  assert.deepEqual(started.windowsPty, resolveWindowsPty({ platform: 'win32' }))
   assert.equal(started.cols, TERMINAL_MAX_COLS)
   assert.equal(started.rows, 5)
   assert.equal(ptys[0].killed, 0)
