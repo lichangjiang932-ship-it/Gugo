@@ -341,6 +341,16 @@ async function settleCompletedResult(runtime, context) {
   } catch (error) {
     logWarn('turn.memory_extraction_schedule', error, { userId, sessionId, turnId })
   }
+  try {
+    // The journal accumulates one episode at a time; this only pays for a model
+    // call once it has earned one (see experienceAbstraction).
+    runtime.ports.scheduleExperienceAbstraction?.({
+      userId,
+      callModel: ({ messages }) => runtime.ports.runMemoryModel({ messages, userId }),
+    })
+  } catch (error) {
+    logWarn('turn.experience_abstraction_schedule', error, { userId, sessionId, turnId })
+  }
 }
 
 async function settleResult(runtime, context) {
@@ -409,6 +419,7 @@ export function createTurnTerminalOutcomeRuntime({
   commitTurnBoundary = null,
   dispatchHooks = null,
   scheduleMemoryExtraction,
+  scheduleExperienceAbstraction = null,
   runMemoryModel,
 } = {}) {
   const runtime = {
@@ -418,6 +429,10 @@ export function createTurnTerminalOutcomeRuntime({
       commitTurnBoundary: typeof commitTurnBoundary === 'function' ? commitTurnBoundary : null,
       dispatchHooks: typeof dispatchHooks === 'function' ? dispatchHooks : null,
       scheduleMemoryExtraction: requirePort('scheduleMemoryExtraction', scheduleMemoryExtraction),
+      // Optional: the experience journal lives in a workspace that may not be
+      // writable, and a missing abstraction hook must not fail a finished turn.
+      scheduleExperienceAbstraction: typeof scheduleExperienceAbstraction === 'function'
+        ? scheduleExperienceAbstraction : null,
       runMemoryModel: requirePort('runMemoryModel', runMemoryModel),
     },
   }

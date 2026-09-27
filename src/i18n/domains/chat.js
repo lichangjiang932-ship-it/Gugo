@@ -1,5 +1,16 @@
 const translations = {
   "zh": {
+    "changes": {
+      "title": "本次改动",
+      "toggle": "查看本次对话改动的文件",
+      "toggleCount": "本次对话改动了 {count} 个文件",
+      "summary": "{count} 个文件",
+      "totals": "+{additions} −{deletions}",
+      "empty": "本次对话还没有改动过文件。",
+      "scriptOnly": "由脚本产生，没有记录到具体的编辑内容。",
+      "readOnly": "只读审查：这里不会提交或推送，提交请用终端或 Git 工作台。",
+      "close": "关闭改动清单"
+    },
     "contextUsage": {
       "compactLabel": "上下文（估算）",
       "openDetails": "查看上下文占用明细",
@@ -93,6 +104,17 @@ const translations = {
     }
   },
   "en": {
+    "changes": {
+      "title": "Changes in this conversation",
+      "toggle": "Show the files this conversation changed",
+      "toggleCount": "This conversation changed {count} files",
+      "summary": "{count} file(s)",
+      "totals": "+{additions} -{deletions}",
+      "empty": "This conversation has not changed any files yet.",
+      "scriptOnly": "Produced by a script; no edit was recorded.",
+      "readOnly": "Read-only review: nothing here commits or pushes. Use the terminal or the Git workbench to commit.",
+      "close": "Close the change list"
+    },
     "contextUsage": {
       "compactLabel": "Context (estimated)",
       "openDetails": "View context usage details",

@@ -9,6 +9,7 @@ import { createTurnExecutionToolContextRuntime } from './turnExecutionToolContex
 import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
 import { createTurnCanaryOutcomeRuntime } from './turnCanaryOutcomeRuntime.js'
 import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
+import { scheduleExperienceAbstraction } from './experienceAbstraction.js'
 import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import { resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions } from './toolImplementationRevision.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
@@ -69,6 +70,7 @@ export class TurnEngine {
     recordCanaryOutcome = recordEvolutionCanaryOutcome,
     resolveToolSpecs = resolveTurnToolSpecs,
     scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
+    scheduleExperienceAbstraction: scheduleExperienceAbstractionDep = scheduleExperienceAbstraction,
     runMemoryModel = missingTurnModelRuntime,
     getContextWindow = () => undefined,
     readFileAccessStatus = getLocalFileAccessStatus,
@@ -205,6 +207,12 @@ export class TurnEngine {
       scheduleMemoryExtraction: (input) => {
         if (this.autoMemoryController.signal.aborted) return
         return this.deps.scheduleMemoryExtraction({
+          ...input, signal: this.autoMemoryController.signal,
+        })
+      },
+      scheduleExperienceAbstraction: (input) => {
+        if (this.autoMemoryController.signal.aborted) return
+        return scheduleExperienceAbstractionDep({
           ...input, signal: this.autoMemoryController.signal,
         })
       },

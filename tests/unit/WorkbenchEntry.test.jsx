@@ -42,12 +42,10 @@ test('the entry page lists every tool with the key that reaches it', async () =>
     rows[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   assert.deepEqual(picked, ['browser'])
-  // Git is not a panel tab: its row navigates to the full Git workbench page.
-  const gitRow = document.querySelector('[data-testid="workbench-entry-git"]')
-  assert.ok(gitRow)
-  await act(async () => {
-    gitRow.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  })
-  assert.equal(window.location.hash, '#/git')
+  // The panel offers the three tools and nothing that leaves the conversation:
+  // the Git workbench is not reached from here (it is a page, not a tab).
+  assert.equal(document.querySelector('[data-testid="workbench-entry-git"]'), null)
+  assert.equal(document.querySelectorAll('[data-testid="workbench-entry-row"]').length, 3)
+  assert.equal(window.location.hash, '#/')
   await act(async () => root.unmount())
 })

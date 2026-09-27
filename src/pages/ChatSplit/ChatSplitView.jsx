@@ -4,12 +4,13 @@ import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
 import PermissionRequestCard from './chatMessages/PermissionRequestCard.jsx'
 import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
-import DesktopPet from './DesktopPet.jsx'
+import ChatDesktopPetHost from './chatSplitView/ChatDesktopPetHost.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
 import PlanCard from './chatSplitView/PlanCard.jsx'
 import { revealTurnInConversation } from '../../lib/chatMessageSignals.js'
 import { ListChecks } from 'lucide-react'
 import { ChatSessionHeading, ChatWorkbenchToggle } from './chatSplitView/ChatSessionHeader.jsx'
+import SessionChangesReview from './chatSplitView/SessionChangesReview.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import ChatNoticeDocks from './chatSplitView/ChatNoticeDocks.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
@@ -87,6 +88,7 @@ export default function ChatSplitView({
   planVisible,
   planArtifacts = [],
   onClosePlan, onOpenPlan,
+  sessionChangesReview = null,
   workbenchTab,
   previewArtifact,
   previewTabs,
@@ -122,6 +124,7 @@ export default function ChatSplitView({
         <header className="chat-session-header flex h-12 shrink-0 items-center gap-2.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
           <ChatSessionHeading hasWorkspace={hasWorkspace} title={activeSession?.title || t('nav.newChat')} data-testid="chat-session-title" />
           <button type="button" data-testid="header-plan-toggle" aria-pressed={planVisible || undefined} onClick={() => (planVisible ? onClosePlan?.() : onOpenPlan?.())} title={t('workbench.planCardTitle')} aria-label={t('workbench.planCardTitle')} className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"><ListChecks className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" /></button>
+          <SessionChangesReview review={sessionChangesReview} t={t} />
           <ChatWorkbenchToggle
             open={workbenchOpen}
             onClick={onWorkbenchToggle}
@@ -284,15 +287,8 @@ export default function ChatSplitView({
         />
       )}
 
-      {desktopPetVisible && !window.gugoDesktop?.isDesktop && (
-        <DesktopPet
-          onClose={onCloseDesktopPet}
-          isGenerating={isGenerating}
-          messages={messages}
-          tasks={tasks}
-          toolApproval={toolApproval}
-        />
-      )}
+      <ChatDesktopPetHost isGenerating={isGenerating} messages={messages} onClose={onCloseDesktopPet}
+        tasks={tasks} toolApproval={toolApproval} visible={desktopPetVisible} />
     </AppLayout>
   )
 }

@@ -5,6 +5,7 @@ import { useActiveAgent } from '../agents/activeAgentContext.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { deleteMemoryApi, listMemoriesApi, upsertMemoryApi } from '../lib/memoryClient.js'
 import MemoryEditor from './memory/MemoryEditor.jsx'
+import { installSkillFromMemory } from '../lib/skillClient.js'
 import MemoryFilters from './memory/MemoryFilters.jsx'
 import MemoryList from './memory/MemoryList.jsx'
 
@@ -22,6 +23,8 @@ export default function MemoryView() {
   const [filterAgent, setFilterAgent] = useState('all')
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState(null)
+  const [skillInstalling, setSkillInstalling] = useState(false)
+  const [skillInstallError, setSkillInstallError] = useState('')
   const [saving, setSaving] = useState(false)
   const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents])
   const reload = useCallback(async () => {
@@ -39,6 +42,26 @@ export default function MemoryView() {
     })
   }, [filterAgent, filterType, memories, query])
   const handleNew = () => setEditing({ ...emptyMemory(), agentId: !['all', '__global__'].includes(filterAgent) ? filterAgent : null })
+
+  // Installing a proposed skill is the reader's decision, so it is a button here
+  // rather than something the abstraction run does on its own.
+  const handleInstallSkill = async (memory) => {
+    if (!memory?.id) return
+    setSkillInstalling(true)
+    setSkillInstallError('')
+    try {
+      const result = await installSkillFromMemory(memory.id)
+      setEditing({
+        ...memory,
+        frontmatter: { ...(memory.frontmatter || {}), installedSkillId: result.skillId },
+      })
+      await reload()
+    } catch (caught) {
+      setSkillInstallError(caught?.message || String(caught))
+    } finally {
+      setSkillInstalling(false)
+    }
+  }
   const handleSave = async () => {
     if (!editing) return
     setSaving(true)
@@ -66,7 +89,7 @@ export default function MemoryView() {
         <div className="flex min-h-0 flex-1">
           <MemoryList agentNameById={agentNameById} editingId={editing?.id} error={error} items={filtered} loading={loading} onEdit={setEditing} t={t} />
           <div className="flex-1 overflow-auto">
-            <MemoryEditor activeAgentId={activeAgentId} agents={agents} editing={editing} onChange={setEditing} onClose={() => setEditing(null)} onDelete={handleDelete} onSave={handleSave} saving={saving} t={t} types={types} />
+            <MemoryEditor activeAgentId={activeAgentId} agents={agents} editing={editing} onChange={setEditing} onClose={() => setEditing(null)} onDelete={handleDelete} onInstallSkill={handleInstallSkill} onSave={handleSave} saving={saving} skillInstallError={skillInstallError} skillInstalling={skillInstalling} t={t} types={types} />
           </div>
         </div>
       </div>

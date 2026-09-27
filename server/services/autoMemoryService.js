@@ -55,19 +55,35 @@ export function isTransientRuntimeMemoryCandidate(candidate) {
   return RUNTIME_CAPABILITY_SUBJECT.test(text) && RUNTIME_CAPABILITY_STATE.test(text)
 }
 
-function normalizedCandidate(candidate) {
+function normalizeCandidate(candidate) {
   const type = String(candidate?.type || '').trim()
-  if (SENSITIVE_VALUE.test(`${String(candidate?.title || '')}\n${String(candidate?.body || '')}`)) return null
-  const title = String(candidate?.title || '').trim().slice(0, 120)
-  const body = String(candidate?.body || '').trim().slice(0, 4000)
+  const rawTitle = String(candidate?.title || '')
+  const rawBody = String(candidate?.body || '')
+  if (SENSITIVE_VALUE.test(`${rawTitle}\n${rawBody}`)) return { ok: false, reason: 'sensitive' }
+  const title = rawTitle.trim().slice(0, 120)
+  const body = rawBody.trim().slice(0, 4000)
   const confidence = Number(candidate?.confidence)
-  if (!ALLOWED_TYPES.has(type) || !title || !body) return null
-  if (!Number.isFinite(confidence) || confidence < MIN_CONFIDENCE || confidence > 1) return null
-  if (SENSITIVE_VALUE.test(`${title}\n${body}`)) return null
+  if (!ALLOWED_TYPES.has(type)) return { ok: false, reason: 'type' }
+  if (!title || !body) return { ok: false, reason: 'empty' }
+  if (!Number.isFinite(confidence) || confidence < MIN_CONFIDENCE || confidence > 1) {
+    return { ok: false, reason: 'confidence' }
+  }
   // Runtime capabilities and grants are not durable facts. Persisting them can
   // override fresh tool evidence after the environment or authorization changes.
-  if (isTransientRuntimeMemoryCandidate({ title, body })) return null
-  return { type, title, body, confidence }
+  if (isTransientRuntimeMemoryCandidate({ title, body })) return { ok: false, reason: 'runtime_capability' }
+  const provenance = candidate?.provenance
+  return {
+    ok: true,
+    candidate: {
+      type,
+      title,
+      body,
+      confidence,
+      ...(provenance && typeof provenance === 'object' && !Array.isArray(provenance)
+        ? { provenance }
+        : {}),
+    },
+  }
 }
 
 export function shouldExtractAutoMemory(messages = [], assistantText = '') {
@@ -75,6 +91,69 @@ export function shouldExtractAutoMemory(messages = [], assistantText = '') {
   if (!text || text.length < 6 || SIMPLE_GREETING.test(text)) return false
   if (SENSITIVE_VALUE.test(text) || SENSITIVE_VALUE.test(String(assistantText || ''))) return false
   return true
+}
+
+/**
+ * Write model-produced candidates under the discipline this app already applies
+ * to machine-written memories: a memory the reader wrote by hand wins, an
+ * automatic one with the same title and body is updated in place, sensitive
+ * values and runtime-capability claims are refused, and nothing is written once
+ * the turn that produced it was cancelled.
+ *
+ * Shared with the experience pipeline, whose abstraction runs are another such
+ * producer: the guards belong to the store, not to each prompt.
+ */
+export function storeMemoryCandidates({
+  userId = null,
+  agentId = null,
+  sessionId = null,
+  sourceMessageId = null,
+  source = 'auto_chat',
+  candidates = [],
+  signal = null,
+} = {}) {
+  const stored = []
+  const refused = []
+  if (!userId) return { stored, refused }
+  const memoryScope = agentId || null
+
+  for (const raw of Array.isArray(candidates) ? candidates : []) {
+    if (signal?.aborted) break
+    const normalized = normalizeCandidate(raw)
+    if (!normalized.ok) {
+      refused.push({ title: String(raw?.title || '').slice(0, 120), reason: normalized.reason })
+      continue
+    }
+    const candidate = normalized.candidate
+    const memory = withMemoryMatchTransaction({ userId, agentId: memoryScope, includeGlobal: true, signal }, () => {
+      const matchingManual = findExactMemory({ userId, agentId: memoryScope, includeGlobal: true,
+        title: candidate.title, mode: 'automatic', source: 'manual', signal })
+      if (matchingManual) return null
+      const matchingAuto = findExactMemory({ userId, agentId: memoryScope, type: candidate.type,
+        title: candidate.title, body: candidate.body, mode: 'automatic', source: 'auto', signal })
+      return upsertMemory({
+        id: matchingAuto?.id,
+        userId,
+        type: candidate.type,
+        title: candidate.title,
+        body: candidate.body,
+        frontmatter: {
+          ...(matchingAuto?.frontmatter || {}),
+          source,
+          confidence: candidate.confidence,
+          // Provenance belongs to the candidate: two memories from one run can
+          // come from different turns of evidence.
+          ...(candidate.provenance || {}),
+        },
+        pinned: matchingAuto?.pinned || false,
+        sourceSessionId: sessionId,
+        sourceMessageId,
+        agentId: memoryScope,
+      })
+    })
+    if (memory) stored.push(memory)
+  }
+  return { stored, refused }
 }
 
 export async function extractAndStoreAutoMemories({
@@ -118,44 +197,20 @@ export async function extractAndStoreAutoMemories({
   // reopen persistence or write optional memories after the engine closes.
   if (signal?.aborted) return { attempted: true, stored: [], skipped: true }
   const parsed = parseJsonObject(response)
-  const candidates = (Array.isArray(parsed?.memories) ? parsed.memories : [])
-    .slice(0, MAX_MEMORIES_PER_TURN)
-    .map(normalizedCandidate)
-    .filter(Boolean)
-  if (!candidates.length) return { attempted: true, stored: [], skipped: false }
+  const candidates = (Array.isArray(parsed?.memories) ? parsed.memories : []).slice(0, MAX_MEMORIES_PER_TURN)
+  if (!candidates.length) return { attempted: true, stored: [], refused: [], skipped: false }
 
-  const memoryScope = agentId || null
-
-  const stored = []
-  for (const candidate of candidates) {
-    if (signal?.aborted) break
-    const memory = withMemoryMatchTransaction({ userId, agentId: memoryScope, includeGlobal: true, signal }, () => {
-      const matchingManual = findExactMemory({ userId, agentId: memoryScope, includeGlobal: true,
-        title: candidate.title, mode: 'automatic', source: 'manual', signal })
-      if (matchingManual) return null
-      const matchingAuto = findExactMemory({ userId, agentId: memoryScope, type: candidate.type,
-        title: candidate.title, body: candidate.body, mode: 'automatic', source: 'auto', signal })
-      return upsertMemory({
-        id: matchingAuto?.id,
-        userId,
-        type: candidate.type,
-        title: candidate.title,
-        body: candidate.body,
-        frontmatter: {
-          ...(matchingAuto?.frontmatter || {}),
-          source: 'auto_chat',
-          confidence: candidate.confidence,
-        },
-        pinned: matchingAuto?.pinned || false,
-        sourceSessionId: sessionId,
-        sourceMessageId: sourceMessage?.id || null,
-        agentId: memoryScope,
-      })
-    })
-    if (memory) stored.push(memory)
-
-  }
-  return { attempted: true, stored, skipped: false }
+  const { stored, refused } = storeMemoryCandidates({
+    userId,
+    agentId,
+    sessionId,
+    sourceMessageId: sourceMessage?.id || null,
+    source: 'auto_chat',
+    candidates,
+    signal,
+  })
+  if (signal?.aborted) return { attempted: true, stored: [], refused, skipped: true }
+  return { attempted: true, stored, refused, skipped: false }
 }
 
 export function scheduleAutoMemoryExtraction(options = {}) {

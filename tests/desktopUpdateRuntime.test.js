@@ -7,9 +7,11 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  buildUpdatePlan,
   MAX_UPDATE_CHUNK_SIZE,
   MIN_UPDATE_CHUNK_SIZE,
-  buildUpdatePlan,
+} from '../desktop/updatePlan.js'
+import {
   createDesktopUpdateRuntime,
   downloadUpdateArtifact,
   normalizeUpdateBaseUrl,
@@ -291,6 +293,57 @@ test('custom runtime registers the verified installer with electron-updater for 
   assert.equal(calls.dispatched[0].downloadedFile, downloadedPath)
   assert.equal(calls.quit, 1)
   assert.ok(statuses.some((status) => status.mode === 'full' && status.version === '9.9.9'))
+})
+
+test('an update keeps one pending installer instead of every version ever downloaded', async (t) => {
+  const directory = temporaryDirectory(t)
+  const pendingDirectory = path.join(directory, 'pending')
+  fs.mkdirSync(pendingDirectory, { recursive: true })
+  // What a machine looks like after a few updates: every installer it ever took,
+  // plus a half-downloaded one and electron-updater's own bookkeeping.
+  const stale = [
+    'Gugo-Setup-0.11.27-x64.exe',
+    'Gugo-Setup-0.11.52-x64.exe.partial',
+    'Gugo-Setup-0.11.52-x64.exe.partial.json',
+    'Gugo-Setup-9.9.8-x64.exe',
+  ]
+  for (const name of stale) fs.writeFileSync(path.join(pendingDirectory, name), 'old installer')
+  fs.writeFileSync(path.join(pendingDirectory, 'update-info.json'), '{}')
+
+  const payload = Buffer.alloc(64 * 1024, 0x42)
+  const updateInfo = { version: '9.9.9' }
+  const fileInfo = {
+    url: new URL('https://downloads.example/Gugo-Setup-9.9.9-x64.exe'),
+    info: { size: payload.length, sha512: sha512(payload) },
+  }
+  const helper = {
+    cacheDir: directory,
+    cacheDirForPendingUpdate: pendingDirectory,
+    async setDownloadedFile() {},
+  }
+  const runtime = createDesktopUpdateRuntime({
+    updater: {
+      updateInfoAndProvider: { provider: { resolveFiles: () => [fileInfo] }, info: updateInfo },
+      setFeedURL() {},
+      async getOrCreateDownloadHelper() { return helper },
+      computeRequestHeaders() { return {} },
+      async verifySignature() { return null },
+      dispatchUpdateDownloaded() {},
+      addQuitHandler() {},
+    },
+    updateBaseUrl: 'https://downloads.example/gugo',
+    maxAttempts: 1,
+    fetchImpl: async () => new Response('missing blockmap', { status: 404 }),
+    fetchRange: async ({ start, end }) => payload.subarray(start, end),
+    onStatus: () => {},
+  })
+
+  await runtime.startDownload(updateInfo)
+
+  assert.deepEqual(fs.readdirSync(pendingDirectory).sort(), [
+    'Gugo-Setup-9.9.9-x64.exe',
+    'update-info.json',
+  ])
 })
 
 function signatureFixture(t, options = {}) {

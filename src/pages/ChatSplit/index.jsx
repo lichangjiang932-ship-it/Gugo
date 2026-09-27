@@ -10,6 +10,7 @@ import { TASK_STATUS } from '../../store/taskStatus.js'
 import { persistSlashGoals } from '../../lib/slashGoals.js'
 import { recordChatFeedback } from '../../lib/evolutionClient.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
+import useSessionChangesReview from './useSessionChangesReview.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import usePlanCardState from './usePlanCardState.js'
@@ -244,13 +245,14 @@ export default function ChatSplit() {
   // and it reveals the panel, which is what makes the key useful while it is closed.
   useWorkbenchShortcuts({ onSelectTool: (tool) => { setWorkbenchTab(tool); setWorkbenchOpen(true) } })
 
+  const sessionChangesReview = useSessionChangesReview({ messages, onOpen: () => setPlanVisible(false), workspacePath: selectedWorkspacePath || activeSession?.workspacePath || '' })
   return <ChatSplitView
       activeSession={activeSession} activeSessionId={activeSessionId} approvalMode={approvals.approvalSettings?.mode || 'normal'}
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       contextWindowAuthoritative={selectedContextWindowAuthoritative}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
-      planVisible={planCardVisible} planArtifacts={planArtifacts} onOpenPlan={onOpenPlan}
+      sessionChangesReview={sessionChangesReview} planVisible={planCardVisible} planArtifacts={planArtifacts} onOpenPlan={() => { sessionChangesReview.close(); onOpenPlan() }}
       onClosePlan={() => { setPlanVisible(false); setDismissedPlanSignature(planSignature) }}
       modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onPause={handlePause} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
