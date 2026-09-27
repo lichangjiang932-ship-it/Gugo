@@ -6,35 +6,39 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Preparing 0.11.56. Tag `v0.11.55` remains at main commit `3a6c161264ad8b5579b5171e46e3d30111203663` as the record of a failed publication attempt. Its CI, unsigned packaging, `NotSigned` verification, checksum and attestation stages succeeded, but the publisher failed at the draft Release API stage; no public Release or release assets were published for that tag. The tag is not moved or reused, and 0.11.56 requires its own release verification.
+Preparing 0.11.62. This release carries the desktop browser and sidebar work, the real terminal, the
+conversation change review, the experience-to-memory pipeline, and the Git workbench's commit and
+push actions. The Windows build remains explicitly unsigned through the version-bound
+`scripts/release/policy.json`; verification of checksums and build provenance stays required.
 
 ### Added
 
-- Provider-neutral, on-demand semantic context compaction with complete input chunking, bounded map/reduce calls, cancellation, visible fallback, and separately checkpointed summary requests. See `docs/CONTEXT_COMPACTION.md` for controls and limitations.
-- Owner-scoped `read_skill_resource` access to text references and scripts in selected skills. Resources are read-only; binary templates and automatic script execution are not implicitly enabled.
-- A current general-agent audit with concrete capability gaps and release prerequisites in `docs/GENERAL_AGENT_AUDIT_2026-09-07.md`. This work now prepares version 0.11.56; preparation is not proof that a new desktop release has been published.
+- A real terminal in the desktop app: `node-pty` and xterm in the workbench's terminal tab, one shell per panel, opened in the project the reader selected, with the whole process tree released when the panel closes or the app quits. The web build keeps its command console.
+- A docked Chromium browser beside the conversation in the desktop app, with an http(s)/loopback-only URL policy, a hardened partition that denies every permission request, reviewed external opens, and an honest iframe fallback elsewhere.
+- The conversation's change review: a header indicator and a read-only panel listing the files this session's tool calls changed, with the executor's per-file line counts, the recorded edits behind them, and no commit or push action anywhere in it.
+- An experience pipeline: the agent records episodes to `.agent/experience.md` while it works; once the journal has earned it, one model call generalizes the entries into long-term memory, project memory and skill proposals, each item citing the entries it came from; consumed entries move to `experience.archive.md`.
+- One-click installation of a proposed skill from the memory page, through the validated skill-pack path, recording on the proposal which skill it became.
+- Commit and push on the Git workbench page: choose files, write the message, commit; pushing stays a separate, deliberate press.
+- Local model context windows are discovered from the endpoint itself (LM Studio's own catalog), so compaction follows the window the server is actually serving instead of a conservative default.
+- A local usage report with its own routes and settings panel.
+- Semantic code search over a JavaScript/TypeScript symbol index, and Git history tools for the agent.
+- DOCX preview in the direct file preview, and a desktop-only "open in default app / show in folder" menu for local files.
 
 ### Changed
 
-- Explicitly retained unsigned Windows distribution for 0.11.56 through the committed, version-bound `scripts/release/policy.json`, continuing the decision first made for 0.11.55 without configuring certificates. Future version bumps must update the policy; missing credentials or failed signature verification never trigger an automatic downgrade. Both modes retain CI, all five release assets, checksums, GitHub attestations, and immutable published assets.
-- Added the separate `desktop:package:unsigned` path, preserving icon/version resources while disabling executable signing and requiring `NotSigned` on both installer and packaged application. The signed path keeps its certificate, timestamp, and publisher checks.
+- Token estimation charges Han characters at a tokenizer's real rate, shared by the compaction planner and the interface's context meter, instead of one token per character. Chinese conversations are no longer over-estimated by roughly half, which was refusing requests the endpoint had already been serving.
+- The workbench panel is a row with its tool switch in the header; the removed files and Git tabs live on as the panel's front door and the full Git page.
 
 ### Fixed
 
-- Fixed draft Release discovery when the public tag lookup returns 404 by scanning authenticated, bounded, paginated release listings. Recheck the exact numeric Release ID, tag, and mutable draft state before asset changes and publication; reject ambiguous matches or changed identities. Published releases remain immutable and remote tag-to-commit verification stays required.
-- Kept the newest typed/multimodal user request authoritative instead of inheriting an earlier task, while preserving its original attachments.
-- Preserved Gemini native call IDs, thought signatures, and signed text through execution, continuation, and checkpoint replay, with exact provider/model/endpoint binding and separate executable arguments.
-- Recovered manually reconciled summary requests in their original invocation slot, reused archives and completed stages, and accounted for model calls and tokens once without exposing summaries as final answers.
-- Refreshed MCP tool catalogs on declared change notifications, fenced stale lifecycle disposers, and rechecked Codex skill readiness when its source changes.
-- Isolated automatic and explicit memories by Agent scope; updated content, provenance, and links atomically; retained Unicode and stable link identities; excluded recognized credentials from automatic extraction.
-- Honored desktop data-directory overrides consistently and persisted scoped recovery-prompt dismissals across navigation, reloads, and browser windows without suppressing new failures.
+- The attachment budget guard's refusal is recoverable: it is classified as a context-length overflow, so the existing bounded compaction summarizes and retries instead of failing the whole turn.
+- A killed terminal session releases its process tree on Windows and always releases the pty, so a build started in the shell cannot outlive the panel holding file locks.
+- The updater keeps only the pending installer it is about to run, instead of accumulating every version it has ever downloaded.
+- Goal plan schema repair (v121) adds the columns the plan features need to databases created before them.
 
 ### Security
 
-- Restored the updater's configured publisher verification after SHA-512 validation and before cache/ready state, without globally disabling signature checks. Correctly enforcing signed clients reject unsigned updates and require an explicit manual migration; old distributed clients cannot be retroactively fixed. Unsigned releases provide no Authenticode publisher identity, and checksums/provenance do not replace it. See `docs/DESKTOP_RELEASES.md` for SmartScreen and migration limitations.
-- Blocked junction/symlink escapes in plugin skill imports and bound resource reads to the authenticated owner and host-selected skills.
-- Routed remote Markdown images through authenticated, size-limited, SSRF-checked server loading and enforced application-level pure-local policy and preview restrictions. Arbitrary local code still requires an OS boundary for genuine network isolation.
-- Isolated Web release verification before subprocesses run: database, configuration, workspace, temporary files, and package caches stay inside a unique verification directory; inherited credentials and runtime injections are removed and the caller environment is restored even on failure.
+- Local files are never rendered through the embedded browser: it refuses any non-http(s) URL, and the preview pane's open/reveal actions go through the signed desktop file-action path with the app's own fingerprint check.
 
 ## [0.11.54] - 2026-09-06
 
