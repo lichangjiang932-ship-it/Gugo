@@ -6,10 +6,16 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Preparing 0.11.62. This release carries the desktop browser and sidebar work, the real terminal, the
-conversation change review, the experience-to-memory pipeline, and the Git workbench's commit and
-push actions. The Windows build remains explicitly unsigned through the version-bound
-`scripts/release/policy.json`; verification of checksums and build provenance stays required.
+Preparing 0.11.63. Tag `v0.11.62` remains at main commit `d353d78` as the record of a failed
+publication attempt: its required-gates stage stopped at the offline capability eval, which requires
+the plugin host version to match the package version — a sync the local suite cannot catch, because
+the test runner excludes that eval file. No Release and no release assets were published for
+`v0.11.62`, its tag is not moved or reused, and 0.11.63 carries its own release verification.
+
+This release carries the desktop browser and sidebar work, the real terminal, the conversation change
+review, the experience-to-memory pipeline, and the Git workbench's commit and push actions. The
+Windows build remains explicitly unsigned through the version-bound `scripts/release/policy.json`;
+verification of checksums and build provenance stays required.
 
 ### Added
 
