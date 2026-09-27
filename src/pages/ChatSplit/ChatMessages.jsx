@@ -1,5 +1,7 @@
+import { useEffect } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import { messageIndexForTurn, subscribeRevealTurn } from '../../lib/chatMessageSignals.js'
 import MessageRow from './chatMessages/MessageRow.jsx'
 import ChatMiniTimeline from './chatMessages/ChatMiniTimeline.jsx'
 import NewConversationWelcome from './chatMessages/NewConversationWelcome.jsx'
@@ -12,7 +14,6 @@ export default function ChatMessages({
   onSideEffectResolved,
   workbenchMessage,
   isGenerating = false,
-  onEditMessage,
   onForkMessage,
   forkingMessageId = '',
   onManageModels,
@@ -21,13 +22,20 @@ export default function ChatMessages({
   onOpenArtifact,
   onOpenInPreview,
   onExpandCompaction,
-  onQuoteSelection,
   onRetryModelFailure,
   onPromptSelect,
   routeHash = '',
 }) {
   const { t, lang } = useT()
   const viewport = useChatMessageViewport({ messages, routeHash })
+  // A plan step can point at the turn that proved it. The list owns the scrolling
+  // (it may be windowed), so the request arrives as an event and is resolved here,
+  // against the same full-array index the mini timeline uses.
+  const revealTurn = viewport.scrollToTurn
+  useEffect(() => subscribeRevealTurn((turnId) => {
+    const index = messageIndexForTurn(messages, turnId)
+    if (index >= 0) revealTurn(index)
+  }), [messages, revealTurn])
   const {
     hiddenCount,
     visibleMessages,
@@ -41,12 +49,11 @@ export default function ChatMessages({
   const generatingMessageId = isGenerating
     ? [...messages].reverse().find((message) => message?.role === 'assistant')?.id
     : null
-  const latestUserMessageId = [...messages].reverse().find((message) => message?.role === 'user')?.id
 
   return (
     <div className="chat-messages-shell relative min-h-0 flex-1">
       <div ref={bindContainer} className="chat-scroll-region relative h-full overflow-y-auto px-4 py-5 sm:px-7 sm:py-7">
-        <div className="chat-conversation-column mx-auto flex w-full max-w-[780px] flex-col gap-0">
+        <div className="chat-conversation-column mx-auto flex min-h-full w-full max-w-[780px] flex-col gap-0">
         {workbenchMessage && (
           <div className="rounded-card border border-ink/10 bg-paper-2/55 px-3 py-2 text-xs text-ink-soft">{workbenchMessage}</div>
         )}
@@ -71,7 +78,6 @@ export default function ChatMessages({
                 turnIndex={hiddenCount + index}
                 generatingMessageId={generatingMessageId}
                 lang={lang}
-                isLatestUserMessage={msg.id === latestUserMessageId}
                 isForkingMessage={msg.id === forkingMessageId}
                 onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
                 onRejectDirectoryRequest={onRejectDirectoryRequest}
@@ -79,9 +85,7 @@ export default function ChatMessages({
                 onOpenArtifact={onOpenArtifact}
                 onOpenInPreview={onOpenInPreview}
                 onManageModels={onManageModels}
-                onEditMessage={onEditMessage}
                 onForkMessage={sessionId && !isGenerating ? onForkMessage : null}
-                onQuoteSelection={onQuoteSelection}
                 onRetryModelFailure={onRetryModelFailure}
                 t={t}
               />

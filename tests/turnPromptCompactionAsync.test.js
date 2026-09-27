@@ -3,6 +3,12 @@ import test from 'node:test'
 
 import { prepareTurnPromptContext } from '../server/services/turnPromptContext.js'
 
+// The response-format contract is static and rendered on every turn, so these
+// fail-soft assertions inspect the *per-turn* blocks: what matters here is that a
+// failing optional block never removes the blocks that are available.
+const turnBlocks = (prepared) => prepared.messages
+  .filter((message) => !String(message.content).startsWith('# Output Contract'))
+
 function dependencies(overrides = {}) {
   return {
     prepareSkillsForPrompt: () => [],
@@ -83,7 +89,8 @@ test('turn prompt fails soft when an async session block rejects', async () => {
     logWarn: (...args) => warnings.push(args.join(' ')),
   }))
 
-  assert.deepEqual(prepared.messages, [])
+  assert.deepEqual(turnBlocks(prepared), [])
+  assert.match(prepared.messages[0].content, /^# Output Contract/u, 'the static contract survives')
   assert.equal(prepared.compactionArchiveId, null)
   assert.equal(prepared.compactionBoundary, null)
   // Optional provider errors can contain paths, credentials or prompt content.
@@ -105,7 +112,7 @@ test('async session fallback preserves its safe storage code and other available
     logWarn: (...args) => warnings.push(args.join(' ')),
   }))
 
-  assert.deepEqual(prepared.messages.map((message) => message.content), [
+  assert.deepEqual(turnBlocks(prepared).map((message) => message.content), [
     'AVAILABLE_WORKSPACE_INSTRUCTIONS', 'AVAILABLE_MEMORY_CONTEXT',
   ])
   assert.deepEqual(prepared.memoryIds, ['available-memory'])
@@ -126,7 +133,7 @@ test('async session diagnostics reject arbitrary codes instead of copying except
     logWarn: (...args) => warnings.push(args.join(' ')),
   }))
 
-  assert.deepEqual(prepared.messages, [])
+  assert.deepEqual(turnBlocks(prepared), [])
   assert.equal(prepared.compactionArchiveId, null)
   assert.equal(prepared.compactionBoundary, null)
   assert.deepEqual(warnings, ['turn.prompt session block failed: PROMPT_CONTEXT_UNAVAILABLE'])
@@ -144,7 +151,7 @@ test('async session failure stays fail-soft if its diagnostic logger also fails'
     logWarn: () => { warnings += 1; throw new Error('diagnostic writer unavailable') },
   }))
 
-  assert.deepEqual(prepared.messages, [])
+  assert.deepEqual(turnBlocks(prepared), [])
   assert.equal(prepared.compactionArchiveId, null)
   assert.equal(prepared.compactionBoundary, null)
   assert.equal(attempts, 1)

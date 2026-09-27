@@ -37,15 +37,10 @@ function mount() {
   }
 }
 
-test('project-file navigation selects files and opens the workbench without changing a session', () => {
-  const h = mount()
-  try {
-    act(() => h.dom.window.dispatchEvent(new h.dom.window.CustomEvent('chat-workbench:open-files')))
-    assert.deepEqual(h.calls, [['tab', 'files'], ['open', true]])
-    assert.equal(h.container.querySelector('output').textContent, '')
-  } finally { h.close() }
-})
-
+// The `chat-workbench:open-files` navigation (project expansion opening a
+// files tool) was removed together with the files tool itself, at both ends:
+// neither the dispatcher nor the listener exists any more. What the hook
+// still owns is the workbench's status notice, asserted below.
 test('workbench feedback replaces its timer and clears only after the newest notice has been visible for five seconds', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const h = mount()

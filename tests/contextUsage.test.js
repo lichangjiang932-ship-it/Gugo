@@ -15,6 +15,10 @@ import {
 test('client token estimate charges non-ASCII more heavily than ASCII', () => {
   assert.equal(estimateTextTokens('abcd'), 1)
   assert.equal(estimateTextTokens('中文'), 2)
+  // Chinese costs more than ASCII per character but is no longer charged a whole
+  // token each — the rule lives in shared/textTokenEstimate.js and is pinned
+  // there (tests/textTokenEstimate.test.js).
+  assert.ok(estimateTextTokens('中文中文中文中文中文') < 10)
 })
 
 test('client context estimate includes tool calls, attachments, and tool specs', () => {

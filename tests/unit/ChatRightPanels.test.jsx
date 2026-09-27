@@ -31,7 +31,7 @@ test('a generated file preview is the only mounted right panel', async () => {
       mimeType: 'audio/mpeg',
       downloadUrl: '/api/attachments/current-audio/content',
     }],
-    workbenchTab: 'files',
+    workbenchTab: 'chat',
     onWorkbenchTabChange: noop,
     onCloseWorkbench: noop,
     onOpenArtifact: noop,
@@ -87,7 +87,12 @@ test('a generated file preview is the only mounted right panel', async () => {
       <I18nProvider><ChatRightPanels {...baseProps} previewArtifact={null} /></I18nProvider>,
     ))
     assert.ok(rootElement.querySelector('[data-testid="right-workbench"]'))
-    assert.match(rootElement.textContent, /current-audio\.mp3/)
+    // The header tool switch is the evidence that the workbench mounted and
+    // marked its active tool; the vertical edge strip no longer exists.
+    assert.equal(
+      rootElement.querySelector('[data-testid="workbench-tool-switch"] [aria-current="page"]').getAttribute('data-tool'),
+      'chat',
+    )
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

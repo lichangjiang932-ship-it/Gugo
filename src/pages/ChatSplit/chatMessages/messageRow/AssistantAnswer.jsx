@@ -17,7 +17,6 @@ import {
 import { ArtifactReferenceLinks } from '../ArtifactCards.jsx'
 import ActivityStream from '../ActivityStream.jsx'
 import TaskProgressTable from './TaskProgressTable.jsx'
-import TrajectoryEntries from './TrajectoryEntries.jsx'
 import {
   ExecutionDisclosure,
   TimelineSegments,
@@ -30,6 +29,8 @@ import { failurePresentation } from './failurePresentation.js'
 import { assistantTimelinePresentation, stableTimelineSegments } from './timelinePresentation.js'
 import { assistantPublicTimeline } from '../../../../lib/assistantPublicTimeline.js'
 import { parseAgentReportSections } from '../../../../../shared/agentReportSections.js'
+import { buildAgentRounds, toAgentRoundList } from '../../../../lib/agentRounds.js'
+import AgentRoundList from './AgentRoundList.jsx'
 
 export default function AssistantAnswer({
   artifactPreview,
@@ -86,7 +87,10 @@ export default function AssistantAnswer({
   // markup. A message without markers (older turns, other flows) keeps the
   // previous rendering exactly: the report falls back to the whole answer.
   const sections = parseAgentReportSections(presentation.answer)
-  const hasReport = sections.hasMarkers && sections.reportFound
+  // A report marker with an empty body is not an answer. Treating it as one
+  // folded the steps away *and* left the top level blank, so the message said
+  // nothing at all; an empty body counts as "no report" and the steps stand in.
+  const hasReport = sections.hasMarkers && sections.reportFound && Boolean(sections.report.trim())
   // Three cases, and each one is deliberate:
   //   markers + report  -> top level is the report, steps are folded.
   //   markers, no report -> the model wrote only steps, so the steps *are* the
@@ -97,6 +101,16 @@ export default function AssistantAnswer({
     : (sections.hasMarkers ? '' : presentation.answer)
   const hasTrajectory = sections.trajectory.length > 0
   const keepStepsOpen = sections.hasMarkers ? !hasReport : presentation.hasPublicNarration
+  // The process is presented as the loop it describes — one-line steps, each
+  // opening onto its own body — with every real call inside the round that asked
+  // for it, and calls the narrative never mentioned following at the end. Only a
+  // message with neither a narrative nor a recorded call falls back to the plain
+  // timeline — see lib/agentRounds.js.
+  const recordedCalls = presentation.execution
+    .filter((segment) => segment.kind === 'tools')
+    .flatMap((segment) => (Array.isArray(segment.calls) ? segment.calls : []))
+  const pairsNarrative = buildAgentRounds({ trajectory: sections.trajectory, toolCalls: recordedCalls })
+  const rounds = pairsNarrative ? toAgentRoundList(pairsNarrative.steps, pairsNarrative.leftoverCalls) : null
   const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0 || hasTrajectory
   const preExecutionFailure = isPreExecutionFailure(msg)
   const { modelSetupFailure, runtimeRestartRequired } = failurePresentation(msg)
@@ -122,10 +136,18 @@ export default function AssistantAnswer({
       : (msg.meta?.failed === true || msg.meta?.interrupted === true || genericRecoveryBlocked) && hasStructuredFailure
         ? getVisibleModelErrorMessage(msg, t)
         : '')
+  // A completed turn that would otherwise render nothing at all — no answer text
+  // and nothing folded away either. Saying so beats a message box that looks
+  // like it lost the reply. When there *are* steps, they are shown instead and
+  // this notice stays out of the way.
+  const emptyAnswerNotice = !visibleAnswer && !hasExecution && isMessageComplete
+    && !modelSetupFailure && !runtimeRestartRequired && !preExecutionFailure
+    ? t('chat.serverTurn.emptyAnswer')
+    : ''
 
   return (
     <>
-      <div data-quotable="true">
+      <div data-message-body="true">
         {!preExecutionFailure && hasExecution && (
           <ExecutionDisclosure
             hasExecution={hasExecution}
@@ -134,14 +156,24 @@ export default function AssistantAnswer({
             preserveNarration={keepStepsOpen}
             t={t}
           >
-            <TimelineSegments
-              artifacts={inlineFileReferences}
-              onLinkClick={openInlineArtifact}
-              onOpenArtifact={openToolArtifact}
-              segments={presentation.execution}
-              streaming={isCurrentStreamingMessage}
-            />
-            <TrajectoryEntries entries={sections.trajectory} t={t} />
+            {rounds ? (
+              // The loop: one line per step, each opening onto its own body, with
+              // every real call inside the round that asked for it.
+              <AgentRoundList
+                artifacts={inlineFileReferences}
+                onOpenArtifact={openToolArtifact}
+                rounds={rounds}
+                t={t}
+              />
+            ) : (
+              <TimelineSegments
+                artifacts={inlineFileReferences}
+                onLinkClick={openInlineArtifact}
+                onOpenArtifact={openToolArtifact}
+                segments={presentation.execution}
+                streaming={isCurrentStreamingMessage}
+              />
+            )}
             {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
             {isCurrentStreamingMessage && <TaskProgressTable progress={msg.meta?.progress} />}
           </ExecutionDisclosure>
@@ -150,7 +182,7 @@ export default function AssistantAnswer({
           <RuntimeRecoveryCard msg={msg} t={t} />
         ) : modelSetupFailure ? (
           <ModelSetupFailureCard msg={msg} onManageModels={onManageModels} t={t} />
-        ) : visibleAnswer && (
+        ) : visibleAnswer ? (
           <div className="chat-assistant-answer">
             <MarkdownRenderer
               artifactReferences={inlineFileReferences}
@@ -160,6 +192,10 @@ export default function AssistantAnswer({
               {visibleAnswer}
             </MarkdownRenderer>
           </div>
+        ) : emptyAnswerNotice && (
+          <p className="chat-assistant-answer chat-answer-empty" data-testid="assistant-empty-answer">
+            {emptyAnswerNotice}
+          </p>
         )}
       </div>
       {hasChoices(msg.content) && isMessageComplete && (

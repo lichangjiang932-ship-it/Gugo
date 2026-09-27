@@ -61,6 +61,19 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
     create_xlsx: builtinMetadata('external', false),
     Agent: builtinMetadata('external', false),
     remember: builtinMetadata('external', false),
+    // Appends one episode to the agent's own journal under <workspace>/.agent/,
+    // the same way `remember` writes a memory row: bounded, append-only, and
+    // never touching the user's own source files. Approving each entry would
+    // fire on nearly every turn, which trains the user to click through
+    // approvals — a worse outcome than the write it would be guarding. The file
+    // stays the user's: it is plain markdown they can read, edit or delete.
+    record_experience: builtinMetadata('write_local', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: false,
+      interruptBehavior: 'block',
+      isDestructive: false,
+    }),
     manage_todos: builtinMetadata('external', false),
     // Goal-plan bookkeeping has no filesystem or network side effects, the state
     // machine bounds every transition, and a step only becomes `done` when the

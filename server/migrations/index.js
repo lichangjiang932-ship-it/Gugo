@@ -90,7 +90,9 @@ import { migrateToV117 } from './v117MemoryEmbeddings.js'
 import { migrateToV118 } from './v118GoalPlans.js'
 import { migrateToV119 } from './v119MemoryEmbeddingSpace.js'
 import { migrateToV120 } from './v120MemorySearchIndex.js'
+import { migrateToV121 } from './v121GoalPlanColumnRepair.js'
 export { migrateToV120 }
+export { migrateToV121 }
 
 export { migrateToV1, migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105, migrateToV106, migrateToV107, migrateToV108, migrateToV109, migrateToV110, migrateToV111, migrateToV112, migrateToV113, migrateToV114, migrateToV115, migrateToV116, migrateToV117, migrateToV118, migrateToV119 }
 
@@ -189,6 +191,7 @@ export const schemaMigrations = Object.freeze([
   { version: 118, up: migrateToV118, atomicWithVersion: true },
   { version: 119, up: migrateToV119, atomicWithVersion: true },
   { version: 120, up: migrateToV120, atomicWithVersion: true },
+  { version: 121, up: migrateToV121, atomicWithVersion: true },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30

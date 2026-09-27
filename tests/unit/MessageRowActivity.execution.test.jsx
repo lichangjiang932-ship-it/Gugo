@@ -325,7 +325,7 @@ test('assistant keeps narration and tools in true DOM order with command details
       </I18nProvider>,
     ))
 
-    const quotable = rootElement.querySelector('[data-quotable="true"]')
+    const quotable = rootElement.querySelector('[data-message-body="true"]')
     assert.ok(quotable)
     const executionToggle = quotable.querySelector('[data-testid="execution-toggle"]')
     assert.equal(executionToggle?.getAttribute('aria-expanded'), 'true')
@@ -341,8 +341,9 @@ test('assistant keeps narration and tools in true DOM order with command details
 
     const timelines = [...executionContent.querySelectorAll(':scope > .chat-run-timeline')]
     assert.equal(timelines.length, 2)
-    assert.equal(timelines[0].querySelector('.chat-tool-step-marker')?.textContent, '1')
-    assert.equal(timelines[1].querySelector('.chat-tool-step-marker')?.textContent, '2')
+    // Steps are named by what the agent was doing, not numbered.
+    assert.equal(timelines[0].querySelector('[data-kind]')?.getAttribute('data-kind'), 'consult')
+    assert.equal(timelines[1].querySelector('[data-kind]')?.getAttribute('data-kind'), 'command')
     const runningToggle = timelines[1].querySelector('[data-testid="tool-step-toggle"]')
     assert.equal(runningToggle?.getAttribute('aria-expanded'), 'false')
     assert.equal(timelines[1].querySelector('[data-testid="tool-step-details"]'), null)
@@ -554,6 +555,179 @@ test('completed plain replies do not manufacture a process block from private re
     assert.equal(Boolean(executionToggle), false)
     assert.doesNotMatch(rootElement.textContent, /private chain-of-thought/)
     assert.match(rootElement.textContent, /Safe final answer/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('consecutive retrieval calls collapse into one labelled group while a command stands alone', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const translate = (key, vars = {}) => translateKey(key, 'zh').replace(/\{(\w+)\}/g, (_, name) => vars[name])
+  const msg = {
+    id: 'assistant-grouped',
+    role: 'assistant',
+    content: 'Done.',
+    timestamp: Date.now(),
+    meta: {
+      toolCalls: [
+        { id: 'read', name: 'read_file', arguments: JSON.stringify({ path: 'D:\\work\\a.js' }), result: JSON.stringify({ ok: true }), status: 'success', textOffset: 0 },
+        { id: 'grep', name: 'grep_code', arguments: JSON.stringify({ pattern: 'needle' }), result: JSON.stringify({ ok: true }), status: 'success', textOffset: 0 },
+        { id: 'run', name: 'run_command', arguments: JSON.stringify({ command: 'npm test' }), result: JSON.stringify({ ok: true }), status: 'success', textOffset: 0 },
+      ],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" lang="zh" t={translate} />
+      </I18nProvider>,
+    ))
+    await act(async () => rootElement.querySelector('[data-testid="execution-toggle"]')
+      .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+
+    // Reads and searches share one 查阅 row, with per-kind counts.
+    const groups = [...rootElement.querySelectorAll('[data-testid="tool-group-toggle"]')]
+    assert.equal(groups.length, 1, 'only the retrieval run groups')
+    assert.equal(groups[0].querySelector('.chat-tool-group-label').textContent, '查阅')
+    assert.equal(groups[0].querySelector('[data-testid="tool-group-counts"]').textContent, '1 文件, 1 搜索')
+    assert.equal(groups[0].getAttribute('aria-expanded'), 'true', 'the working-out is visible inside the fold')
+
+    // The command is its own row: a group of one is not dressed up as a group.
+    const rows = [...rootElement.querySelectorAll('[data-testid="tool-call-step"]')]
+    assert.deepEqual(rows.map((row) => row.getAttribute('data-kind')), ['consult', 'search', 'command'])
+    assert.equal(rootElement.textContent.includes('终端'), true)
+    assert.equal(rootElement.textContent.includes('npm test'), true)
+
+    // A group the reader closes keeps its children out of the layout.
+    await act(async () => groups[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(groups[0].getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelectorAll('[data-kind="consult"]').length, 0)
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 1)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an edit row reports the executor-reported diffstat', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const t = (key, values = {}) => key === 'chatMessages.progressChanges'
+    ? `+${values.additions} / -${values.deletions}`
+    : key
+  const msg = {
+    id: 'assistant-edit-stat',
+    role: 'assistant',
+    content: 'Edited.',
+    timestamp: Date.now(),
+    meta: {
+      toolCalls: [{
+        id: 'edit',
+        name: 'edit_file',
+        arguments: JSON.stringify({ path: 'D:\\work\\a.js' }),
+        result: JSON.stringify({ ok: true, changes: [{ path: 'D:\\work\\a.js', additions: 19, deletions: 1 }] }),
+        status: 'success',
+        textOffset: 0,
+      }, {
+        id: 'no-stat',
+        name: 'edit_file',
+        arguments: JSON.stringify({ path: 'D:\\work\\b.js' }),
+        result: JSON.stringify({ ok: true }),
+        status: 'success',
+        textOffset: 0,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" lang="zh" t={t} />
+      </I18nProvider>,
+    ))
+    await act(async () => rootElement.querySelector('[data-testid="execution-toggle"]')
+      .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+
+    const stats = [...rootElement.querySelectorAll('[data-testid="tool-diffstat"]')]
+    // Only the call whose executor reported line counts shows them: nothing is
+    // inferred from a path or a file body.
+    assert.equal(stats.length, 1)
+    assert.equal(stats[0].textContent, '+19-1')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a fold the reader opened while tools were running is not collapsed under them at completion', async () => {
+  // The auto-collapse exists so a finished turn is quiet by default. It used to
+  // fire regardless of what the reader had done, so a timeline someone was
+  // reading vanished the moment the turn ended.
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const startedAt = Date.now() - 2400
+  const baseMessage = {
+    id: 'assistant-reader-fold',
+    role: 'assistant',
+    content: 'Working on it.',
+    timestamp: startedAt,
+    meta: {
+      streaming: true,
+      turnStartedAt: startedAt,
+      toolCalls: [{
+        id: 'reader-tool',
+        name: 'read_file',
+        arguments: JSON.stringify({ path: 'README.md' }),
+        status: 'running',
+        textOffset: 0,
+      }],
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'chatMessages.execution') return 'Execution'
+    if (key === 'chatMessages.durationSeconds') return `${values.seconds}s`
+    if (key === 'chatMessages.durationLessThanSecond') return '<1s'
+    if (key === 'chatMessages.executionToolCount') return `${values.count} tools`
+    return key
+  }
+  const renderMessage = (msg, generatingMessageId) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow msg={msg} rowKey={msg.id} generatingMessageId={generatingMessageId} lang="en" t={t} />
+    </I18nProvider>,
+  ))
+
+  try {
+    await renderMessage(baseMessage, baseMessage.id)
+    const toggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(toggle?.getAttribute('aria-expanded'), 'true', 'it opens while tools run')
+    // The reader closes it and opens it again: both are their decision, not the
+    // component's, and the completion must not overrule the second one.
+    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+
+    await renderMessage({
+      ...baseMessage,
+      meta: {
+        ...baseMessage.meta,
+        streaming: false,
+        latency: 2400,
+        toolCalls: [{ ...baseMessage.meta.toolCalls[0], status: 'success', result: '{}' }],
+      },
+    }, '')
+
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true', 'the reader keeps the fold they opened')
+    assert.ok(rootElement.querySelector('[data-testid="execution-content"]'))
+    // Nothing is owed twice: the collapsed-state outcome line stays out of the
+    // expanded view.
+    assert.equal(rootElement.querySelector('[data-testid="execution-result-summary"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

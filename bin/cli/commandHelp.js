@@ -162,6 +162,14 @@ Run defaults to durable TurnEngine JSONL; use --output text for final text only.
 Chat: /sessions lists local history; /resume <session-id> selects a conversation.
 Use run --resume <turnId> only to recover a persisted turn, not to start a new reply.`
 
+// Group commands (goal/memory) have no single definition: their subcommands do.
+// Without a group description, `gugo goal --help` would title itself with the
+// generic CLI banner even though it lists exactly the goal subcommands below it.
+const GROUP_DESCRIPTIONS = Object.freeze({
+  goal: 'Local goal plans: create, approve, advance steps with evidence, rewrite, prune.',
+  memory: 'Local memory maintenance tasks.',
+})
+
 function usageLines(command) {
   return COMMANDS[command].usage.map((line) => line.startsWith(' ') ? `      ${line}` : `  gugo ${line}`)
 }
@@ -171,7 +179,9 @@ function renderHelp(command) {
   const selected = definition ? [command] : Object.keys(COMMANDS).filter((key) => !command || key.startsWith(`${command} `))
   const title = definition
     ? `gugo ${command} — ${definition.description}`
-    : `gugo${command ? ` ${command}` : ''} — local-first Agent CLI (legacy alias: yma-cli)`
+    : GROUP_DESCRIPTIONS[command]
+      ? `gugo ${command} — ${GROUP_DESCRIPTIONS[command]}`
+      : `gugo${command ? ` ${command}` : ''} — local-first Agent CLI (legacy alias: yma-cli)`
   return [
     title, '', 'Usage:', ...selected.flatMap(usageLines),
     ...(!command ? ['  gugo --version'] : []),

@@ -1,6 +1,7 @@
 const CONTEXT_USAGE_STORAGE_KEY = 'yma:chat:context-usage-visible'
 const WORKBENCH_OPEN_STORAGE_KEY = 'yma:chat:workbench-open'
 const DESKTOP_PET_VISIBLE_STORAGE_KEY = 'yma:chat:desktop-pet-visible'
+const PLAN_VISIBLE_STORAGE_KEY = 'yma:chat:plan-visible'
 
 function readBoolean(key, fallback) {
   if (typeof window === 'undefined') return fallback
@@ -35,6 +36,19 @@ export function readWorkbenchOpen() {
 
 export function writeWorkbenchOpen(value) {
   writeBoolean(WORKBENCH_OPEN_STORAGE_KEY, value)
+}
+
+/**
+ * The plan card's own switch. It is stored next to the panel's switch but is
+ * never written by it: opening the panel must not decide anything about the card,
+ * and vice versa.
+ */
+export function readPlanVisible() {
+  return readBoolean(PLAN_VISIBLE_STORAGE_KEY, false)
+}
+
+export function writePlanVisible(value) {
+  writeBoolean(PLAN_VISIBLE_STORAGE_KEY, value)
 }
 
 export function readDesktopPetVisible() {

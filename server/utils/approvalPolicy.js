@@ -106,6 +106,12 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'request_directory',
   'sleep_until',
   'manage_todos',
+  // Writes one episode into the agent's own journal under <workspace>/.agent/.
+  // Listed explicitly rather than left to the name heuristic: were it ever renamed
+  // to something matching WRITE_INTENT_RE it would start prompting on nearly every
+  // turn, and a user trained to approve reflexively is worse off than one whose
+  // agent keeps a bounded, deletable log.
+  'record_experience',
   'read_file',
   'list_directory',
   'grep_code',

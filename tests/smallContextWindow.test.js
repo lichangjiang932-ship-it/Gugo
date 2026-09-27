@@ -51,6 +51,13 @@ test('认得各家本地推理服务器的上下文溢出文案', () => {
     { status: 400, message: 'Trying to keep the first 4096 tokens when context overflows' },
     { status: 400, message: 'The input token count (300000) exceeds the maximum number of tokens allowed' },
     { status: 422, message: 'maximum context length is 32768 tokens' },
+    // 本应用自己的附件预算守卫:请求还没发出去就判定塞不下。它和上游溢出是同一种
+    // 情况,必须走同一条压缩恢复,否则用户的两个 docx 附件会把整轮任务判死。
+    {
+      status: 413,
+      code: 'ATTACHMENT_CONTEXT_BUDGET_EXCEEDED',
+      message: '附件展开后的请求仍超出上下文预算（估算 9000 token，阈值 6000 token）。',
+    },
   ]
   for (const error of cases) {
     assert.equal(isContextLengthError(error), true, `应识别: ${error.message}`)
@@ -72,6 +79,9 @@ test('不把无关错误误判成上下文溢出', () => {
     { status: 429, message: 'The input token count exceeds the maximum number of tokens allowed per minute' },
     { status: 403, message: 'maximum context length is not available for this credential' },
     { status: 503, message: 'prompt too long' },
+    // 名字相近但不是上下文问题:附件本身太大/格式不对,压缩救不了它。
+    { status: 413, code: 'ATTACHMENT_TOO_LARGE', message: 'attachment exceeds the upload limit' },
+    { status: 413, code: 'REQUEST_BODY_BUDGET_EXCEEDED', message: 'request body budget exceeded' },
     {},
     null,
   ]
@@ -108,6 +118,36 @@ test('第一次溢出后强制压缩重试,成功就正常返回', async () => {
   })
   assert.ok(attempts >= 2, '第一次溢出后必须再试')
   assert.equal(result.response.content, '压缩之后就跑通了')
+})
+
+test('附件预算守卫触发的溢出也走压缩重试,而不是把整轮判死', async () => {
+  // 用户真实场景:会话本身已经贴着阈值,再挂两个 docx 附件。守卫在请求发出前
+  // 抛 413 —— 这一轮必须像上游溢出一样被压缩重试,否则任务永远是「未完成」。
+  const guardError = Object.assign(
+    new Error('附件展开后的请求仍超出上下文预算（估算 9000 token，阈值 6000 token）。'),
+    { code: 'ATTACHMENT_CONTEXT_BUDGET_EXCEEDED', status: 413, retryable: false },
+  )
+  let attempts = 0
+  const result = await callModelWithContextRecovery({
+    messages: [
+      { role: 'system', content: '系统指令' },
+      ...Array.from({ length: 30 }, (_, i) => ({ role: 'user', content: `历史消息 ${i} `.repeat(50) })),
+    ],
+    tools: [],
+    contextWindow: 4096,
+    isContextLengthError,
+    // 摘要模型是另一条链路:压缩本身要能工作,才谈得上「压缩后重试」。
+    callSummaryModel: async () => ({ content: '对话摘要', toolCalls: [] }),
+    callModel: async () => {
+      attempts += 1
+      if (attempts === 1) throw guardError
+      return { content: '压缩之后附件就放得下了', toolCalls: [] }
+    },
+  })
+  assert.ok(attempts >= 2, '守卫报错后必须压缩再试一次')
+  // 第二次请求必须是「强制压缩」后的结果，而不是原样重发。
+  assert.equal(result.recovery.forced, true)
+  assert.equal(result.response.content, '压缩之后附件就放得下了')
 })
 
 test('三级全部失败时给出可操作的说明,而不是上游原文', async () => {

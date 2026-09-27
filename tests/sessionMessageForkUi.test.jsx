@@ -38,7 +38,6 @@ function renderMessages(root, props = {}) {
     sessionId="session-one"
     workbenchMessage=""
     onForkMessage={() => {}}
-    onQuoteSelection={() => {}}
     {...props}
   />)
 }

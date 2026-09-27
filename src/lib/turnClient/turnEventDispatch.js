@@ -3,6 +3,7 @@ import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { modelContextDiagnosticsSchema } from '../../../shared/modelContextDiagnostics.js'
 import { modelWireDiagnosticsSchema } from '../../../shared/modelWireDiagnostics.js'
 import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
+import { announceGoalPlanChanged, inspectGoalPlanSignal } from '../goalPlanSignals.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
 import { modelActivityFromPhase } from './modelActivityProgress.js'
 import {
@@ -148,6 +149,18 @@ export async function dispatchTurnEvent(sourceEvent, {
 } = {}) {
   const event = projectTurnEventForClient(sourceEvent)
   const payload = event.payload || {}
+  // Every turn event passes through here exactly once, so this is the one place a
+  // plan change has to be announced from. The plan itself lives on the server —
+  // the agent edits it with tool calls inside the turn — so a reader showing a
+  // plan has to be told to re-read rather than guess from the transcript.
+  const planSignal = inspectGoalPlanSignal(event)
+  if (planSignal.changed) {
+    announceGoalPlanChanged({
+      reason: planSignal.reason,
+      toolName: planSignal.toolName,
+      turnId: event.turnId || '',
+    })
+  }
   if (TOOL_OUTPUT_FLUSH_EVENT_TYPES.has(event.type)) await flushToolOutput?.()
   const dispatchMessage = (action) => dispatch?.({ ...action, ...(messageTarget || {}) })
   const streamCursor = { serverTurnId: event.turnId, serverSequence: event.sequence }

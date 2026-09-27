@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GitBranch, RefreshCw } from 'lucide-react'
-import { getWorkbenchDiff, getWorkbenchStatus } from '../../../lib/workbenchClient.js'
+import {
+  commitWorkbenchChanges,
+  getWorkbenchDiff,
+  getWorkbenchStatus,
+  pushWorkbenchBranch,
+} from '../../../lib/workbenchClient.js'
 
 // Porcelain status codes. Anything else falls back to the raw code so an
 // uncommon state is shown rather than silently labelled as something else.
@@ -14,6 +19,10 @@ const STATUS_KEYS = {
 }
 
 const MAX_DIFF_LINES = 2_000
+// The server refuses a message outside this range; the field says so before the
+// reader finds out by pressing the button.
+const MIN_MESSAGE_LENGTH = 3
+const MAX_MESSAGE_LENGTH = 200
 
 function statusKey(code) {
   const value = String(code || '').trim()
@@ -45,6 +54,19 @@ function DiffBody({ diff, t }) {
   )
 }
 
+const ACTION_BUTTON = 'flex h-8 shrink-0 items-center rounded-control px-3 text-xs transition-colors disabled:cursor-default disabled:opacity-40'
+
+/**
+ * The changes panel: what changed, what each change is, and what to do with it.
+ *
+ * Until now it could only look. Committing from here is the point of the page —
+ * the reader reviews a diff and then has to leave for a terminal to do anything
+ * about it, which is where unreviewed `git add -A` habits come from. The panel
+ * never chooses for the reader: files are named explicitly (the server refuses a
+ * file that is not changed, so a stale selection cannot commit the wrong thing),
+ * the message is typed rather than guessed, and pushing stays a separate,
+ * deliberate press.
+ */
 export default function WorkbenchGit({ t }) {
   const [status, setStatus] = useState(null)
   const [statusError, setStatusError] = useState('')
@@ -52,6 +74,10 @@ export default function WorkbenchGit({ t }) {
   const [selectedPath, setSelectedPath] = useState('')
   const [diff, setDiff] = useState('')
   const [diffError, setDiffError] = useState('')
+  const [chosen, setChosen] = useState(() => new Set())
+  const [message, setMessage] = useState('')
+  const [action, setAction] = useState('')
+  const [notice, setNotice] = useState(null)
 
   const loadStatus = useCallback(async () => {
     // Nothing is set before the request: this also runs from the mount effect,
@@ -92,6 +118,61 @@ export default function WorkbenchGit({ t }) {
   // The selected file is derived, not synchronised: once a refresh stops listing
   // it, its diff stops rendering instead of lingering beside a list without it.
   const selectedFile = files.find((file) => file.path === selectedPath) || null
+
+  // Same for what is about to be committed: a path the tree no longer lists is
+  // dropped from the plan rather than sent back to a server that would refuse it.
+  // `status` is the dependency, not the array derived from it, so the memo does
+  // not recompute on every render.
+  const chosenPaths = useMemo(() => {
+    const changed = new Set((status?.files || []).map((file) => file.path))
+    return new Set([...chosen].filter((path) => changed.has(path)))
+  }, [chosen, status])
+
+  const toggleChosen = (path) => setChosen((current) => {
+    const next = new Set(current)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    return next
+  })
+
+  const messageReady = message.trim().length >= MIN_MESSAGE_LENGTH
+  const canCommit = chosenPaths.size > 0 && messageReady && !action
+  const allChosen = files.length > 0 && chosenPaths.size === files.length
+
+  const submitCommit = async (event) => {
+    event.preventDefault()
+    if (!canCommit) return
+    setAction('commit')
+    setNotice(null)
+    try {
+      const result = await commitWorkbenchChanges({ message: message.trim(), files: [...chosenPaths] })
+      setMessage('')
+      setChosen(new Set())
+      setSelectedPath('')
+      setDiff('')
+      setNotice({ kind: 'ok', text: t('workbench.gitCommitDone', { commit: String(result?.commit || '').slice(0, 8) }) })
+      await loadStatus()
+    } catch (error) {
+      setNotice({ kind: 'error', text: error?.message || String(error) })
+    } finally {
+      setAction('')
+    }
+  }
+
+  const push = async () => {
+    if (action) return
+    setAction('push')
+    setNotice(null)
+    try {
+      const result = await pushWorkbenchBranch()
+      setNotice({ kind: 'ok', text: t('workbench.gitPushDone', { branch: result?.branch || '' }) })
+    } catch (error) {
+      setNotice({ kind: 'error', text: error?.message || String(error) })
+    } finally {
+      setAction('')
+    }
+  }
+
   return (
     <section data-testid="workbench-git" className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b border-ink/10 px-2 py-2">
@@ -102,7 +183,7 @@ export default function WorkbenchGit({ t }) {
         <button
           type="button"
           onClick={() => void refresh()}
-          disabled={busy}
+          disabled={busy || Boolean(action)}
           data-testid="workbench-git-refresh"
           aria-label={t('workbench.gitRefresh')}
           title={t('workbench.gitRefresh')}
@@ -126,18 +207,29 @@ export default function WorkbenchGit({ t }) {
             : <>
               <h3 className="mb-1 px-1 text-xs font-semibold text-ink">{t('workbench.gitChangedFiles')}</h3>
               {files.map((file) => (
-                <button
-                  key={`${file.status}:${file.path}`}
-                  type="button"
-                  data-testid="workbench-git-file"
-                  onClick={() => void openFile(file.path)}
-                  aria-current={selectedFile?.path === file.path ? 'true' : undefined}
-                  className={`flex w-full min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left transition-colors hover:bg-ink/5 ${selectedFile?.path === file.path ? 'bg-ink/[0.06]' : ''}`}
-                >
-                  <span className="w-6 shrink-0 font-mono text-xs uppercase text-ink-fade">{String(file.status || '').trim() || '?'}</span>
-                  <span className="min-w-0 flex-1 truncate text-xs text-ink" title={file.path}>{file.path}</span>
-                  {statusKey(file.status) && <span className="shrink-0 text-xs text-ink-fade">{t(statusKey(file.status))}</span>}
-                </button>
+                <div key={`${file.status}:${file.path}`} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={chosenPaths.has(file.path)}
+                    onChange={() => toggleChosen(file.path)}
+                    disabled={Boolean(action)}
+                    data-testid="workbench-git-choose"
+                    data-path={file.path}
+                    aria-label={t('workbench.gitChooseFile', { path: file.path })}
+                    className="ml-1 h-3.5 w-3.5 shrink-0 accent-accent"
+                  />
+                  <button
+                    type="button"
+                    data-testid="workbench-git-file"
+                    onClick={() => void openFile(file.path)}
+                    aria-current={selectedFile?.path === file.path ? 'true' : undefined}
+                    className={`flex min-w-0 flex-1 items-center gap-2 rounded-control px-2 py-1.5 text-left transition-colors hover:bg-ink/5 ${selectedFile?.path === file.path ? 'bg-ink/[0.06]' : ''}`}
+                  >
+                    <span className="w-6 shrink-0 font-mono text-xs uppercase text-ink-fade">{String(file.status || '').trim() || '?'}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-ink" title={file.path}>{file.path}</span>
+                    {statusKey(file.status) && <span className="shrink-0 text-xs text-ink-fade">{t(statusKey(file.status))}</span>}
+                  </button>
+                </div>
               ))}
             </>}
         </div>
@@ -150,6 +242,63 @@ export default function WorkbenchGit({ t }) {
         </p>
       )}
       {!diffError && <DiffBody diff={selectedFile ? diff : ''} t={t} />}
+
+      {!statusError && files.length > 0 && (
+        <form onSubmit={submitCommit} className="shrink-0 border-t border-ink/10 px-2 py-2" data-testid="workbench-git-actions">
+          <div className="flex items-center gap-2 pb-1.5">
+            <span className="min-w-0 flex-1 truncate text-xs text-ink-fade" data-testid="workbench-git-chosen-count">
+              {t('workbench.gitChosenCount', { count: chosenPaths.size })}
+            </span>
+            <button
+              type="button"
+              onClick={() => (allChosen ? setChosen(new Set()) : setChosen(new Set(files.map((file) => file.path))))}
+              disabled={Boolean(action)}
+              data-testid="workbench-git-choose-all"
+              className="shrink-0 rounded-control px-1.5 py-0.5 text-xs text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink disabled:opacity-40"
+            >
+              {t(allChosen ? 'workbench.gitChooseNone' : 'workbench.gitChooseAll')}
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              maxLength={MAX_MESSAGE_LENGTH}
+              disabled={Boolean(action)}
+              data-testid="workbench-git-message"
+              aria-label={t('workbench.gitCommitMessage')}
+              placeholder={t('workbench.gitCommitMessageHint')}
+              className="h-8 min-w-0 flex-1 rounded-control border border-ink/15 bg-paper px-2 text-xs text-ink outline-none transition-colors focus:border-ink/40"
+            />
+            <button
+              type="submit"
+              disabled={!canCommit}
+              data-testid="workbench-git-commit"
+              className={`${ACTION_BUTTON} bg-ink font-medium text-paper`}
+            >
+              {t('workbench.gitCommit')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void push()}
+              disabled={Boolean(action) || !status?.branch}
+              data-testid="workbench-git-push"
+              className={`${ACTION_BUTTON} border border-ink/15 text-ink-soft hover:bg-ink/5`}
+            >
+              {t('workbench.gitPush')}
+            </button>
+          </div>
+          {notice && (
+            <p
+              role={notice.kind === 'error' ? 'alert' : 'status'}
+              data-testid="workbench-git-notice"
+              className={`mt-1.5 break-words text-xs leading-5 ${notice.kind === 'error' ? 'text-danger' : 'text-success'}`}
+            >
+              {notice.text}
+            </p>
+          )}
+        </form>
+      )}
     </section>
   )
 }

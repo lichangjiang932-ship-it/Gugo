@@ -26,6 +26,8 @@ import {
   createDesktopPetDragSession,
   resolveDesktopPetDragMove,
 } from './petDrag.js'
+import { clampPetBounds } from './petBounds.js'
+import { createDesktopHosts } from './desktopHosts.js'
 import {
   configureDesktopMainWindowPermissions,
   createDesktopMainWindow,
@@ -40,6 +42,11 @@ const preloadPath = path.join(__dirname, 'preload.cjs')
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.ico')
 const BACKEND_DISCONNECT_TIMEOUT_MS = 16_000
 const desktopFileActions = createDesktopFileActionSetup({ app, dialog, ipcMain, shell })
+const desktopHosts = createDesktopHosts({
+  ipcMain,
+  getApplicationOrigin: () => applicationOrigin,
+  getMainWindow: () => mainWindow,
+})
 
 let mainWindow = null
 let petWindow = null
@@ -78,17 +85,6 @@ function showDesktopPetMenu() {
     click: hideDesktopPet,
   }]).popup({ window })
   return true
-}
-
-function clampPetBounds(bounds) {
-  const display = screen.getDisplayMatching(bounds)
-  const area = display.workArea
-  return {
-    x: Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width),
-    y: Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height),
-    width: bounds.width,
-    height: bounds.height,
-  }
 }
 
 function sendPetState() {
@@ -278,7 +274,7 @@ function createPetWindow() {
     const saved = JSON.parse(readFileSync(path.join(stored, 'pet-window.json'), 'utf8'))
     if (Number.isFinite(saved?.x) && Number.isFinite(saved?.y)) bounds = { ...defaultBounds, x: saved.x, y: saved.y }
   } catch { /* use the safe default */ }
-  bounds = clampPetBounds(bounds)
+  bounds = clampPetBounds(bounds, screen.getDisplayMatching(bounds))
 
   const window = new BrowserWindow({
     ...bounds,
@@ -390,6 +386,7 @@ function handlePetDrag(event, payload = {}) {
 
 function registerDesktopIpc() {
   desktopFileActions.register(() => ({ mainWindow, applicationOrigin }))
+  desktopHosts.register()
   ipcMain.handle('desktop:write-clipboard-text', (event, value) => {
     assertTrustedIpc(event)
     clipboard.writeText(String(value ?? ''))
@@ -487,7 +484,7 @@ function registerDesktopIpc() {
       y: current.y + current.height - layout.windowHeight,
       width: layout.windowWidth,
       height: layout.windowHeight,
-    })
+    }, screen.getDisplayMatching(current))
     window.setBounds(next)
     return layout
   })
@@ -585,6 +582,7 @@ if (hasSingleInstanceLock) {
   })
 
   app.on('before-quit', (event) => {
+    desktopHosts.dispose()
     if (allowQuit || (!backendProcess && !backendServer)) return
     event.preventDefault()
     if (!shutdownPromise) {

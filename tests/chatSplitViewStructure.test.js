@@ -15,6 +15,12 @@ test('chat split view and extracted right panels stay within the component size 
   assert.ok(lineCount(sessionHeader) <= 100, `ChatSessionHeader.jsx has ${lineCount(sessionHeader)} lines`)
 })
 
+test('the header opens the checklist instead of the branch navigator', () => {
+  assert.match(view, /data-testid="header-plan-toggle"/)
+  assert.match(view, /aria-pressed=\{planVisible \|\| undefined\}/)
+  assert.doesNotMatch(view, /SessionBranchNavigator/)
+})
+
 test('chat split view delegates header presentation while keeping its controls and selectors', () => {
   assert.match(view, /import \{ ChatSessionHeading, ChatWorkbenchToggle \} from '\.\/chatSplitView\/ChatSessionHeader\.jsx'/)
   assert.match(view, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)

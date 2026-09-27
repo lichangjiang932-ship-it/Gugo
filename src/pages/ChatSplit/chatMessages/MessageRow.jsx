@@ -41,7 +41,6 @@ export default function MessageRow({
   rowKey,
   turnIndex,
   generatingMessageId,
-  isLatestUserMessage = false,
   isForkingMessage = false,
   lang,
   onExpandCompaction,
@@ -50,9 +49,7 @@ export default function MessageRow({
   onOpenArtifact,
   onOpenInPreview,
   onManageModels,
-  onEditMessage,
   onForkMessage,
-  onQuoteSelection,
   onRetryModelFailure,
   t,
 }) {
@@ -234,9 +231,7 @@ export default function MessageRow({
             forking={isForkingMessage}
             lang={lang}
             msg={msg}
-            onEditMessage={isLatestUserMessage ? onEditMessage : null}
             onForkMessage={onForkMessage}
-            onQuoteSelection={onQuoteSelection}
             t={t}
           />
         )}
@@ -247,7 +242,6 @@ export default function MessageRow({
             lang={lang}
             msg={msg}
             onForkMessage={onForkMessage}
-            onQuoteSelection={onQuoteSelection}
             onRetryModelFailure={isModelPreExecutionFailure(msg) ? onRetryModelFailure : null}
             showArtifactPreview={showArtifactPreview}
             t={t}

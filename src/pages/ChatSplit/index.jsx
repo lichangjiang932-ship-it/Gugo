@@ -12,6 +12,8 @@ import { recordChatFeedback } from '../../lib/evolutionClient.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import usePlanCardState from './usePlanCardState.js'
+import useWorkbenchShortcuts from './useWorkbenchShortcuts.js'
 import ChatSplitView from './ChatSplitView.jsx'
 import useInputHistory from './useInputHistory.js'
 import useChatApprovals from './useChatApprovals.js'
@@ -46,12 +48,13 @@ export default function ChatSplit() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [showContextUsage, setShowContextUsage] = useState(readContextUsageVisible)
   const [workbenchOpen, setWorkbenchOpen] = useState(readWorkbenchOpen)
-  const [workbenchTab, setWorkbenchTab] = useState('files')
+  // The panel opens on its entry page: the reader picks a tool from there, or
+  // a key does. The old default was the files tab, which is no longer in it.
+  const [workbenchTab, setWorkbenchTab] = useState('entry')
   const [desktopPetVisible, setDesktopPetVisible] = useState(readDesktopPetVisible)
   const [slashInlinePanel, setSlashInlinePanel] = useState(null)
   const [showContextPanel, setShowContextPanel] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
-  const [messageEdit, setMessageEdit] = useState(null)
   const [authoritativeModelFailure, setAuthoritativeModelFailure] = useState(null)
   const [contextSystemPrompts, setContextSystemPrompts] = useState({})
   const abortCtrlRef = useRef(null)
@@ -59,7 +62,7 @@ export default function ChatSplit() {
   const resumingTurnIdsRef = useRef(new Set())
   const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state }, [state])
-  const { workbenchMessage, setWorkbenchMessage } = useProjectFilesWorkbench({ setWorkbenchOpen, setWorkbenchTab })
+  const { workbenchMessage, setWorkbenchMessage } = useProjectFilesWorkbench()
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,
@@ -73,7 +76,6 @@ export default function ChatSplit() {
     handleWorkspaceSelect, recentWorkspaces, selectedWorkspacePath,
     workspaceBusy, workspaceError,
   } = useChatWorkspaceState({ activeSession, activeSessionId, dispatch, state, t })
-  const clearMessageEditForSessionChange = useCallback(() => setMessageEdit(null), [])
   const navigateInputHistory = useInputHistory({
     messages,
     input,
@@ -87,7 +89,7 @@ export default function ChatSplit() {
   const { abortSessionIdRef, attachmentsRef, inputRef } = useChatSessionLifecycle({
     abortCtrlRef, attachments, desktopPetVisible, dispatch, input, isGenerating, messages, preserveAttachmentsForSessionRef, setAttachments, setDesktopPetVisible,
     setInput, setIsGenerating, setWorkbenchMessage, showContextUsage, state, toolApproval: approvals.toolApproval,
-    workbenchOpen, onSessionChange: clearMessageEditForSessionChange,
+    workbenchOpen,
   })
   const {
     handleAbort, handlePause, handleAuthorizeDirectoryRequest, handleDismissResume, handleResume,
@@ -179,12 +181,10 @@ export default function ChatSplit() {
     inputRef,
     isGenerating,
     lang,
-    messageEdit,
     modelReadiness,
     navigateInputHistory,
     setAttachments,
     setInput,
-    setMessageEdit,
     setWorkbenchMessage,
     showAuthenticationRequired,
     showModelUnavailable,
@@ -197,20 +197,10 @@ export default function ChatSplit() {
     toast,
     triggerSendFlow,
   })
-  const {
-    handleCancelMessageEdit,
-    handleEditMessage,
-    handleRetryModelFailure,
-  } = useChatReplayActions({
-    attachmentsRef,
-    inputRef,
+  const { handleRetryModelFailure } = useChatReplayActions({
     isGenerating,
     lang,
-    messageEdit,
     modelReadiness,
-    setAttachments,
-    setInput,
-    setMessageEdit,
     setShowModelPicker,
     showModelUnavailable,
     stateRef,
@@ -246,12 +236,22 @@ export default function ChatSplit() {
   const { forkingMessageId, handleForkMessage, handleOpenSessionBranch } = useChatSessionBranches(
     { activeSessionId, dispatch, isGenerating, navigate, stateRef, t, toast },
   )
+  const {
+    onOpenPlan, planArtifacts, planCardVisible, planSignature, setDismissedPlanSignature, setPlanVisible,
+  } = usePlanCardState({ activeSession, attachments, messages })
+
+  // Same two setters as the rail button, so a key can only do what the button does —
+  // and it reveals the panel, which is what makes the key useful while it is closed.
+  useWorkbenchShortcuts({ onSelectTool: (tool) => { setWorkbenchTab(tool); setWorkbenchOpen(true) } })
+
   return <ChatSplitView
       activeSession={activeSession} activeSessionId={activeSessionId} approvalMode={approvals.approvalSettings?.mode || 'normal'}
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       contextWindowAuthoritative={selectedContextWindowAuthoritative}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
+      planVisible={planCardVisible} planArtifacts={planArtifacts} onOpenPlan={onOpenPlan}
+      onClosePlan={() => { setPlanVisible(false); setDismissedPlanSignature(planSignature) }}
       modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onPause={handlePause} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
       onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}
@@ -269,15 +269,13 @@ export default function ChatSplit() {
       onInlineTasks={() => { setSlashInlinePanel(null); navigate('/tasks') }} onKeyDown={handleKeyDown}
       onManageMcp={() => { setSlashInlinePanel(null); navigate('/mcp') }} onManageModels={handleManageModels}
       onModelChange={setModelForActiveSession} onModelRetry={retryModels} onNavigatePermissions={() => navigate('/permissions')}
-      editingMessageId={messageEdit?.sourceMessageId || ''} onCancelMessageEdit={handleCancelMessageEdit}
-      onEditMessage={handleEditMessage}
       onForkMessage={handleForkMessage} forkingMessageId={forkingMessageId}
       onRetryModelFailure={handleRetryModelFailure}
       onOpenArtifact={(artifact) => { setWorkbenchOpen(true); dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact ? { ...artifact } : null }) }}
       onOpenInPreview={(msg, preview) => { setWorkbenchOpen(true); dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: { messageId: msg.id, content: msg.meta?.artifactSource || msg.content, preview } }) }}
       onOpenModelPicker={() => setShowModelPicker(true)} onOpenSessionBranch={handleOpenSessionBranch} onPermAllow={handlePermAllow}
       onPermDeny={() => { dispatch({ type: 'SET_PERM_REQUEST', payload: null }); dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionDenied') }) }}
-      onPreviewMessage={setWorkbenchMessage} onQuoteSelection={(text) => { const quoted = String(text || '').split('\n').map((line) => `> ${line}`).join('\n'); const current = inputRef.current || ''; dispatch({ type: 'SET_DRAFT_INPUT', payload: current ? `${quoted}\n\n${current}` : `${quoted}\n\n` }) }}
+      onPreviewMessage={setWorkbenchMessage}
       onResume={handleResume}
       onSend={handleSend} onSlashCommandSelect={executeSlashEntry}
       onSubmitFeedback={(value) => recordChatFeedback(value, stateRef.current.activeSessionId)}

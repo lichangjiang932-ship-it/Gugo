@@ -1,6 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
+import {
+  httpError as badReq,
+  MAX_OUTPUT,
+  runFile,
+  workspaceRoot,
+} from './gitCommandRunner.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
@@ -14,20 +19,7 @@ import {
   runGitWorkspaceChange,
 } from './gitWorkbenchRevisionChanges.js'
 
-const MAX_OUTPUT = 1024 * 1024
-const DEFAULT_TIMEOUT = 60_000
-
 export { runProjectCheckTool }
-
-function badReq(message, statusCode = 400) {
-  const err = new Error(message)
-  err.statusCode = statusCode
-  return err
-}
-
-function workspaceRoot(env = getRuntimeEnv()) {
-  return path.resolve(env.WORKSPACE_ROOT?.trim() || process.cwd())
-}
 
 export function getRoot({
   userId = null,
@@ -70,40 +62,7 @@ function requireMutationEnabled(env = getRuntimeEnv()) {
   }
 }
 
-// ★ P0:统一从 sanitizeChildEnv 取,自动覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD
-// 老实现只屏蔽 3 个固定 key,换用户配 ANTHROPIC_API_KEY/GITHUB_TOKEN 就漏了
 import { assertSelectedFilesAreCommittable } from './gitCommitPathGuard.js'
-import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
-function commandEnv() {
-  return sanitizeChildEnv()
-}
-
-function runFile(file, args, { cwd = workspaceRoot(), timeout = DEFAULT_TIMEOUT, rejectOnError = true } = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, {
-      cwd,
-      timeout,
-      maxBuffer: MAX_OUTPUT,
-      windowsHide: true,
-      env: commandEnv(),
-    }, (err, stdout, stderr) => {
-      const result = {
-        ok: !err,
-        exitCode: err ? (typeof err.code === 'number' ? err.code : -1) : 0,
-        stdout: String(stdout || ''),
-        stderr: String(stderr || ''),
-        timedOut: !!err?.killed,
-      }
-      if (err && rejectOnError) {
-        const e = badReq(String(stderr || err.message || 'command failed').trim() || 'command failed', err.killed ? 408 : 500)
-        e.result = result
-        reject(e)
-        return
-      }
-      resolve(result)
-    })
-  })
-}
 
 export async function runGit(args, opts = {}) {
   return runFile('git', args, opts)

@@ -72,12 +72,42 @@ test('execution rows show a compact human action with concrete paths and command
   const commandMarkup = renderToolCall('run_command', { command: 'npm test' })
   assert.match(readMarkup, /D:\\work\\report\.txt/)
   assert.match(commandMarkup, /npm test/)
-  assert.match(readMarkup, />Read file<\/span>/)
-  assert.match(commandMarkup, />Run command<\/span>/)
+  // Everyday tools are labelled with the verb the timeline reads in (读取/搜索/
+  // 终端/编辑/写入); tools with richer names keep those names. Either way the row
+  // never shows the raw tool name or a generic "Tool call".
+  assert.match(readMarkup, />Read<\/span>/)
+  assert.match(commandMarkup, />Terminal<\/span>/)
   assert.doesNotMatch(readMarkup, /Tool call/)
   assert.doesNotMatch(commandMarkup, /Tool call/)
   assert.doesNotMatch(readMarkup, /read_file/)
   assert.doesNotMatch(commandMarkup, /run_command/)
+})
+
+test('a command step shows the shell line, not its JSON envelope, and still redacts it', () => {
+  // Regression: presenting the bare command skipped the redaction that
+  // formatDetails applies, so a credential on the command line would have
+  // reached the DOM. The command is shown as a shell line *and* redacted.
+  const markup = renderInLanguage(
+    <I18nProvider>
+      <ToolCallCard
+        call={{
+          id: 'call-command',
+          name: 'run_command',
+          arguments: JSON.stringify({ command: 'deploy --api_key=secret_value123 && npm test' }),
+          result: JSON.stringify({ ok: true }),
+          status: 'success',
+        }}
+        expanded
+      />
+    </I18nProvider>,
+  )
+
+  // The prompt itself is CSS on this attribute, so it is not in static markup.
+  assert.match(markup, /<pre data-command="true"/, 'the row is marked as a shell line')
+  assert.match(markup, /npm test/)
+  assert.doesNotMatch(markup, /"command":/, 'no JSON envelope around a shell line')
+  assert.doesNotMatch(markup, /secret_value123/)
+  assert.match(markup, /REDACTED/)
 })
 
 test('only an exactly associated persisted file makes a path summary interactive', () => {
@@ -275,7 +305,8 @@ test('failed command keeps arguments and result in one expanded card whose copy 
     assert.equal(rootElement.querySelectorAll('details').length, 0)
     assert.match(detailCard.textContent, /Arguments/)
     assert.match(detailCard.textContent, /Error/)
-    assert.equal(rootElement.querySelector('.chat-tool-step-marker').textContent, '2')
+    // Rows are named by what the agent was doing, not numbered.
+    assert.equal(rootElement.querySelector('[data-testid="tool-call-step"]')?.getAttribute('data-kind'), 'command')
 
     const resultDetails = detailCard.querySelector('[data-testid="tool-detail-result"] pre')?.textContent || ''
     assert.match(resultDetails, /COMMAND_FAILED/)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export default function useProjectFilesWorkbench({ setWorkbenchOpen, setWorkbenchTab }) {
+export default function useProjectFilesWorkbench() {
   const [workbenchMessage, setWorkbenchMessage] = useState('')
   useEffect(() => {
     if (!workbenchMessage) return undefined
@@ -8,13 +8,5 @@ export default function useProjectFilesWorkbench({ setWorkbenchOpen, setWorkbenc
     return () => clearTimeout(timer)
   }, [workbenchMessage])
 
-  useEffect(() => {
-    const openProjectFiles = () => {
-      setWorkbenchTab('files')
-      setWorkbenchOpen(true)
-    }
-    window.addEventListener('chat-workbench:open-files', openProjectFiles)
-    return () => window.removeEventListener('chat-workbench:open-files', openProjectFiles)
-  }, [setWorkbenchOpen, setWorkbenchTab])
   return { workbenchMessage, setWorkbenchMessage }
 }

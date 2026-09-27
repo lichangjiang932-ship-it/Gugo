@@ -15,25 +15,25 @@ export default function NewConversationWelcome({
 
   return (
     <section
-      className="flex min-h-[420px] flex-1 flex-col items-center justify-center py-10"
+      className="flex flex-1 flex-col items-center justify-center px-1 py-8 sm:py-10"
       aria-labelledby="new-conversation-title"
       data-testid="new-conversation-welcome"
     >
       <GugoMark />
-      <h1 id="new-conversation-title" className="text-page font-semibold tracking-[-0.02em] text-ink">
+      <h1 id="new-conversation-title" className="text-center text-section font-semibold tracking-[-0.02em] text-ink sm:text-page">
         {t('chatMessages.emptyTitle')}
       </h1>
       <p className="mt-2 max-w-md text-center text-ui leading-6 text-ink-soft">
         {t('chatMessages.emptyHint')}
       </p>
 
-      <div className="mt-7 w-full max-w-[560px] border-y border-ink/10">
+      <div className="mt-6 w-full max-w-[560px] border-y border-ink/10 sm:mt-7">
         {STARTER_PROMPTS.map((key) => (
           <button
             key={key}
             type="button"
             onClick={() => onPromptSelect?.(t(`chatMessages.${key}`))}
-            className="group flex w-full items-center gap-3 border-b border-ink/10 px-1 py-3 text-left text-body leading-6 text-ink-soft transition-colors last:border-b-0 hover:bg-ink/[0.025] hover:text-ink"
+            className="group flex w-full items-center gap-3 border-b border-ink/10 px-1.5 py-3 text-left text-ui leading-6 text-ink-soft transition-colors last:border-b-0 hover:bg-ink/[0.03] hover:text-ink sm:px-2 sm:text-body"
           >
             <span className="min-w-0 flex-1">{t(`chatMessages.${key}`)}</span>
             <ArrowUpRight className="h-4 w-4 shrink-0 text-ink-fade transition-colors group-hover:text-accent-ink" aria-hidden="true" />
@@ -48,7 +48,7 @@ function GugoMark() {
   return (
     <div
       data-testid="gugo-mark"
-      className="mb-5 flex h-12 w-12 items-center justify-center rounded-card bg-ink text-paper"
+      className="mb-4 flex h-11 w-11 items-center justify-center rounded-card bg-ink text-paper sm:mb-5 sm:h-12 sm:w-12"
       aria-hidden="true"
     >
       <svg viewBox="0 0 56 56" className="h-8 w-8" fill="none">

@@ -3,10 +3,13 @@ import RightWorkbench from '../RightWorkbench.jsx'
 
 export default function ChatRightPanels({
   workbenchOpen,
+  sessionId,
+  todos,
   messages,
   attachments,
   workbenchTab,
   onWorkbenchTabChange,
+  selectedWorkspacePath,
   onCloseWorkbench,
   onOpenArtifact,
   onWorkbenchSend,
@@ -34,6 +37,8 @@ export default function ChatRightPanels({
   }
   return (
     <RightWorkbench
+      sessionId={sessionId}
+      todos={todos}
       messages={messages}
       attachments={attachments}
       activeTab={workbenchTab}
@@ -41,6 +46,7 @@ export default function ChatRightPanels({
       onClose={onCloseWorkbench}
       onOpenArtifact={onOpenArtifact}
       onSendMessage={onWorkbenchSend}
+      selectedWorkspacePath={selectedWorkspacePath}
       isGenerating={isGenerating}
       statusMessage={workbenchMessage}
     />

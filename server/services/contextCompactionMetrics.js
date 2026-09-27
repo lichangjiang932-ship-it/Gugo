@@ -28,16 +28,11 @@ const SUMMARY_TRUNCATION_MARKER = [
   '',
 ].join('\n')
 
-export function textTokens(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '')
-  let ascii = 0
-  let nonAscii = 0
-  for (const char of text) {
-    if (char.charCodeAt(0) <= 0x7f) ascii += 1
-    else nonAscii += 1
-  }
-  return Math.ceil(ascii / 4) + nonAscii
-}
+// The estimator itself is shared with the interface's context meter, so both
+// sides plan against the same rule (see shared/textTokenEstimate.js).
+import { characterTokenWeight, textTokens } from '../../shared/textTokenEstimate.js'
+
+export { textTokens }
 
 function isImageContextPart(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -76,15 +71,12 @@ function takePrefixToTokenBudget(value, maxTokens) {
   const text = String(value || '')
   const budget = Math.max(0, Math.floor(Number(maxTokens) || 0))
   if (budget <= 0 || !text) return ''
-  let ascii = 0
-  let nonAscii = 0
+  let used = 0
   let end = 0
   for (const char of text) {
-    const nextAscii = ascii + (char.charCodeAt(0) <= 0x7f ? 1 : 0)
-    const nextNonAscii = nonAscii + (char.charCodeAt(0) <= 0x7f ? 0 : 1)
-    if (Math.ceil(nextAscii / 4) + nextNonAscii > budget) break
-    ascii = nextAscii
-    nonAscii = nextNonAscii
+    const next = used + characterTokenWeight(char)
+    if (Math.ceil(next) > budget) break
+    used = next
     end += char.length
   }
   return text.slice(0, end)
@@ -94,16 +86,12 @@ function takeSuffixToTokenBudget(value, maxTokens) {
   const chars = Array.from(String(value || ''))
   const budget = Math.max(0, Math.floor(Number(maxTokens) || 0))
   if (budget <= 0 || chars.length === 0) return ''
-  let ascii = 0
-  let nonAscii = 0
+  let used = 0
   let start = chars.length
   for (let index = chars.length - 1; index >= 0; index -= 1) {
-    const char = chars[index]
-    const nextAscii = ascii + (char.charCodeAt(0) <= 0x7f ? 1 : 0)
-    const nextNonAscii = nonAscii + (char.charCodeAt(0) <= 0x7f ? 0 : 1)
-    if (Math.ceil(nextAscii / 4) + nextNonAscii > budget) break
-    ascii = nextAscii
-    nonAscii = nextNonAscii
+    const next = used + characterTokenWeight(chars[index])
+    if (Math.ceil(next) > budget) break
+    used = next
     start = index
   }
   return chars.slice(start).join('')

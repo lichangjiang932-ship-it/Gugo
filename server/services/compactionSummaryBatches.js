@@ -1,16 +1,8 @@
+import { characterTokenWeight, textTokens } from '../../shared/textTokenEstimate.js'
+
 export const DEFAULT_SUMMARY_INPUT_TOKEN_BUDGET = 64_000
 const MIN_SUMMARY_INPUT_TOKEN_BUDGET = 2_048
 const SUMMARY_INPUT_OVERHEAD_TOKENS = 768
-
-function textTokens(value) {
-  let ascii = 0
-  let other = 0
-  for (const char of typeof value === 'string' ? value : JSON.stringify(value)) {
-    if (char.charCodeAt(0) <= 0x7f) ascii += 1
-    else other += 1
-  }
-  return Math.ceil(ascii / 4) + other
-}
 
 function messageText(message) {
   if (typeof message?.content === 'string') return message.content
@@ -27,8 +19,10 @@ function splitText(value, budget) {
   let chunk = ''
   let cost = 0
   for (const char of value) {
+    // Weighed the way the batch budget was computed: JSON escaping can add
+    // characters, and each of them costs what the shared rule says it costs.
     const encoded = JSON.stringify(char).slice(1, -1)
-    const next = [...encoded].reduce((total, unit) => total + (unit.charCodeAt(0) <= 0x7f ? 0.25 : 1), 0)
+    const next = [...encoded].reduce((total, unit) => total + characterTokenWeight(unit), 0)
     if (chunk && cost + next > budget) {
       chunks.push(chunk)
       chunk = ''

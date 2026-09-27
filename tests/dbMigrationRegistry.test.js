@@ -754,7 +754,9 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION }, (_, index) => index + 1),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 120)
+  // 121 is the goal-plan column repair; the contiguity check above proves the
+  // sequence has no gap, so a new migration cannot be added without landing here.
+  assert.equal(LATEST_SCHEMA_VERSION, 121)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })

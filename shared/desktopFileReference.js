@@ -1,7 +1,12 @@
+// Types a default application merely *displays or edits*. Anything whose default
+// handler might instead execute it (scripts, shortcuts, installers, macro-enabled
+// office files) stays out — open-file must never mean run-file.
 const OPEN_EXTENSIONS = new Set([
-  'txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'pdf', 'docx', 'xlsx', 'pptx',
-  'html', 'htm', 'svg', 'png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'avif', 'bmp',
-  'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus', 'mp4', 'webm', 'mov', 'm4v',
+  'txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  'rtf', 'odt', 'ods', 'odp', 'odf', 'epub', 'xml', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg', 'log', 'sql', 'tex',
+  'zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz', 'tgz',
+  'html', 'htm', 'svg', 'png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'avif', 'bmp', 'ico',
+  'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus', 'mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv', 'wma',
 ])
 
 export function desktopFileError(code) {

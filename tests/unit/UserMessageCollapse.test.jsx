@@ -46,7 +46,6 @@ function renderMessages(root, messages) {
       onNavigatePermissions={() => {}}
       onOpenInPreview={() => {}}
       onExpandCompaction={() => {}}
-      onQuoteSelection={() => {}}
     />,
   )
 }

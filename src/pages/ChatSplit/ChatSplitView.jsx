@@ -6,8 +6,10 @@ import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
 import DesktopPet from './DesktopPet.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
+import PlanCard from './chatSplitView/PlanCard.jsx'
+import { revealTurnInConversation } from '../../lib/chatMessageSignals.js'
+import { ListChecks } from 'lucide-react'
 import { ChatSessionHeading, ChatWorkbenchToggle } from './chatSplitView/ChatSessionHeader.jsx'
-import SessionBranchNavigator from './chatSplitView/SessionBranchNavigator.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import ChatNoticeDocks from './chatSplitView/ChatNoticeDocks.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
@@ -26,48 +28,33 @@ export default function ChatSplitView({
   contextWindowAuthoritative,
   desktopPetVisible,
   directoryApproval,
-  editingMessageId,
   input,
   isGenerating,
   messages, messageRouteHash, modelReadiness,
   modelOptions,
-  onAbort,
-  onPause,
+  onAbort, onPause,
   onApprovalModeChange,
-  onClearWorkspace,
-  onAuthorizeDirectoryRequest,
+  onClearWorkspace, onAuthorizeDirectoryRequest,
   onRejectDirectoryRequest,
   onAuthorizeDirectory,
-  onCancelMessageEdit,
-  onCloseDesktopPet,
-  onCloseInlinePanel,
+  onCloseDesktopPet, onCloseInlinePanel,
   onCloseModelPicker,
-  onClosePreview,
-  onCloseWorkbench,
+  onClosePreview, onCloseWorkbench,
   onDirectoryReject,
-  onDismissResume,
-  onEditMessage,
-  onForkMessage,
+  onDismissResume, onForkMessage,
   forkingMessageId,
-  onExpandCompaction,
-  onFileChange,
+  onExpandCompaction, onFileChange,
   onGoalsChange,
-  onInlineContext,
-  onInlineTasks,
-  onKeyDown,
-  onManageMcp,
-  onManageModels,
+  onInlineContext, onInlineTasks, onKeyDown,
+  onManageMcp, onManageModels,
   onModelChange,
   onModelRetry,
   onNavigatePermissions,
-  onOpenArtifact,
-  onOpenInPreview,
+  onOpenArtifact, onOpenInPreview,
   onOpenModelPicker,
-  onOpenSessionBranch,
   onPermAllow,
   onPermDeny,
   onPreviewMessage,
-  onQuoteSelection,
   onRetryModelFailure,
   onSelectWorkspace,
   onResume,
@@ -78,10 +65,8 @@ export default function ChatSplitView({
   onWorkbenchSend,
   onWorkbenchTabChange,
   onWorkbenchToggle,
-  manualRetryAvailable,
-  resumeAvailable,
-  continueSameTaskAvailable,
-  handleContinueSameTask,
+  manualRetryAvailable, resumeAvailable,
+  continueSameTaskAvailable, handleContinueSameTask,
   runtimeSkillIds,
   selectedModel,
   selectedModelProviderId,
@@ -99,6 +84,9 @@ export default function ChatSplitView({
   toolApproval,
   workbenchMessage,
   workbenchOpen,
+  planVisible,
+  planArtifacts = [],
+  onClosePlan, onOpenPlan,
   workbenchTab,
   previewArtifact,
   previewTabs,
@@ -133,8 +121,7 @@ export default function ChatSplitView({
       <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
         <header className="chat-session-header flex h-12 shrink-0 items-center gap-2.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
           <ChatSessionHeading hasWorkspace={hasWorkspace} title={activeSession?.title || t('nav.newChat')} data-testid="chat-session-title" />
-          <SessionBranchNavigator key={activeSessionId || '__draft_branch__'} sessionId={activeSessionId}
-            onOpenSession={onOpenSessionBranch} t={t} />
+          <button type="button" data-testid="header-plan-toggle" aria-pressed={planVisible || undefined} onClick={() => (planVisible ? onClosePlan?.() : onOpenPlan?.())} title={t('workbench.planCardTitle')} aria-label={t('workbench.planCardTitle')} className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"><ListChecks className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" /></button>
           <ChatWorkbenchToggle
             open={workbenchOpen}
             onClick={onWorkbenchToggle}
@@ -150,12 +137,11 @@ export default function ChatSplitView({
           onSideEffectResolved={onSideEffectResolved}
           messages={messages} routeHash={messageRouteHash}
           workbenchMessage={workbenchMessage} isGenerating={isGenerating}
-          onEditMessage={onEditMessage} onForkMessage={onForkMessage}
+          onForkMessage={onForkMessage}
           forkingMessageId={forkingMessageId}
           onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
           onRejectDirectoryRequest={onRejectDirectoryRequest}
           onManageModels={onManageModels}
-          onQuoteSelection={onQuoteSelection}
           onRetryModelFailure={onRetryModelFailure}
           onPromptSelect={setInput}
           onOpenArtifact={onOpenArtifact}
@@ -224,7 +210,6 @@ export default function ChatSplitView({
         />
         <ChatComposer
           input={input}
-          editingMessageId={editingMessageId}
           setInput={setInput}
           onSend={onSend}
           attachments={attachments}
@@ -238,7 +223,6 @@ export default function ChatSplitView({
           selectedModelProviderId={selectedModelProviderId}
           isGenerating={isGenerating}
           onAbort={onAbort} onPause={onPause}
-          onCancelMessageEdit={onCancelMessageEdit}
           onFileChange={onFileChange}
           onToggleContext={toggleContextPanel}
           onOpenModelPicker={onOpenModelPicker}
@@ -265,6 +249,8 @@ export default function ChatSplitView({
 
       <ChatRightPanels
         workbenchOpen={workbenchOpen}
+        sessionId={activeSessionId}
+        todos={activeSession?.todos || []}
         messages={messages}
         attachments={attachments}
         workbenchTab={workbenchTab}
@@ -281,7 +267,22 @@ export default function ChatSplitView({
         onClosePreviewTab={onClosePreviewTab}
         onClosePreview={onClosePreview}
         onPreviewMessage={onPreviewMessage}
+        selectedWorkspacePath={selectedWorkspacePath}
       />
+
+      {/* The plan card belongs to the session, not to the tool panel, so it is
+          drawn over the main area and stays put whether or not the panel is open. */}
+      {planVisible && (
+        <PlanCard
+          artifacts={planArtifacts}
+          onClose={onClosePlan}
+          onOpenArtifact={onOpenArtifact}
+          onRevealTurn={revealTurnInConversation}
+          sessionId={activeSessionId}
+          t={t}
+          todos={activeSession?.todos || []}
+        />
+      )}
 
       {desktopPetVisible && !window.gugoDesktop?.isDesktop && (
         <DesktopPet

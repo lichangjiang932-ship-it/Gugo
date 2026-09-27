@@ -49,10 +49,13 @@ test('turn prompt keeps compiled blocks in stable order before dynamic context',
 
   assert.match(contents[0], /^# Agent: Stable Agent/)
   assert.match(contents[1], /## SOUL/)
-  assert.match(contents[2], /^# Skills/)
-  assert.match(contents[3], /^# Workspace instructions/)
-  assert.match(contents[4], /^# Session Context/)
-  assert.match(contents[5], /^# Long-term memory/)
+  // The response-format contract is static, so it sits in the stable prefix with
+  // the other compiled blocks, ahead of every per-turn block.
+  assert.match(contents[2], /^# Output Contract/)
+  assert.match(contents[3], /^# Skills/)
+  assert.match(contents[4], /^# Workspace instructions/)
+  assert.match(contents[5], /^# Session Context/)
+  assert.match(contents[6], /^# Long-term memory/)
 })
 test('trusted runtime prompt blocks use a fixed additive slot and receive only frozen scope metadata', () => {
   const observedScopes = []
@@ -117,16 +120,16 @@ test('changing workspace instructions preserves compiled block cache hits and co
   const afterSecond = getPromptCompilerStats()
 
   assert.deepEqual(
-    [0, 1, 2, 4].map((index) => second.messages[index]),
-    [0, 1, 2, 4].map((index) => first.messages[index]),
-    'changed workspace text must not alter the four compiled blocks',
+    [0, 1, 3, 5].map((index) => second.messages[index]),
+    [0, 1, 3, 5].map((index) => first.messages[index]),
+    'changed workspace text must not alter the compiled blocks',
   )
   for (const type of ['identity', 'ishiki', 'skills', 'sessions']) {
     assert.equal(afterFirst[type].misses, 1)
     assert.equal(afterSecond[type].hits, 1)
     assert.equal(afterSecond[type].misses, 1)
   }
-  assert.notEqual(second.messages[3].content, first.messages[3].content)
+  assert.notEqual(second.messages[4].content, first.messages[4].content)
 })
 
 test('changing session, memory and runtime hints never moves ahead of stable instructions', () => {
@@ -144,9 +147,9 @@ test('changing session, memory and runtime hints never moves ahead of stable ins
   })
   const first = prepareDynamic('one')
   const second = prepareDynamic('two')
-  assert.deepEqual(first.messages.slice(0, 4), second.messages.slice(0, 4))
-  assert.equal(second.messages[3].content, instruction)
-  assert.deepEqual(second.messages.slice(4).map((message) => message.content), [
+  assert.deepEqual(first.messages.slice(0, 5), second.messages.slice(0, 5))
+  assert.equal(second.messages[4].content, instruction)
+  assert.deepEqual(second.messages.slice(5).map((message) => message.content), [
     'Session evidence two', 'Memory evidence two', '# Runtime Plugin Context: hints\nSource: fixture\n\nRuntime evidence two',
   ])
   assert.equal(second.compactionArchiveId, 'archive-two')

@@ -11,6 +11,7 @@ import {
   getSystemDiagnostics,
 } from '../adapters/modelProxy.js'
 import { discoverOllamaEndpoint, looksLikeOllama } from '../adapters/ollamaNative.js'
+import { discoverLmStudioEndpoint } from '../adapters/lmStudioNative.js'
 
 export const PROVIDER_TOOL_PROBE_NAME = 'gugo_provider_probe'
 export const PROVIDER_TOOL_PROBE = Object.freeze({
@@ -248,7 +249,20 @@ export async function runProviderDiagnosticSteps({ provider, modelName, userId, 
       modelName,
       messages: [{ role: 'user', content: 'Reply with only: pong' }],
     })
-    return { reply: String(reply || '').slice(0, 200) }
+    // The model has just answered, so a local server has it loaded and will state
+    // the window it is serving. That number decides the compaction threshold; the
+    // probe is best-effort and never fails this step.
+    const native = profile.isLocal ? await discoverLmStudioEndpoint({
+      baseUrl: provider.baseUrl,
+      headers: provider.headers || {},
+      apiKey: provider.apiKey || '',
+    }) : { contextWindow: null, modelProfiles: {} }
+    const detected = native.modelProfiles?.[modelName] || null
+    return {
+      reply: String(reply || '').slice(0, 200),
+      ...(detected ? { contextWindow: detected.contextWindow, contextWindowBasis: detected.basis } : {}),
+      ...(Object.keys(native.modelProfiles || {}).length ? { modelProfiles: native.modelProfiles } : {}),
+    }
   }, { sensitiveValues }))
   if (steps[1].ok) {
     let toolStep

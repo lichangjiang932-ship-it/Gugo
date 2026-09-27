@@ -34,7 +34,7 @@ test('chat composer accepts pasted files and shows managed upload state', () => 
   assert.match(composerSource, /item\.uploadStatus === 'error'/)
 })
 
-test('chat drafts persist while user edit, failure resend, and copy actions stay real', () => {
+test('chat drafts persist while failure resend and copy actions stay real', () => {
   assert.match(lifecycleSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
   assert.match(lifecycleSource, /attachments: normalizeDraftAttachments\(attachmentsRef\.current\)/)
   assert.match(lifecycleSource, /const nextDraft = readSessionDraft\(\(state\.sessionDrafts \|\| \{\}\)\[nextId\]\)/)
@@ -43,23 +43,23 @@ test('chat drafts persist while user edit, failure resend, and copy actions stay
     chatSendActionsSource,
     /await triggerSendFlow\([\s\S]{0,120}typedContent \|\| describeAttachmentPrompt\(currentAttachments, lang\),[\s\S]{0,80}currentAttachments,[\s\S]{0,120}\(\{ sessionId: acceptedSessionId \}/,
   )
-  assert.match(chatSource, /handleEditMessage/)
   assert.doesNotMatch(chatSource, /handleRegenerateMessage|canRegenerateAssistantMessage|onRegenerateMessage/)
-  assert.match(
-    chatSendActionsSource,
-    /if \(replayDraft\)[\s\S]*?type: 'TRUNCATE_MESSAGES'[\s\S]*?payload: replayDraft\.historyLimit/,
-  )
   assert.doesNotMatch(chatSource, /handleDeleteMessage/)
+  // Message editing was removed by request: there is no edit action on a sent
+  // message, no editing banner over the composer, and no replay-truncate path
+  // that only existed to rewind history for an edited resend. Asserting the
+  // absence is what keeps it from quietly coming back.
+  assert.doesNotMatch(messagesSource + composerSource, /onEditMessage|editingMessageId|message-edit-banner|edit-user-message/)
+  assert.doesNotMatch(chatSendActionsSource + chatSource, /replayDraft|handleEditMessage|handleCancelMessageEdit/)
+  assert.doesNotMatch(chatSendActionsSource, /TRUNCATE_MESSAGES/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
   assert.match(messageRowSource, /copyTextToClipboard\(copyableMessageText\(content\)\)/)
   assert.match(messageRowSource, /chatMessages\.copied/)
-  assert.match(messagesSource, /onEditMessage/)
   assert.doesNotMatch(messagesSource, /onDeleteMessage|<Trash2/)
   assert.match(messageRowSource, /isModelPreExecutionFailure\(msg\) \? onRetryModelFailure : null/)
   assert.match(messageRowSource, /data-testid="retry-model-request"/)
   assert.doesNotMatch(messageRowSource, /data-testid="edit-assistant-prompt"/)
   assert.doesNotMatch(messageRowSource, /data-testid="regenerate-assistant-message"/)
-  assert.match(messageRowSource, /data-testid="edit-user-message"/)
   assert.doesNotMatch(messageRowSource, /onDeleteMessage/)
 })
 
@@ -218,7 +218,10 @@ test('user messages stay right-aligned in a soft bubble while metadata remains o
 })
 
 test('tool activity is an inline label while command arguments and logs default collapsed', () => {
-  assert.match(toolCardSource, /toolCallLabel\(call\.name, t\)/)
+  // The row resolves its label through the traced-with-verb helper, and that
+  // helper still falls back to the human tool label for richer tool names.
+  assert.match(toolCardSource, /stepRowLabel\(call\.name, kind, t\)/)
+  assert.match(toolCardSource, /toolCallLabel\(name, t\)/)
   assert.match(toolCardSource, /chat-tool-label[^>]*>\{label\}/)
   assert.match(toolCardSource, /chat-tool-raw-name[^>]*>\{call\.name \|\| label\}/)
   assert.match(toolCardSource, /const isExpanded = expanded === true/)

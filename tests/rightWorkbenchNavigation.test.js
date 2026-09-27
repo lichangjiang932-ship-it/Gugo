@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { normalizeBrowserUrl } from '../src/pages/ChatSplit/rightWorkbench/rightWorkbenchLayout.js'
+import { normalizeBrowserUrl } from '../src/lib/browserUrlPolicy.js'
 
 test('workbench navigation accepts HTTP(S) websites and explicit localhost ports', () => {
   for (const [input, expected] of [

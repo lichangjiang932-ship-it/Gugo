@@ -13,6 +13,7 @@ import {
 } from '../services/modelProviderStore.js'
 import { getRuntimeEnv, getSystemDiagnostics } from '../adapters/modelProxy.js'
 import { discoverOllamaEndpoint, looksLikeOllama } from '../adapters/ollamaNative.js'
+import { discoverLmStudioEndpoint } from '../adapters/lmStudioNative.js'
 import { resolveEndpointProfile } from '../utils/endpointProfile.js'
 import {
   buildProviderProfileOverrides,
@@ -80,17 +81,27 @@ async function discoverModelProvider(req, res, userId) {
     MODEL_NAME: 'probe-model',
   }
   const diagnostics = await getSystemDiagnostics({ env, checkEndpoint: true, userId })
+  // A local LM Studio answers its OpenAI-compatible list with bare ids; its own
+  // catalog is where the served context window lives. Asked only for local
+  // endpoints, and ignored entirely if the server is something else.
+  const nativeCatalog = await discoverLmStudioEndpoint({ baseUrl, headers, apiKey })
   const profile = resolveEndpointProfile({ baseUrl, env: getRuntimeEnv() })
   const endpoint = redactEndpointDiagnostics(diagnostics.endpoint, [
     env.MODEL_PROVIDER_PROBE_API_KEY,
     ...Object.values(headers),
   ])
-  return sendJson(res, diagnostics.endpoint?.ok ? 200 : 502, {
-    ok: !!diagnostics.endpoint?.ok,
+  const remoteModels = diagnostics.endpoint?.remoteModels || []
+  return sendJson(res, (diagnostics.endpoint?.ok || nativeCatalog.ok) ? 200 : 502, {
+    ok: Boolean(diagnostics.endpoint?.ok || nativeCatalog.ok),
     kind: profile.kind,
     endpoint,
-    models: diagnostics.endpoint?.remoteModels || [],
-    modelProfiles: diagnostics.endpoint?.remoteModelProfiles || {},
+    models: remoteModels.length ? remoteModels : nativeCatalog.models,
+    // The native catalog wins where both report the same model: it states what the
+    // server is serving, not the ceiling the compatible list would have to guess.
+    modelProfiles: {
+      ...(diagnostics.endpoint?.remoteModelProfiles || {}),
+      ...(nativeCatalog.modelProfiles || {}),
+    },
   })
 }
 
@@ -142,6 +153,9 @@ async function testModelProvider(req, res, userId, id) {
     expectedConfigRevision: provider.configRevision,
     readiness: {
       ...capabilities,
+      // The window the endpoint itself reports for the model that just answered,
+      // kept with the readiness observation it came from.
+      ...(Number.isFinite(completionStep?.contextWindow) ? { contextWindow: completionStep.contextWindow } : {}),
       ...(blockingStep?.errorCode ? { errorCode: blockingStep.errorCode } : {}),
     },
   })

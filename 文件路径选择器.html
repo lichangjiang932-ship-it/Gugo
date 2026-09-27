@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文件路径选择器</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f5f7fa;
+    color: #333;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 2rem;
+  }
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    padding: 2.5rem 3rem;
+    width: 100%;
+    max-width: 520px;
+  }
+  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; }
+  label {
+    display: block;
+    font-size: .875rem;
+    color: #666;
+    margin-bottom: .5rem;
+  }
+  .file-row {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    margin-bottom: 1rem;
+  }
+  input[type="text"] {
+    flex: 1;
+    padding: .6rem .8rem;
+    border: 1px solid #d0d5dd;
+    border-radius: 8px;
+    font-size: .9rem;
+    background: #fafbfc;
+    outline: none;
+  }
+  input[type="text"]:focus { border-color: #4a90d9; }
+  input[type="file"] { display: none; }
+  button {
+    padding: .6rem 1.2rem;
+    border: none;
+    border-radius: 8px;
+    font-size: .875rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s;
+  }
+  .btn-browse { background: #4a90d9; color: #fff; }
+  .btn-browse:hover { background: #3a7bc8; }
+  .preview {
+    margin-top: 1rem;
+    padding: .75rem 1rem;
+    background: #f0f4f8;
+    border-radius: 8px;
+    font-size: .82rem;
+    color: #555;
+    word-break: break-all;
+    display: none;
+  }
+  .preview.active { display: block; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>选择本地文件</h1>
+  <label>文件路径</label>
+  <div class="file-row">
+    <input type="text" id="path" placeholder="未选择文件" readonly>
+    <button class="btn-browse" onclick="document.getElementById('picker').click()">浏览…</button>
+    <input type="file" id="picker">
+  </div>
+  <div class="preview" id="info"></div>
+</div>
+<script>
+  const picker = document.getElementById('picker');
+  const pathInput = document.getElementById('path');
+  const info = document.getElementById('info');
+  picker.addEventListener('change', () => {
+    const file = picker.files[0];
+    if (!file) return;
+    pathInput.value = file.name;
+    const sizeKB = (file.size / 1024).toFixed(1);
+    info.textContent = '文件名：' + file.name + '　|　大小：' + sizeKB + ' KB　|　类型：' + (file.type || '未知');
+    info.classList.add('active');
+  });
+</script>
+</body>
+</html>

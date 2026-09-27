@@ -70,6 +70,14 @@ test('desktop opening allowlist excludes executable, script, shortcut and macro 
   assert.deepEqual(desktopFileOpenPolicy('report.pdf'), { allowed: true, confirm: false })
 })
 
+test('desktop opening covers documents, archives, data files and media', () => {
+  for (const name of ['report.doc', 'slides.ppt', 'notes.odt', 'table.ods', 'deck.odp', 'book.epub',
+    'backup.zip', 'backup.7z', 'backup.rar', 'backup.tar', 'backup.gz',
+    'config.yaml', 'config.toml', 'app.log', 'dump.sql', 'clip.mkv', 'song.wma', 'still.ico']) {
+    assert.deepEqual(desktopFileOpenPolicy(name), { allowed: true, confirm: false }, name)
+  }
+})
+
 test('desktop opens and reveals only metadata signed by the actual local service', async () => {
   const { payload, options, calls, fullPath } = fixture()
   assert.deepEqual(await executeDesktopFileAction(payload, options), { ok: true, canceled: false, action: 'open' })

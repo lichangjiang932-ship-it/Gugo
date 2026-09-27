@@ -35,6 +35,10 @@ function finiteOptionalNumber(value) {
 export function ExecutionDisclosure({ children, hasExecution, msg, running, preserveNarration = false, t }) {
   const [expanded, setExpanded] = useState(running || preserveNarration)
   const wasRunning = useRef(running)
+  // Once the reader opens or closes the fold themselves, their choice stands:
+  // collapsing a timeline someone is reading at the moment the turn ends is a
+  // worse failure than leaving it open.
+  const userTouched = useRef(false)
   const contentId = useId()
   const [fallbackStartedAt] = useState(() => Date.now())
   const storedLatency = finiteOptionalNumber(msg.meta?.latency)
@@ -60,14 +64,16 @@ export function ExecutionDisclosure({ children, hasExecution, msg, running, pres
     hasElapsedTime ? formatTaskDuration(elapsed, t) : '',
     toolCount > 0 ? t('chatMessages.executionToolCount', { count: toolCount }) : '',
   ].filter(Boolean).join(' · ')
+  // Collapsed, the fold owes the reader a one-line outcome. Expanded, the tool
+  // cards are the outcome, so the summary would only repeat them.
   const resultSummary = !running && !expanded ? executionResultSummary(msg.meta?.toolCalls, t) : ''
 
   useEffect(() => {
     // Public narration is part of the conversation, not diagnostic detail.
     // Keep it readable after completion/cancellation. A tool-only history can
-    // still fold once, and subsequent user disclosure choices remain intact.
+    // still fold once, unless the reader already made that call themselves.
     if (running && !wasRunning.current) setExpanded(true)
-    if (!running && wasRunning.current && !preserveNarration) setExpanded(false)
+    if (!running && wasRunning.current && !preserveNarration && !userTouched.current) setExpanded(false)
     wasRunning.current = running
   }, [running, preserveNarration])
 
@@ -85,7 +91,10 @@ export function ExecutionDisclosure({ children, hasExecution, msg, running, pres
         data-testid="execution-toggle"
         aria-controls={contentId}
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => {
+          userTouched.current = true
+          setExpanded((value) => !value)
+        }}
       >
         <span data-testid="task-duration-header">{label}</span>
         {resultSummary && <span className="chat-execution-result" data-testid="execution-result-summary"> · {resultSummary}</span>}

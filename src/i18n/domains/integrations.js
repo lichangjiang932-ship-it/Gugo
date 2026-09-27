@@ -3,6 +3,13 @@ const translations = {
     "kindSocial": "社交媒体 / 即时通讯",
     "kindVisionAssist": "视觉辅助副驾",
     "visionAssistHint": "无视觉能力的模型先调用此副驾把图片转文本描述，再继续推理。",
+    "visionAssist": {
+      "badge": {
+        "active": "视觉副驾已启用",
+        "inactive": "视觉副驾未启用",
+        "hint": "没有视觉能力的模型会先调用视觉副驾把图片转成文字描述，再继续推理。",
+      },
+    },
     "addNew": "新建集成",
     "empty": "还没有配置任何 {kind}",
     "emptyCta": "+ 新建第一个",
@@ -27,6 +34,13 @@ const translations = {
     "kindSocial": "Social media / IM",
     "kindVisionAssist": "Vision assistant copilot",
     "visionAssistHint": "Models without vision call this copilot first to turn images into text descriptions, then continue reasoning.",
+    "visionAssist": {
+      "badge": {
+        "active": "Vision copilot on",
+        "inactive": "Vision copilot off",
+        "hint": "Models without vision call this copilot first to turn images into text, then continue reasoning.",
+      },
+    },
     "addNew": "New integration",
     "empty": "No {kind} configured yet",
     "emptyCta": "+ Add the first one",

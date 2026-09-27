@@ -6,6 +6,13 @@ import { createRoot } from 'react-dom/client'
 import { DirectFileToolbar } from '../../src/pages/ChatSplit/preview/PreviewChrome.jsx'
 import DirectFilePreview from '../../src/pages/ChatSplit/preview/DirectFilePreview.jsx'
 import RightWorkbench from '../../src/pages/ChatSplit/RightWorkbench.jsx'
+import WorkbenchFiles from '../../src/pages/ChatSplit/rightWorkbench/WorkbenchFiles.jsx'
+import { collectArtifacts } from '../../src/pages/ChatSplit/rightWorkbench/rightWorkbenchArtifacts.js'
+import { translateKey } from '../../src/i18n/translations.js'
+
+// The artifact list takes its copy as a prop, and these assertions are about real
+// labels, so it gets the real table in the language the components default to.
+const realT = (key, values = {}) => translateKey(key, 'zh').replace(/\{(\w+)\}/g, (_, name) => values[name])
 
 function setup() {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost/chat' })
@@ -44,6 +51,12 @@ test('direct files open in reading view with a path, source toggle and secondary
     const open = element.querySelector('[data-testid="preview-open-menu"]')
     assert.equal(open.tagName, 'SUMMARY')
     assert.match(open.textContent, /chatPreview.openFile/)
+    // The menu names the file it acts on before listing the actions, so a reader
+    // who has several previews open can tell which one this is.
+    const menuTitle = element.querySelector('[data-testid="preview-open-menu-title"]')
+    assert.ok(menuTitle, 'the menu carries the filename')
+    assert.equal(menuTitle.getAttribute('title'), 'report.md')
+    assert.match(menuTitle.textContent, /report\.md/)
     assert.doesNotMatch(open.textContent, /download|saveAs/)
     assert.equal(element.querySelector('a[download="report.md"]').textContent, 'chatPreview.saveAs')
     assert.equal(findButton(element, 'chatPreview.openDefaultApp'), undefined)
@@ -167,13 +180,20 @@ test('workbench separates source attachments and preserves legacy verified read 
   const localPath = 'C:\\Workspace\\legacy.md'
   const source = '# Legacy snapshot'
   try {
-    await act(async () => root.render(<RightWorkbench activeTab="files" onClose={() => {}} onTabChange={() => {}}
+    // The artifact list is no longer a workbench tab — the tool rail carries only
+    // chat, browser and terminal — so the list itself is rendered here. What it
+    // must keep proving is unchanged: outputs and source attachments stay separate,
+    // a legacy read snapshot is marked rather than offered as a download, and
+    // opening it yields the recorded source.
+    const messages = [{ id: 'legacy', role: 'assistant', meta: { toolCalls: [
+      { id: 'write-legacy', name: 'write_file', args: { path: localPath, content: source }, result: { ok: true, path: localPath } },
+      { id: 'read-legacy', name: 'read_file', result: { ok: true, path: localPath, content: source, returnedLines: 1, totalLines: 1 } },
+    ] } }]
+    const attachments = [{ id: 'source-pdf', name: 'input.pdf', mimeType: 'application/pdf', downloadUrl: '/api/attachments/source-pdf/content' }]
+    await act(async () => root.render(<WorkbenchFiles
+      artifacts={collectArtifacts(messages, attachments)}
       onOpenArtifact={(artifact) => opened.push(artifact)}
-      attachments={[{ id: 'source-pdf', name: 'input.pdf', mimeType: 'application/pdf', downloadUrl: '/api/attachments/source-pdf/content' }]}
-      messages={[{ id: 'legacy', role: 'assistant', meta: { toolCalls: [
-        { id: 'write-legacy', name: 'write_file', args: { path: localPath, content: source }, result: { ok: true, path: localPath } },
-        { id: 'read-legacy', name: 'read_file', result: { ok: true, path: localPath, content: source, returnedLines: 1, totalLines: 1 } },
-      ] } }]} />))
+      t={realT} />))
     const outputs = element.querySelector('[data-testid="workbench-outputs"]')
     const sources = element.querySelector('[data-testid="workbench-sources"]')
     assert.match(outputs.textContent, /legacy\.md/)

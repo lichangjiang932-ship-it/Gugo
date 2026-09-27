@@ -28,6 +28,15 @@ html[data-theme="light"] {
   --color-cyan: #2E8FA3;
   --color-cyan-soft: rgba(46, 143, 163, 0.14);
 
+  /* The execution log reads in two voices: a step's row is a machine chip (mono,
+     faint surface, code colour) and its prose is ordinary text on the page. The
+     code surface follows the theme, so the block stays legible on every ground. */
+  --code-bg: #F6F8FA;
+  --code-text: #24292F;
+  --code-fade: #999999;
+  --code-fade-hover: #6B7280;
+  --text-strong: #111111;
+
   /* RGB-channel variables for Tailwind opacity modifiers */
   --color-paper-rgb: 247 248 250;
   --color-paper-2-rgb: 238 240 243;
@@ -129,6 +138,11 @@ html[data-theme="dark"] {
   --color-cyan-soft: rgba(46, 143, 163, 0.14);
 
   --color-paper-rgb: 24 24 27;
+  --code-bg: #1E1E1E;
+  --code-text: #D4D4D4;
+  --code-fade: #777777;
+  --code-fade-hover: #A1A1AA;
+  --text-strong: #FFFFFF;
   --color-paper-2-rgb: 39 39 42;
   --color-sidebar-rgb: 29 29 32;
   --color-surface-rgb: 33 33 37;
@@ -201,6 +215,11 @@ html[data-theme="white"] {
   --color-cyan-soft: rgba(36, 127, 145, 0.12);
 
   --color-paper-rgb: 255 255 255;
+  --code-bg: #F6F8FA;
+  --code-text: #24292F;
+  --code-fade: #999999;
+  --code-fade-hover: #6B7280;
+  --text-strong: #111111;
   --color-paper-2-rgb: 245 246 248;
   --color-sidebar-rgb: 247 247 246;
   --color-surface-rgb: 255 255 255;
@@ -566,6 +585,242 @@ html[data-animations="false"] *::after {
   margin-top: 0.9rem;
 }
 
+.chat-answer-empty {
+  color: rgb(var(--color-ink-fade-rgb));
+  font-size: var(--type-ui);
+}
+
+/* The model's own ReAct retelling (【Thought】/【Action】/【Observation】). It sits
+   inside the same disclosure as the recorded tool timeline, so it borrows that
+   list's rail, surface and type scale rather than introducing a second visual
+   language: one process, read top to bottom. Only the first column differs —
+   these steps are labelled by kind, not numbered, because they are not the
+   calls the runtime actually made. */
+.chat-trajectory {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin: 0.55rem 0 0;
+  padding: 0.35rem 0;
+  list-style: none;
+  border-top: 1px solid rgb(var(--color-ink-rgb) / 0.08);
+}
+
+/* ── The ReAct loop ─────────────────────────────────────────────────────────
+   思考 / 行动 / 观察 repeated, with the recorded call and its real output under
+   the action that asked for it. The prose steps are shown outright — they are
+   sentences, not drawers — and the calls keep their chevron, because what a call
+   opens onto is real code. */
+.chat-round {
+  padding: 0;
+}
+
+/* Header: the machine voice, and it is *faded* rather than boxed. No card, no
+   border, no background — the row recedes through soft grey type and a little
+   transparency, the way ambient runtime output does, so the prose under it is
+   what the eye lands on. Hover lifts it back to full contrast to say "this row
+   can be opened".
+   Label and summary sit 8px apart, flush left — never space-between, and the
+   arrow follows the text instead of being pinned right. */
+.chat-round-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-height: 1.4rem;
+  padding: 0.25rem 0;
+  opacity: 0.75;
+  transition: opacity 140ms ease;
+}
+
+.chat-round-head:hover,
+.chat-round-head:focus-within {
+  opacity: 1;
+}
+
+.chat-round-label {
+  flex: none;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--code-fade);
+  white-space: nowrap;
+  transition: color 140ms ease;
+}
+
+.chat-round-summary {
+  /* Natural width, shrinkable: a short gist keeps the arrow right after it, and
+     only a gist too long to fit pushes the arrow to the line end. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--code-fade);
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 140ms ease;
+}
+
+.chat-round-head:hover .chat-round-label,
+.chat-round-head:hover .chat-round-summary {
+  color: var(--code-fade-hover);
+}
+
+/* The step's substance, always on screen — in every state, folded or open. The
+   human voice: solid high-contrast type on no surface at all, flush with the row
+   above it so the two read as one block. */
+.chat-round-body {
+  padding: 0.15rem 0 0.5rem;
+}
+
+/* Scoped to the body so it outranks the base markdown scale, which is set for a
+   document rather than for a step.
+   Normal weight on purpose: a step carries one text, so a bold body would read
+   as the header's gist enlarged and repeated. */
+.chat-round-body .chat-markdown {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.chat-round-text :not(pre) > code {
+  padding: 0 0.28rem;
+  border: 0;
+  border-radius: 0.2rem;
+  background: #2a2a2a;
+  color: #61afef;
+  font-size: 0.94em;
+}
+
+.chat-round-tool {
+  padding: 0;
+}
+
+/* A file change is a card: what was written, how much, with the real metrics
+   one expand away. */
+.chat-file-card {
+  margin: 0.25rem 0;
+  border: 1px solid rgb(var(--color-skel-2-rgb));
+  border-radius: 0.5rem;
+  background: rgb(var(--color-paper-2-rgb));
+}
+
+.chat-file-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.35rem 0.55rem;
+  text-align: left;
+}
+
+.chat-file-card-icon {
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+  color: rgb(var(--color-accent-rgb));
+}
+
+.chat-file-card-title {
+  flex: none;
+  color: rgb(var(--color-ink-soft-rgb));
+  font-size: var(--type-ui);
+}
+
+.chat-file-card-path {
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(var(--color-ink-rgb));
+  font-family: var(--font-mono);
+  font-size: var(--type-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-file-card-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: rgb(var(--color-accent-rgb));
+  color: rgb(var(--color-surface-rgb));
+  font-family: var(--font-mono);
+  font-size: var(--type-ui);
+}
+
+.chat-file-card-chevron {
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+  color: rgb(var(--color-ink-fade-rgb));
+  transition: transform 140ms ease;
+}
+
+.chat-file-card-body {
+  padding: 0.15rem 0.55rem 0.45rem 1.65rem;
+}
+
+.chat-file-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.1rem 0;
+}
+
+.chat-file-card-meta {
+  color: rgb(var(--color-ink-fade-rgb));
+  font-family: var(--font-mono);
+  font-size: var(--type-ui);
+}
+
+.chat-file-card-digest {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-trajectory-step {
+  position: relative;
+  display: block;
+  min-width: 0;
+  padding: 0.3rem 0;
+}
+
+/* The label is a line above its content, not a column beside it: the reasoning
+   runs the full width of the conversation, like the answer it belongs with. */
+.chat-trajectory-label {
+  display: block;
+  margin-bottom: 0.15rem;
+  font-family: var(--font-mono);
+  font-size: calc(var(--type-meta) - 1px);
+  line-height: 1.45;
+  color: rgb(var(--color-ink-fade-rgb));
+  white-space: nowrap;
+}
+
+/* Colour marks the kind of step, and stays off the success/danger scale: those
+   two are reserved for how a recorded tool call ended. */
+.chat-trajectory-step-action .chat-trajectory-label {
+  color: rgb(var(--color-accent-rgb));
+}
+
+.chat-trajectory-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The reasoning is the substance of the process, so it is rendered by the same
+   Markdown rules as the answer — same size, same rhythm, same left edge. The
+   process and the result are peers; the only thing that sets them apart is that
+   the process folds away when the turn ends. No size override belongs here:
+   shrinking the working-out to meta text turned it into a footnote. */
+
 /* Hover-only controls need a direct touch target on phones and tablets. */
 @media (hover: none), (pointer: coarse) {
   .chat-message-actions,
@@ -852,31 +1107,88 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
 .chat-tool-list {
   position: relative;
   overflow: hidden;
-  padding: 0.22rem 0.45rem 0.32rem;
+  /* No side padding and no rail: the steps start at the same left edge as the
+     answer below them, so the process and the result read as peers. */
+  padding: 0.22rem 0 0.32rem;
   border-top: 1px solid rgb(var(--color-ink-rgb) / 0.08);
-  background: rgb(var(--color-paper-2-rgb) / 0.12);
   transform-origin: top;
 }
 
 .chat-tool-list::before {
-  position: absolute;
-  top: 0.94rem;
-  bottom: 1.04rem;
-  left: 0.95rem;
-  width: 1px;
-  content: "";
-  background: rgb(var(--color-ink-rgb) / 0.11);
-  pointer-events: none;
+  content: none;
 }
 
 .chat-tool-step {
   position: relative;
-  display: grid;
-  grid-template-columns: 1.15rem minmax(0, 1fr);
-  gap: 0.4rem;
-  padding: 0.22rem 0;
+  display: block;
+  padding: 0.26rem 0;
   transition: background-color 160ms ease, opacity 160ms ease;
 }
+
+/* ── Tool group row ─────────────────────────────────────────────────────────
+   Consecutive calls of one family read as a single phase of work, labelled by
+   what the agent was doing ("查阅 · 2 搜索, 2 文件") rather than by tool name. */
+.chat-tool-group + .chat-tool-group,
+.chat-tool-group + .chat-tool-step-motion,
+.chat-tool-step-motion + .chat-tool-group {
+  border-top: 1px solid rgb(var(--color-ink-rgb) / 0.045);
+}
+
+.chat-tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-height: 1.35rem;
+  padding: 0.28rem 0;
+  text-align: left;
+  transition: background-color 150ms ease;
+}
+
+.chat-tool-group-head:hover {
+  background: rgb(var(--color-neutral-50-rgb) / 0.72);
+}
+
+.chat-tool-group-label {
+  flex: none;
+  color: rgb(var(--color-ink-soft-rgb));
+  font-size: var(--type-ui);
+}
+
+.chat-tool-group-counts {
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(var(--color-ink-fade-rgb));
+  font-size: var(--type-ui);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-tool-group-chevron {
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+  color: rgb(var(--color-ink-fade-rgb));
+  transition: transform 140ms ease;
+}
+
+/* Members sit one level in from the group row they belong to — the one indent
+   the timeline keeps, because it carries meaning rather than decoration. */
+.chat-tool-group-body {
+  padding-left: 0.85rem;
+}
+
+.chat-tool-diffstat {
+  flex: none;
+  display: inline-flex;
+  gap: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-tool-diffstat-add { color: rgb(var(--color-success-rgb)); }
+.chat-tool-diffstat-del { color: rgb(var(--color-danger-rgb)); }
 
 .chat-tool-step:hover {
   background: rgb(var(--color-neutral-50-rgb) / 0.72);
@@ -891,56 +1203,39 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   border-top: 1px solid rgb(var(--color-ink-rgb) / 0.045);
 }
 
-.chat-tool-step-marker {
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1rem;
-  height: 1rem;
-  border: 0;
-  border-radius: 999px;
-  background: rgb(var(--color-paper-rgb));
-  color: rgb(var(--color-ink-fade-rgb));
-  font-family: var(--font-mono);
-  font-size: calc(var(--type-meta) - 1px);
-  font-variant-numeric: tabular-nums;
-  transition: color 160ms ease, background-color 160ms ease;
-}
-
-.chat-tool-step[data-status="success"] .chat-tool-step-marker {
-  border-color: rgb(var(--color-success-rgb) / 0.35);
-  background: rgb(var(--color-success-rgb) / 0.055);
-  color: rgb(var(--color-success-rgb));
-}
-
-.chat-tool-step[data-status="error"] .chat-tool-step-marker {
-  border-color: rgb(var(--color-danger-rgb) / 0.42);
-  background: rgb(var(--color-danger-rgb) / 0.055);
-  color: rgb(var(--color-danger-rgb));
-}
-
-.chat-tool-step[data-status="cancelled"] .chat-tool-step-marker {
-  border-color: rgb(var(--color-ink-rgb) / 0.18);
-  background: rgb(var(--color-ink-rgb) / 0.035);
-  color: rgb(var(--color-ink-fade-rgb));
-}
-
 .chat-tool-step-body {
   min-width: 0;
   padding-top: 0.08rem;
 }
 
+/* A call reads as a tool bar in the same faded voice as a narrated step's row:
+   monospace, soft grey, slightly transparent, no card around it. Hover restores
+   contrast for the row the reader is actually on. */
 .chat-tool-step-header {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
   min-height: 1.35rem;
-  gap: 0.38rem;
+  gap: 8px;
+  padding: 0.25rem 0;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  opacity: 0.75;
+  transition: opacity 140ms ease;
+}
+
+.chat-tool-step-header:hover,
+.chat-tool-step-header:focus-within,
+.chat-tool-step:has(.chat-tool-step-details) > .chat-tool-step-body > .chat-tool-step-header {
+  opacity: 1;
 }
 
 .chat-tool-step-header-compact {
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+/* The verb leads and never shrinks; the argument takes what it needs and
+   truncates, so the arrow follows the text rather than being pinned right. */
+.chat-tool-step-header > .chat-tool-action {
+  flex: 0 1 auto;
 }
 
 .chat-tool-icon {
@@ -1079,19 +1374,22 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
 
 .chat-tool-live-output {
   max-width: 100%;
-  max-height: 12rem;
-  overflow: auto;
+  max-height: 350px;
+  overflow-y: auto;
   margin-top: 0.32rem;
-  border: 1px solid rgb(var(--color-ink-rgb) / 0.09);
-  border-radius: 0.36rem;
-  background: rgb(var(--color-ink-rgb) / 0.03);
-  padding: 0.5rem;
-  color: rgb(var(--color-ink-soft-rgb));
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  line-height: 1rem;
+  /* A terminal block on the theme's own code surface: flat, edge-aligned, no
+     card chrome. */
+  border: 0;
+  border-radius: 0;
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: 0.5rem 0.6rem;
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: break-all;
 }
 
 .chat-tool-error-context {
@@ -1299,7 +1597,6 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   .chat-activity-summary,
   .chat-activity-chevron,
   .chat-tool-step,
-  .chat-tool-step-marker,
   .chat-tool-status,
   .chat-tool-details summary svg {
     animation-duration: 0.001ms !important;
@@ -1313,44 +1610,13 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
 .chat-run-timeline {
   position: relative;
   margin: 0.05rem 0 0.55rem;
-  padding-left: 0.7rem;
   color: rgb(var(--color-ink-soft-rgb));
 }
 
-/* timeline 短线锚点：每个工具组左侧一枚独立短线，不连线、不贯穿。
-   运行中转蓝色呼吸；失败红；完成/取消保持中性灰。 */
-.chat-run-timeline::before {
-  content: "";
-  position: absolute;
-  top: 0.45rem;
-  left: 0;
-  width: 1px;
-  height: 1.1rem;
-  border-radius: 1px;
-  background: rgb(var(--color-ink-rgb) / 0.18);
-}
-
-.chat-run-timeline[data-status="running"]::before {
-  background: rgb(var(--color-running-rgb));
-  animation: chat-anchor-breathe 2s ease-in-out infinite;
-}
-
-.chat-run-timeline[data-status="error"]::before {
-  background: rgb(var(--color-danger-rgb));
-}
-
-@keyframes chat-anchor-breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-html[data-animations="false"] .chat-run-timeline::before {
-  animation: none !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-run-timeline::before { animation: none !important; }
-}
+/* Every step — a narrated thought or a recorded call — starts on the same
+   vertical line as the answer. The block used to be inset with an anchor tick
+   beside it, which is what made the calls look like a sub-list of the prose
+   rather than the same list. */
 
 .chat-timeline-history {
   display: inline-flex;
@@ -1390,8 +1656,8 @@ html[data-animations="false"] .chat-run-timeline::before {
 
 .chat-run-timeline .chat-tool-step {
   position: relative;
-  display: grid;
-  padding: 0.16rem 0;
+  display: block;
+  padding: 0.2rem 0;
   border-radius: 0;
   box-shadow: none;
 }
@@ -1400,17 +1666,10 @@ html[data-animations="false"] .chat-run-timeline::before {
   background: transparent;
 }
 
-.chat-run-timeline .chat-tool-step::before {
-  display: none;
-}
-
-.chat-run-timeline .chat-tool-step[data-status="success"]::before {
-  background: rgb(var(--color-cyan-rgb));
-}
-
-.chat-run-timeline .chat-tool-step[data-status="error"]::before {
-  background: rgb(var(--color-accent-rgb));
-}
+/* A running-step indicator was intended here, but the base rule hid the
+   pseudo-element, so every status colour and the pulse below were dead. The row
+   already reports "运行中" plus a live elapsed time, so the rules are gone rather
+   than re-enabled: a pulse is a design decision, not a cleanup. */
 
 .chat-run-timeline .chat-tool-step[data-status="cancelled"]::before {
   background: rgb(var(--color-ink-fade-rgb));
@@ -1419,11 +1678,6 @@ html[data-animations="false"] .chat-run-timeline::before {
 .chat-run-timeline .chat-tool-step[data-status="running"]::before {
   background: rgb(var(--color-cyan-rgb));
   animation: chat-timeline-pulse 1.45s ease-in-out infinite;
-}
-
-.chat-run-timeline .chat-tool-step-marker {
-  align-self: start;
-  margin-top: 0.12rem;
 }
 
 .chat-run-timeline .chat-tool-step-body {
@@ -1444,34 +1698,25 @@ html[data-animations="false"] .chat-run-timeline::before {
   white-space: nowrap;
 }
 
-.chat-tool-status-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1rem;
-  height: 1rem;
-  color: rgb(var(--color-success-rgb));
-}
-
-.chat-tool-status-mark[data-status="running"] { color: rgb(var(--color-running-rgb)); }
-.chat-tool-status-mark[data-status="error"] { color: rgb(var(--color-danger-rgb)); }
-.chat-tool-status-mark[data-status="cancelled"] { color: rgb(var(--color-ink-fade-rgb)); }
-.chat-tool-status-mark svg { width: 0.78rem; height: 0.78rem; }
-
+/* Rows are read, not skimmed: the verb and the thing it acted on are set at the
+   conversation's own size. Shade carries the hierarchy — the label is the palest,
+   the argument a muted grey, and only the reasoning and the final answer reach
+   full contrast, so the eye lands on what the agent concluded rather than on the
+   commands it ran. */
 .chat-run-timeline .chat-tool-label {
   flex: none;
-  color: rgb(var(--color-ink-rgb));
-  font-family: var(--font-ui);
-  font-size: 12.5px;
+  color: var(--code-fade);
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 13px;
   font-weight: 400;
 }
 
 .chat-run-timeline .chat-tool-summary {
   min-width: 0;
   overflow: hidden;
-  color: rgb(var(--color-ink-fade-rgb));
-  font-family: var(--font-ui);
-  font-size: 12.5px;
+  color: var(--code-fade);
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1616,6 +1861,43 @@ html[data-animations="false"] .chat-run-timeline::before {
   font-size: var(--type-meta);
 }
 
+/* A command reads as a shell line: the prompt comes from the interface, so the
+   command itself stays clean in the value the copy control writes out. */
+.chat-tool-detail-section pre[data-command="true"]::before {
+  color: rgb(var(--color-ink-fade-rgb));
+  content: "$ ";
+}
+
+/* No arrow is drawn until the reader is on the row. The control is an
+   affordance, not furniture: at rest the timeline is text only. */
+.chat-tool-step-toggle,
+.chat-file-card-chevron,
+.chat-round-chevron {
+  opacity: 0;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.chat-tool-step:hover .chat-tool-step-toggle,
+.chat-tool-step:focus-within .chat-tool-step-toggle,
+.chat-tool-step-toggle[aria-expanded="true"],
+.chat-file-card:hover .chat-file-card-chevron,
+.chat-file-card:focus-within .chat-file-card-chevron,
+.chat-file-card-chevron[aria-expanded="true"],
+.chat-round-head:hover .chat-round-chevron,
+.chat-round-head:focus-within .chat-round-chevron,
+.chat-round-chevron[aria-expanded="true"] {
+  opacity: 1;
+}
+
+/* A touch device has no hover, so there the control is always available. */
+@media (hover: none), (pointer: coarse) {
+  .chat-tool-step-toggle,
+  .chat-file-card-chevron,
+  .chat-round-chevron {
+    opacity: 1;
+  }
+}
+
 .chat-tool-detail-heading {
   display: flex;
   align-items: center;
@@ -1642,19 +1924,25 @@ html[data-animations="false"] .chat-run-timeline::before {
 .chat-tool-detail-section pre,
 .chat-tool-detail-section .chat-tool-live-output {
   max-width: 100%;
-  max-height: 13rem;
-  overflow: auto;
+  /* A terminal block is a window, not a page: past this it scrolls inside
+     itself, so a 400-line command can never push the conversation off screen. */
+  max-height: 350px;
+  overflow-y: auto;
   margin: 0;
-  padding: 0.48rem 0.55rem;
+  padding: 0.5rem 0.6rem;
   border: 0;
-  border-radius: var(--radius-control);
-  background: rgb(var(--color-ink-rgb) / 0.025);
-  color: rgb(var(--color-ink-soft-rgb));
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  line-height: 1rem;
+  border-radius: 0;
+  /* The code surface follows the theme — light ground/dark type in a light
+     theme, dark ground/light type in a dark one — so output is legible wherever
+     the app is running. */
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: break-all;
 }
 
 .chat-activity-stream {
@@ -1750,8 +2038,6 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-tool-status-mark svg,
-  .chat-run-timeline .chat-tool-step[data-status="running"]::before,
   .chat-thinking-line svg {
     animation: none !important;
   }
@@ -1970,6 +2256,21 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
 
   .chat-direct-file-toolbar {
     align-items: center;
+  }
+}
+
+/*
+ * The right workbench is squeezed when the window is narrow, so its rows measure
+ * the panel rather than the window. The key chip goes first: the tool name is what
+ * identifies a row, and the same shortcut is still on the tool button's tooltip.
+ */
+.right-workbench-surface {
+  container: workbench-surface / inline-size;
+}
+
+@container workbench-surface (max-width: 272px) {
+  .workbench-entry-key {
+    display: none;
   }
 }
 

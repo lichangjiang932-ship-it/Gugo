@@ -11,6 +11,7 @@ import { dispatchGitHistoryTool, isGitHistoryTool } from '../../../adapters/gitH
 import { dispatchImageTool } from '../../../adapters/imageTools.js'
 import { dispatchMediaTool } from '../../../adapters/mediaTools.js'
 import { dispatchMemoryTool } from '../../../utils/memoryTools.js'
+import { dispatchExperienceTool, EXPERIENCE_TOOL_NAMES } from '../../../utils/experienceTools.js'
 import { GOAL_TOOL_NAMES, dispatchGoalTool } from '../../../utils/goalTools.js'
 import { dispatchSkillResourceTool, SKILL_RESOURCE_TOOL_NAME } from '../../../utils/skillResourceTools.js'
 import { dispatchPdfTool } from '../../../adapters/pdfTools.js'
@@ -324,6 +325,13 @@ async function executeAgentOrExternalTool(context, registeredTool) {
     userId: job?.userId || null,
     agentId: job?.agentId || null,
     sessionId: job?.sessionId || null,
+  })
+  if (EXPERIENCE_TOOL_NAMES.includes(name)) return dispatchExperienceTool(name, args || {}, {
+    userId: job?.userId || null,
+    sessionId: job?.sessionId || null,
+    // Left empty on purpose: the recorder resolves the turn's project directory
+    // from the ambient turn context, which is the same directory the other file
+    // tools were authorized against.
   })
   if (GOAL_TOOL_NAMES.includes(name)) return dispatchGoalTool(name, args || {}, {
     userId: job?.userId || null,

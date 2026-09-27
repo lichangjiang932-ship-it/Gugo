@@ -18,6 +18,7 @@ const translations = {
     "hooks": "Hooks",
     "cron": "调度",
     "history": "历史",
+    "tasks": "任务",
     "historySourceTitle": "历史数据源：{source}\n工作区：{workspace}",
     "historySourceChangedTitle": "历史数据源已变更：{source}\n工作区：{workspace}",
     "settings": "设置",
@@ -62,8 +63,6 @@ const translations = {
     "filterActive": "当前",
     "filterArchived": "归档",
     "filterAll": "全部",
-    "quoteSelection": "引用",
-    "quoteSelectionTitle": "引用这条消息的选区或全文到输入框"
   },
   "en": {
     "home": "Home",
@@ -84,6 +83,7 @@ const translations = {
     "hooks": "Hooks",
     "cron": "Schedules",
     "history": "History",
+    "tasks": "Tasks",
     "historySourceTitle": "History source: {source}\nWorkspace: {workspace}",
     "historySourceChangedTitle": "History source changed: {source}\nWorkspace: {workspace}",
     "settings": "Settings",
@@ -128,8 +128,6 @@ const translations = {
     "filterActive": "Current",
     "filterArchived": "Archived",
     "filterAll": "All",
-    "quoteSelection": "Quote",
-    "quoteSelectionTitle": "Quote this message or its selected text into the composer"
   }
 }
 

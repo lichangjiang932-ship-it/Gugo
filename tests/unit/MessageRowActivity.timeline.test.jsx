@@ -32,7 +32,7 @@ function streamedMessage() {
 }
 
 function visibleSegments(element) {
-  return [...element.querySelectorAll('[data-quotable="true"] .chat-markdown, [data-quotable="true"] .chat-run-timeline')]
+  return [...element.querySelectorAll('[data-message-body="true"] .chat-markdown, [data-message-body="true"] .chat-run-timeline')]
     .filter((entry) => !entry.closest('[data-testid="tool-step-details"]'))
 }
 
@@ -116,6 +116,6 @@ test('a choice block before a tool cannot shift the tool past the following publ
     assert.deepEqual(segments.map((entry) => entry.classList.contains('chat-markdown') ? 'text' : 'tools'), ['text', 'tools', 'text'])
     assert.equal(segments[0].textContent, 'Before choice')
     assert.equal(element.querySelector('.chat-assistant-answer strong')?.textContent, 'After tool')
-    assert.doesNotMatch(element.querySelector('[data-quotable="true"]').textContent, /\[\[choice:/)
+    assert.doesNotMatch(element.querySelector('[data-message-body="true"]').textContent, /\[\[choice:/)
   } finally { await act(async () => root.unmount()); dom.window.close() }
 })

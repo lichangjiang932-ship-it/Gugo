@@ -5,6 +5,12 @@ const CONTEXT_LENGTH_PATTERNS = [
   /context_length|context window|context size|token.?limit|maximum context|reduce the length|too many tokens|exceeds?\s+the\s+(available\s+)?context|n_ctx|kv cache|input is too long|too long for the model/i,
   /\bprompt(?:\s+is)?\s+too\s+long\b|\bcontext\s+overflows?\b/i,
   /\binput\s+token\s+count\b[^.\r\n]*\bexceeds?\s+(?:the\s+)?maximum\s+number\s+of\s+tokens\b/i,
+  // This app raises it itself, before any provider sees the request, when the
+  // conversation plus its expanded attachments cannot fit the window. That is the
+  // same condition as an upstream overflow and must be recoverable the same way —
+  // recognized here, the compaction loop summarizes and retries instead of the
+  // turn dying at the guard with a request that was never sent.
+  /\bATTACHMENT_CONTEXT_BUDGET_EXCEEDED\b/,
 ]
 
 export function isContextLengthError(error) {

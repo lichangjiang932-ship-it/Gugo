@@ -105,7 +105,7 @@ for (const kind of ['completed', 'cancelled']) {
     try {
       await act(async () => root.render(<I18nProvider><MessageRow msg={merged} rowKey={stored.id}
         generatingMessageId="" lang="en" t={translate} /></I18nProvider>))
-      const segments = [...element.querySelectorAll('[data-quotable="true"] .chat-markdown, [data-quotable="true"] .chat-run-timeline')]
+      const segments = [...element.querySelectorAll('[data-message-body="true"] .chat-markdown, [data-message-body="true"] .chat-run-timeline')]
       assert.deepEqual(segments.map((entry) => entry.classList.contains('chat-markdown') ? 'text' : 'tools'),
         ['text', 'tools', 'text', 'tools', 'text'])
       assert.equal(element.textContent.split('Inspect 👩‍💻').length - 1, 1)

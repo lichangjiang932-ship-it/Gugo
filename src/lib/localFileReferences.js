@@ -168,6 +168,37 @@ function validChangeStats(result) {
 }
 
 /**
+ * Executor-reported line counts for a single call, or null when the call did not
+ * mutate files or the executor reported nothing.
+ *
+ * Shares `validChangeStats` with the per-turn aggregate below, so a step row and
+ * the "N changed files" summary can never disagree: same source, same
+ * validation, same refusal to infer counts the executor never reported.
+ *
+ * @returns {{additions: number, deletions: number}|null}
+ */
+export function toolCallChangeStats(call = {}) {
+  const name = callName(call)
+  const result = callResult(call)
+  if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)) return null
+  const args = callArguments(call)
+  if (args.dry_run === true
+    || args.dryRun === true
+    || result.dry_run === true
+    || result.dryRun === true) return null
+  const changes = validChangeStats(result)
+  if (changes.length === 0) return null
+  let additions = 0
+  let deletions = 0
+  for (const change of changes) {
+    additions += change.additions
+    deletions += change.deletions
+  }
+  if (!Number.isSafeInteger(additions) || !Number.isSafeInteger(deletions)) return null
+  return { additions, deletions }
+}
+
+/**
  * Aggregate only executor-reported line counts. The same persisted tool call
  * can be restored more than once, so stable call ids are counted once. Calls
  * without ids remain distinct because identical inputs can be real separate

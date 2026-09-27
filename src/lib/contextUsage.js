@@ -53,17 +53,11 @@ export function resolveModelContextWindow(
   return normalizeContextWindow(selected?.contextWindow, fallback)
 }
 
-export function estimateTextTokens(value) {
-  if (value === undefined || value === null || value === '') return 0
-  const text = typeof value === 'string' ? value : JSON.stringify(value)
-  let ascii = 0
-  let nonAscii = 0
-  for (const char of text || '') {
-    if (char.charCodeAt(0) <= 0x7f) ascii += 1
-    else nonAscii += 1
-  }
-  return Math.ceil(ascii / 4) + nonAscii
-}
+// The server plans compaction with the same rule; a meter that counted Chinese
+// differently would disagree with the planner about the same conversation.
+import { textTokens as estimateTextTokens } from '../../shared/textTokenEstimate.js'
+
+export { estimateTextTokens }
 
 function compactToolCall(call) {
   if (!call || typeof call !== 'object') return call

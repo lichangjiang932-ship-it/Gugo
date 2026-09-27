@@ -45,10 +45,6 @@ export default function LeftRail() {
   const sessions = state.sessions.filter((session) => !session.archivedAt)
 
   const handleNewChat = () => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'START_NEW_DRAFT' }); navigate('/chat') }
-  const handleProjectToggle = (_project, { expanded } = {}) => {
-    if (!expanded) return
-    window.dispatchEvent(new CustomEvent('chat-workbench:open-files'))
-  }
   const handleNewChatInProject = (project) => {
     controller.closeSessionMenu()
     closeMobileRail()
@@ -130,7 +126,7 @@ export default function LeftRail() {
         </button>
       </div>
 
-      <div id="left-rail-history" hidden={collapsed} className="left-rail-history mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onNewRecent={handleNewChat} onProjectToggle={handleProjectToggle} onSearch={handleSearch} showSearchAction={false} locale={lang} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>
+      <div id="left-rail-history" hidden={collapsed} className="left-rail-history mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onNewRecent={handleNewChat} onSearch={handleSearch} showSearchAction={false} locale={lang} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>
       {collapsed && <div className="min-h-0 flex-1" />}
       <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>

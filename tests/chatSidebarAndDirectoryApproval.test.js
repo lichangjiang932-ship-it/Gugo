@@ -113,27 +113,44 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   for (const [, classes] of notices) assert.match(classes, /w-full min-w-0 max-w-\[780px\]/)
   assert.doesNotMatch(view, /calc\(100vw-320px\)/)
   assert.doesNotMatch(noticesSource, /calc\(100vw-320px\)/)
-  assert.match(workbench, /h-full min-w-0 max-w-\[calc\(100vw-60px\)\] shrink flex-col overflow-hidden/)
+  // The panel is a row now (content, then the tool rail on its right edge); the
+  // requirement is unchanged: it must shrink inside the viewport, never push it.
+  assert.match(workbench, /h-full min-w-0 max-w-\[calc\(100vw-60px\)\] shrink flex-row overflow-hidden/)
   assert.doesNotMatch(workbench, /h-full shrink-0 flex-col/)
   assert.match(rail, /NARROW_RAIL_QUERY = '\(max-width: 959px\)'/)
   assert.match(rail, /w-\[min\(320px,calc\(100vw-60px\)\)\] min-w-0 max-w-\[320px\]/)
 })
 
-test('right workbench exposes files, side chat, browser, and terminal tools', () => {
+test('right workbench exposes exactly the three tool buttons', () => {
   const workbench = read('../src/pages/ChatSplit/RightWorkbench.jsx')
     + readSourceTree('../src/pages/ChatSplit/rightWorkbench/')
 
-  assert.match(workbench, /files: Files/)
-  assert.match(workbench, /chat: MessageSquare/)
-  assert.match(workbench, /browser: Globe2/)
-  assert.match(workbench, /terminal: TerminalSquare/)
+  // Source of truth for the three tools and their keys, shared by the header
+  // switch and the key handler so a shown shortcut cannot drift from a working one.
+  const shortcuts = read('../src/lib/workbenchShortcuts.js')
+  for (const id of ['chat', 'browser', 'terminal']) {
+    assert.match(shortcuts, new RegExp(`id: '${id}'`), `${id} is one of the three tools`)
+  }
+  assert.doesNotMatch(shortcuts, /id: 'files'|id: 'git'|id: 'plan'/, 'the removed tabs are not tools')
+  assert.match(workbench, /data-testid="workbench-tool-switch"/)
+  assert.doesNotMatch(workbench, /WorkbenchToolRail/, 'the vertical edge strip is gone')
+  assert.match(workbench, /data-testid=\{`workbench-tool-\$\{tool\.id\}`\}/)
+  assert.match(workbench, /workbench-tool-\$\{contribution\.tabId\}/)
   assert.match(workbench, /resolveDeliveryArtifacts/)
   assert.doesNotMatch(workbench, /buildMessageArtifactPreview/)
   assert.match(workbench, /runWorkbenchTerminal/)
-  assert.match(workbench, /sandbox="allow-scripts allow-forms allow-popups"/)
-  assert.match(workbench, /data-testid="workbench-navigation"/)
-  assert.match(workbench, /className="flex h-10/)
-  assert.match(workbench, /data-testid="workbench-file-count"/)
+  // The browser tab is the one shared browser. Its frame fallback keeps the same
+  // sandbox wherever it is rendered, so the requirement is asserted against the
+  // component that owns it.
+  assert.match(workbench, /activeTab === 'browser' && <EmbeddedBrowser/)
+  const embeddedBrowser = read('../src/components/EmbeddedBrowser.jsx')
+  assert.match(embeddedBrowser, /sandbox="allow-scripts allow-forms allow-popups"/)
+  assert.match(embeddedBrowser, /data-testid="embedded-browser-backend"/)
+  // The three panels that left the strip must not come back as tabs: files and
+  // changes were removed by request, and the plan is a card of its own.
+  assert.doesNotMatch(workbench, /activeTab === 'files'|activeTab === 'git'|activeTab === 'plan'/)
+  assert.doesNotMatch(workbench, /workbench-navigation|workbench-file-count/)
+  assert.doesNotMatch(workbench, /data-testid="workbench-tab-/)
   assert.match(workbench, /data-testid="workbench-resize-handle"/)
   assert.match(workbench, /WIDTH_STORAGE_KEY/)
   assert.match(workbench, /const deliveryArtifacts = message\?\.meta\?\.failed[\s\S]{0,80}\? \[\][\s\S]{0,80}: resolveDeliveryArtifacts\(message\?\.meta\)/)
@@ -182,4 +199,33 @@ test('workbench preference defaults to closed and round-trips', () => {
   } finally {
     globalThis.window = originalWindow
   }
+})
+
+test('the tool panel and the plan card are controlled by two independent switches', () => {
+  const chat = readSourceTree('../src/pages/ChatSplit/')
+  const prefs = read('../src/lib/chatUiPreferences.js')
+  const index = read('../src/pages/ChatSplit/index.jsx')
+
+  // Two separate persisted keys, and a writer for each. One switch cannot be
+  // reached through the other's storage.
+  assert.match(prefs, /WORKBENCH_OPEN_STORAGE_KEY = 'yma:chat:workbench-open'/)
+  assert.match(prefs, /PLAN_VISIBLE_STORAGE_KEY = 'yma:chat:plan-visible'/)
+  assert.match(prefs, /export function readPlanVisible\(\)/)
+  assert.match(prefs, /export function writePlanVisible\(value\)/)
+
+  // Opening, closing or resizing the panel must not write the card's switch. The
+  // whole point of the two states is that neither decides for the other.
+  assert.doesNotMatch(chat, /setWorkbenchOpen\([\s\S]{0,80}setPlanVisible/)
+  assert.doesNotMatch(chat, /setPlanVisible\([\s\S]{0,80}setWorkbenchOpen/)
+  assert.doesNotMatch(index, /workbenchOpen[\s\S]{0,60}writePlanVisible/)
+  assert.doesNotMatch(index, /planVisible[\s\S]{0,60}writeWorkbenchOpen/)
+
+  // And the reverse: the card's own close only writes the card.
+  assert.match(index, /onClosePlan=\{\(\) => \{ setPlanVisible\(false\); setDismissedPlanSignature\(planSignature\) \}\}/)
+
+  // The card is drawn outside the panel, so it stays when the panel is closed.
+  const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  // The plan card is rendered by the view itself; presence, not source order.
+  assert.ok(view.includes('<PlanCard'))
+  assert.match(view, /\{planVisible && \(/)
 })

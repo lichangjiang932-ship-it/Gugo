@@ -1,6 +1,10 @@
 import { parseOptionalModelProviderInteger } from '../../shared/modelProviderNumericConfig.js'
+import { MIN_CONTEXT_WINDOW } from '../utils/endpointProfile.js'
 
 export const PROVIDER_KEY_RE = /^[a-z][a-z0-9_-]{0,39}$/
+// An endpoint-reported window outside this range is a bug on the other side, not
+// a number to plan a conversation against.
+const MAX_OBSERVED_CONTEXT_WINDOW = 10_000_000
 const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 export const REDACTED_VALUE = '••••••'
 const PROVIDER_READINESS_MODES = new Set(['agent', 'chat_only', 'unavailable'])
@@ -292,6 +296,15 @@ export function normalizeReadinessEntry(value, configRevision) {
     ? input.mode
     : inferredMode
   const errorCode = String(input.errorCode || '').trim().slice(0, 120)
+  // The context window the endpoint itself reported while it answered (LM
+  // Studio's loaded_context_length). Kept with the observation so a later turn
+  // can size compaction for the window the server is really serving instead of
+  // the conservative default — see buildProviderOverrides.
+  const observedWindow = positiveInteger(input.contextWindow, 0)
+  const contextWindow = observedWindow >= MIN_CONTEXT_WINDOW
+    && observedWindow <= MAX_OBSERVED_CONTEXT_WINDOW
+    ? observedWindow
+    : 0
   return {
     chat,
     tools,
@@ -299,6 +312,7 @@ export function normalizeReadinessEntry(value, configRevision) {
     mode,
     checkedAt: Math.floor(checkedAt),
     configRevision,
+    ...(contextWindow ? { contextWindow } : {}),
     ...(errorCode ? { errorCode } : {}),
   }
 }
@@ -381,6 +395,24 @@ export function buildProviderOverrides(provider) {
   if (provider.idleTimeoutMs) overrides.idleTimeoutMs = provider.idleTimeoutMs
   if (provider.failoverEnabled !== null) overrides.failoverEnabled = provider.failoverEnabled
   if (provider.keepAlive) overrides.keepAlive = provider.keepAlive
-  if (provider.modelProfiles && Object.keys(provider.modelProfiles).length) overrides.models = provider.modelProfiles
+  const models = { ...(provider.modelProfiles || {}) }
+  for (const [name, readiness] of Object.entries(provider.modelReadiness || {})) {
+    // Only where the reader configured nothing: a window they typed is theirs,
+    // and a number the endpoint reported is still better than the local default
+    // that made the app compact conversations that fit and refuse ones the
+    // endpoint would have served.
+    if (positiveInteger(models[name]?.contextWindow, 0)) continue
+    const contextWindow = positiveInteger(readiness?.contextWindow, 0)
+    if (!contextWindow) continue
+    models[name] = {
+      ...(models[name] || {}),
+      contextWindow,
+      source: 'endpoint_discovered',
+      ...(Number.isFinite(Number(readiness?.checkedAt))
+        ? { verifiedAt: new Date(Number(readiness.checkedAt)).toISOString() }
+        : {}),
+    }
+  }
+  if (Object.keys(models).length) overrides.models = models
   return Object.keys(overrides).length ? JSON.stringify(overrides) : null
 }

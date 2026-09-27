@@ -17,7 +17,6 @@ const COMPOSER_INTERACTIVE_SELECTOR = 'button, input, textarea, select, option, 
 
 export default function ChatComposer({
   input,
-  editingMessageId,
   setInput,
   onSend,
   attachments,
@@ -32,7 +31,6 @@ export default function ChatComposer({
   isGenerating,
   onAbort,
   onPause,
-  onCancelMessageEdit,
   onFileChange,
   onToggleContext,
   onOpenModelPicker,
@@ -184,8 +182,6 @@ export default function ChatComposer({
           />
         )}
         <ComposerContextHeader
-          editingMessageId={editingMessageId}
-          onCancelMessageEdit={onCancelMessageEdit}
           onClearWorkspace={onClearWorkspace}
           onSelectWorkspace={onSelectWorkspace}
           recentWorkspaces={recentWorkspaces}

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { ChevronUp, Link2, Settings, Wrench } from 'lucide-react'
+import { Brain, ChevronUp, Link2, Settings, Wrench } from 'lucide-react'
 import BrandMark from '../BrandMark.jsx'
 import DesktopUpdateCard from '../DesktopUpdateCard.jsx'
 import { UiContributionRenderer, useUiContributions } from '../../plugins/uiContributionRegistry.js'
@@ -22,6 +22,10 @@ export default function AccountArea({ compact = false, accountMenuOpen, accountM
       <MenuButton icon={Link2} label={t('access.title')} onClick={() => onNavigate({ path: '/access', requiresLogin: true })} />
       <MenuButton icon={Settings} label={t('nav.settings')} onClick={() => onNavigate({ path: '/settings', requiresLogin: true })} />
       <MenuButton icon={Wrench} label={t('nav.skills')} onClick={() => onNavigate({ path: '/skills' })} />
+      {/* Memory is listed here because it has no other entry point: the rail's
+          icon row used to reach it, and removing that row would have left the
+          page reachable only by typing the URL. */}
+      <MenuButton icon={Brain} label={t('nav.memory')} onClick={() => onNavigate({ path: '/memory' })} />
       {contributedMenuItems.map((contribution) => contribution.component
         ? <UiContributionRenderer
             key={contribution.key}

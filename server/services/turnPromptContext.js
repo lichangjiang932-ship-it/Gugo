@@ -9,6 +9,7 @@ import {
   prepareSkillsForPrompt,
 } from './promptCompiler.js'
 import { prepareMemoryInjectionContext } from './memoryContextService.js'
+import { buildOutputContractBlock } from './outputContractPrompt.js'
 import { goalToolContextForTurn } from './goalPlanPrompt.js'
 import { resolveMemoryEmbeddingSpace } from './memoryEmbeddingService.js'
 import { fingerprintPromptBlocks } from './promptPrefixFingerprint.js'
@@ -128,9 +129,9 @@ export function prepareBackgroundPromptContext({
   }
 }
 
-function renderPromptMessages({ identity, ishiki, skills, instructions, sessions, memory, goalPlan, runtimePrompts, warn }) {
+function renderPromptMessages({ identity, ishiki, outputContract, skills, instructions, sessions, memory, goalPlan, runtimePrompts, warn }) {
   const blocks = []
-  for (const block of [identity, ishiki, skills, instructions]) {
+  for (const block of [identity, ishiki, outputContract, skills, instructions]) {
     if (block?.text) blocks.push({ role: 'system', content: block.text, __gugoPromptStability: 'stable' })
   }
   if (sessions?.text) blocks.push({ role: 'system', content: sessions.text })
@@ -216,6 +217,9 @@ export function prepareTurnPromptContext({
   const instructions = resolvePromptInstructions({ canaryPrompt, readInstructions, userId, env, warn })
   const identity = safeStep('identity block failed', null, () => buildIdentityBlock({ agent }), warn)
   const ishiki = safeStep('ishiki block failed', null, () => buildIshikiBlock({ agent }), warn)
+  // The response contract is static and always present, so it is part of the
+  // stable prefix: the model is told the same shape on every turn.
+  const outputContract = safeStep('output contract block failed', null, () => buildOutputContractBlock(), warn)
   const skills = safeStep('skills block failed', null, () => buildSkillsBlockFromPrepared({
     userId,
     agentId: effectiveAgentId,
@@ -253,10 +257,10 @@ export function prepareTurnPromptContext({
   )
   const goalPlan = safeGoalPlan(prepareGoalPlan, { userId, sessionId }, warn)
   const finalize = (resolvedSessions) => {
-    const blocks = renderPromptMessages({ identity, ishiki, skills, instructions, sessions: resolvedSessions,
+    const blocks = renderPromptMessages({ identity, ishiki, outputContract, skills, instructions, sessions: resolvedSessions,
       memory, goalPlan, runtimePrompts, warn })
-    // Stable prefix = identity + ishiki + skills + instructions (pushed first).
-    const promptFingerprints = fingerprintPromptBlocks({ blocks, stableBlocks: [identity, ishiki, skills, instructions] })
+    // Stable prefix = identity + ishiki + output contract + skills + instructions (pushed first).
+    const promptFingerprints = fingerprintPromptBlocks({ blocks, stableBlocks: [identity, ishiki, outputContract, skills, instructions] })
     return {
       messages: blocks,
       effectiveAgentId,
