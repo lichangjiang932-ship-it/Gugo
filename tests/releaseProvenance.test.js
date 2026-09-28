@@ -142,7 +142,7 @@ test('release workflow enforces its explicit signing policy and publishes checks
   assert.equal(packageLock.packages[''].version, packageJson.version)
   assert.match(packageJson.scripts['desktop:package:signed'], /forceCodeSigning=true/)
   assert.match(packageJson.scripts['desktop:package:unsigned'], /package-unsigned-windows\.mjs/)
-  assert.match(packageJson.scripts['desktop:publish'], /block-direct-desktop-publish\.mjs/)
+  assert.match(packageJson.scripts['desktop:publish'], /publish-desktop-authorized\.mjs/)
   assert.match(workflow, /npm run desktop:package:signed/)
   assert.ok(resolvePolicy >= 0 && resolvePolicy < requireSigning)
   assert.ok(requireSigning < packageSigned)
@@ -154,12 +154,24 @@ test('release workflow enforces its explicit signing policy and publishes checks
   assert.ok(attest < publish)
 })
 
-test('direct desktop publishing is blocked in favor of the attested tag workflow', () => {
-  const blocker = fileURLToPath(
-    new URL('../scripts/release/block-direct-desktop-publish.mjs', import.meta.url),
+test('direct desktop publishing only happens once it is asked to', () => {
+  const publisher = fileURLToPath(
+    new URL('../scripts/release/publish-desktop-authorized.mjs', import.meta.url),
   )
-  const result = spawnSync(process.execPath, [blocker], { encoding: 'utf8' })
-  assert.equal(result.status, 1)
-  assert.match(result.stderr, /Direct desktop publishing is disabled/)
-  assert.match(result.stderr, /code-signature verification, checksums, provenance/)
+  // Without an explicit authorization it refuses, and names the two ways forward.
+  const refused = spawnSync(process.execPath, [publisher], { encoding: 'utf8' })
+  assert.equal(refused.status, 1)
+  assert.match(refused.stdout, /explicit authorization/)
+  assert.match(refused.stdout, /tag and let the attested CI release/)
+  assert.match(refused.stdout, /never runs by itself/)
+
+  // An unrecognized flag is not a way in.
+  const unknown = spawnSync(process.execPath, [publisher, '--force'], { encoding: 'utf8' })
+  assert.equal(unknown.status, 1)
+  assert.match(unknown.stderr, /Usage: node scripts\/release\/publish-desktop-authorized\.mjs/)
+
+  // Planning describes the steps and publishes nothing.
+  const plan = spawnSync(process.execPath, [publisher, '--plan'], { encoding: 'utf8' })
+  assert.match(plan.stdout, /no build provenance attestation/)
+  assert.doesNotMatch(plan.stdout, /Published v/)
 })

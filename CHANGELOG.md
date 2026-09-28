@@ -6,7 +6,20 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Preparing 0.11.65. Three publication attempts are on record and none is moved or reused:
+Preparing 0.11.66. `v0.11.65` was published and is broken: it starts, then the main process
+crashes with `ERR_MODULE_NOT_FOUND` for `desktop/updateErrors.js`. The 0.11.65 work split
+`desktop/updateRuntime.js` into `desktop/updatePlan.js` and `desktop/updateErrors.js` and added
+`desktop/terminalHost.js`, but `electron-builder.yml` packs desktop modules from an explicit list, so
+the two new modules were never copied into `app.asar`. Install 0.11.66 over it; do not install
+0.11.65.
+
+The packaging guard missed it because it walked the entry import closure two levels deep and stopped:
+`main.js -> updateSetup.js -> updateRuntime.js -> updateErrors.js` is the third. It now walks until
+the set stops growing, and it fails on the 0.11.65 configuration — verified by removing each entry in
+turn and watching it fail.
+
+Earlier attempts, none of them moved or reused:
+
 
 - `v0.11.62` (main commit `d353d78`) stopped at the required-gates stage: the offline capability eval
   requires the plugin host version to match the package version, a sync the bump left behind, and the
@@ -21,8 +34,8 @@ Preparing 0.11.65. Three publication attempts are on record and none is moved or
   spawns anything it may have to kill; the test now does the same, and the offline eval is part of
   the verified-green line in every release commit.
 
-No Release and no release assets were published for any of these tags; 0.11.65 carries its own
-release verification.
+No Release and no release assets were published for `v0.11.62`, `v0.11.63` or `v0.11.64`; 0.11.66
+carries its own release verification.
 
 This release carries the desktop browser and sidebar work, the real terminal, the conversation change
 review, the experience-to-memory pipeline, and the Git workbench's commit and push actions. The
