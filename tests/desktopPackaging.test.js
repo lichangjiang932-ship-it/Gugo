@@ -136,9 +136,19 @@ test('every desktop entry import closure is packed into the app.asar', () => {
       resolvedImports.add(resolved)
     }
   }
+  // Walk the closure to the end rather than two levels of it: the modules that
+  // went missing from app.asar in 0.11.65 sat three imports deep
+  // (main.js -> updateSetup.js -> updateRuntime.js -> updateErrors.js), and a
+  // snapshot of the set taken before the loop never reaches them.
   collect('desktop/main.js')
-  for (const resolved of [...resolvedImports]) {
-    collect(resolved)
+  const walked = new Set()
+  while (true) {
+    const pending = [...resolvedImports].filter((relPath) => !walked.has(relPath))
+    if (!pending.length) break
+    for (const relPath of pending) {
+      walked.add(relPath)
+      if (fs.existsSync(new URL(`../${relPath}`, import.meta.url))) collect(relPath)
+    }
   }
   assert.ok(resolvedImports.size > 0, 'main.js must import local modules')
   for (const relPath of resolvedImports) {
@@ -279,7 +289,7 @@ test('desktop media sidecars are staged, packaged, and documented', () => {
   assert.match(packageJson.scripts['desktop:package'], /^npm run desktop:media-sidecars && electron-builder/)
   assert.match(packageJson.scripts['desktop:package'], /&& npm run desktop:smoke-package$/)
   assert.match(packageJson.scripts['desktop:smoke-package'], /smoke-test-desktop-package\.mjs/)
-  assert.match(packageJson.scripts['desktop:publish'], /block-direct-desktop-publish\.mjs/)
+  assert.match(packageJson.scripts['desktop:publish'], /publish-desktop-authorized\.mjs/)
   assert.equal(packageJson.devDependencies['@electron/asar'], '3.4.1')
   assert.equal(packageJson.devDependencies['@ffmpeg-installer/ffmpeg'], '1.1.0')
   assert.equal(packageJson.devDependencies['@ffprobe-installer/ffprobe'], '2.1.2')

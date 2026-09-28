@@ -49,6 +49,8 @@ files:
   - desktop/browserHost.js
   - desktop/desktopHosts.js
   - desktop/terminalHost.js
+  - desktop/updateErrors.js
+  - desktop/updatePlan.js
   - desktop/browserViewPolicy.js
   - desktop/fileActions.js
   - desktop/fileActionSetup.js
