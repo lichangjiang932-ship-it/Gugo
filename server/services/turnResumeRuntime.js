@@ -65,7 +65,8 @@ function completedRecoveryWork(payload) {
   const result = payload?.result
   if (payload?.error || !isPlainObject(result) || result.ok !== true || result.error) return false
   if (['isError', 'denied', 'cancelled', 'interrupted', 'paused', 'incomplete', 'dryRun', 'dry_run',
-    'requiresUserVerification'].some((key) => result[key] === true)) return false
+    'timeout', 'timedOut', 'timed_out', 'expired', 'requiresUserVerification']
+    .some((key) => result[key] === true)) return false
   if (Object.hasOwn(result, 'exitCode') && result.exitCode !== 0) return false
   if (result.status != null && !['completed', 'complete', 'succeeded', 'success', 'ok']
     .includes(String(result.status).trim().toLowerCase())) return false

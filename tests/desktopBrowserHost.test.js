@@ -52,6 +52,24 @@ class FakeWebContents {
   reload() { this.reloads += 1 }
   stop() { this.stops += 1 }
   close() { this.destroyed = true; this.closed = true }
+
+  // Page facts. The pixel payload is settable so a test can hand the host
+  // something bigger than it is willing to send.
+  capturePage() {
+    if (this.captureFails) return Promise.reject(new Error('capture exploded'))
+    const bytes = this.capturedBytes || Buffer.from('png-bytes', 'utf8')
+    return Promise.resolve({
+      getSize: () => ({ width: 640, height: 480 }),
+      toPNG: () => bytes,
+    })
+  }
+
+  executeJavaScript(script, userGesture) {
+    this.evaluated = this.evaluated || []
+    this.evaluated.push({ script, userGesture })
+    if (this.evaluateFails) return Promise.reject(new Error('page threw'))
+    return Promise.resolve({ script, userGesture })
+  }
 }
 
 class FakeView {
@@ -364,6 +382,9 @@ test('the browser IPC answers only the trusted app frame of the main window', ()
       ['desktop:browser-state', undefined],
       ['desktop:browser-hide', undefined],
       ['desktop:browser-destroy', undefined],
+      // Page facts are the widest capability the renderer can ask for, so they
+      // are gated by the same check rather than a looser one of their own.
+      ['desktop:preview-console', {}],
     ]) {
       assert.throws(
         () => app.call(channel, payload, overrides),
@@ -397,4 +418,111 @@ test('closing the window tears the view down with it', () => {
   app.windowHandlers.get('closed')()
   assert.equal(view.removed, true)
   assert.equal(view.webContents.closed, true)
+})
+
+// ---------------------------------------------------------------------------
+// Page facts: the preview's screenshot, script and console
+// ---------------------------------------------------------------------------
+
+test('a capture comes back as the pixels the reader can see', async () => {
+  const app = harness()
+  // Nothing has been loaded yet: there is no page to photograph.
+  assert.deepEqual(await app.call('desktop:preview-capture'), { ok: false, reason: 'no-view' })
+
+  app.call('desktop:browser-navigate', 'https://example.com/')
+  const captured = await app.call('desktop:preview-capture')
+  assert.equal(captured.ok, true)
+  assert.equal(captured.width, 640)
+  assert.equal(captured.height, 480)
+  assert.match(captured.dataUrl, /^data:image\/png;base64,/)
+  assert.equal(Buffer.from(captured.dataUrl.split(',')[1], 'base64').toString('utf8'), 'png-bytes')
+
+  // A page photograph is a bounded message: one too large to carry says so
+  // instead of making the main process hold it.
+  app.view.webContents.capturedBytes = Buffer.alloc(9 * 1024 * 1024, 1)
+  const oversized = await app.call('desktop:preview-capture')
+  assert.equal(oversized.ok, false)
+  assert.equal(oversized.reason, 'too-large')
+
+  app.view.webContents.capturePage = () => Promise.reject(new Error('capture exploded'))
+  const failed = await app.call('desktop:preview-capture')
+  assert.equal(failed.ok, false)
+  assert.equal(failed.reason, 'capture-failed')
+})
+
+test('a script runs in the page without a user gesture, and its result is bounded', async () => {
+  const app = harness()
+  assert.deepEqual(await app.call('desktop:preview-evaluate', 'document.title'), { ok: false, reason: 'no-view' })
+  app.call('desktop:browser-navigate', 'https://example.com/')
+
+  const evaluated = await app.call('desktop:preview-evaluate', 'document.title')
+  assert.equal(evaluated.ok, true)
+  // Reading the page must not let it take actions that need a real click.
+  assert.deepEqual(app.view.webContents.evaluated, [{ script: 'document.title', userGesture: false }])
+  assert.equal(evaluated.truncated, false)
+
+  const empty = await app.call('desktop:preview-evaluate', '   ')
+  assert.deepEqual(empty, { ok: false, reason: 'script' })
+
+  app.view.webContents.evaluateFails = true
+  const threw = await app.call('desktop:preview-evaluate', 'throw new Error("x")')
+  assert.equal(threw.ok, false)
+  assert.equal(threw.reason, 'evaluate-failed')
+  assert.match(threw.message, /page threw/)
+})
+
+test('a very long evaluated result is truncated rather than sent whole', async () => {
+  const app = harness()
+  app.call('desktop:browser-navigate', 'https://example.com/')
+  const script = `'${'x'.repeat(70_000)}'`
+  const evaluated = await app.call('desktop:preview-evaluate', script)
+  assert.equal(evaluated.ok, true)
+  assert.equal(evaluated.truncated, true)
+  assert.equal(evaluated.result.length, 64 * 1024)
+})
+
+test('the console keeps the tail of what the page logged, and can be drained', () => {
+  const app = harness()
+  app.call('desktop:browser-navigate', 'https://example.com/')
+  const contents = app.view.webContents
+
+  // Electron has reported this event two ways; both end up as one entry shape.
+  contents.fire('console-message', { level: 'error', message: 'boom', lineNumber: 12, sourceId: 'app.js' })
+  contents.fire('console-message', 1, 'hello', 3, 'main.js')
+
+  const first = app.call('desktop:preview-console')
+  assert.equal(first.ok, true)
+  assert.deepEqual(first.entries.map((entry) => [entry.level, entry.message]), [['error', 'boom'], ['info', 'hello']])
+  assert.equal(first.entries[0].line, 12)
+  assert.equal(first.entries[1].source, 'main.js')
+
+  const drained = app.call('desktop:preview-console', { clear: true })
+  assert.equal(drained.entries.length, 2)
+  // The preview asks for the log the agent has not seen yet.
+  assert.deepEqual(app.call('desktop:preview-console').entries, [])
+})
+
+test('the async page-fact handlers refuse a foreign sender too', async () => {
+  const app = harness()
+  app.call('desktop:browser-navigate', 'https://example.com/')
+  for (const [channel, payload] of [
+    ['desktop:preview-capture', undefined],
+    ['desktop:preview-evaluate', 'document.title'],
+  ]) {
+    for (const overrides of [
+      { senderFrame: { url: 'https://evil.invalid/' } },
+      { sender: { getURL: () => 'https://evil.invalid/' } },
+    ]) {
+      // Wrapped so a synchronous refusal and a rejected handler are the same
+      // thing to this assertion: these handlers are async, so the guard's throw
+      // arrives as a rejection.
+      const attempt = async () => app.call(channel, payload, overrides)
+      await assert.rejects(
+        attempt,
+        /untrusted desktop IPC sender|only available to the main window/u,
+        `${channel} ${JSON.stringify(overrides)}`,
+      )
+    }
+  }
+  assert.equal(app.created.length, 1, 'a refused call never creates a view')
 })

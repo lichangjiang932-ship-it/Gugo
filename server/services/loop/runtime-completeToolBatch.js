@@ -185,6 +185,16 @@ export async function completeToolBatch(s) {
           break
         }
       }
+  // The preview's observation of this batch's edits belongs to this round: wait
+  // for it here, where the batch is about to hand the model its results, rather
+  // than letting it arrive a round late. A panel that never answers ends on its
+  // own timeout and is reported as a line the model reads.
+  //
+  // Awaited only when there is something to wait for: an unconditional await is
+  // still a turn of the microtask queue, and the read segments in this batch are
+  // ordered by exactly that.
+  const previewObservation = s.previewVerification?.settle?.()
+  if (previewObservation) await previewObservation
   const deferredSystemContextCount = i.deferredPostBatchMessages.length
   s.convo.push(...i.deferredPostBatchMessages)
   s.pendingEphemeralToolMessages.push(...i.deferredEphemeralToolMessages)

@@ -283,6 +283,13 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
   if (mutationSucceeded && isLocalMutationCall(executedCall)) {
     if (s.requiresPdfLayoutVerification) s.pdfLayoutVerificationObserved = false
     const currentTargets = extractMutationTargets(executedCall, outcome.result)
+    // Look at the app the edit was meant to change. The observation lands on this
+    // call's own result (screenshot included) and is awaited at the batch
+    // boundary, so the model reads it together with the edit it belongs to.
+    s.previewVerification?.observe?.({
+      result: outcome.result,
+      onMessage: (content) => s.iteration.deferredPostBatchMessages.push({ role: 'system', content }),
+    })
     const repair = s.observeTaskVerificationMutation(currentTargets)
     if (repair.changed) {
       s.iteration.deferredPostBatchMessages.push({

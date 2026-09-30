@@ -119,10 +119,12 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
     <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
       <FileIdentity preview={preview} t={t} />
       <div className="chat-preview-toolbar-actions ml-auto flex shrink-0 items-center gap-1.5">
-        <div className="inline-flex h-8 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-xs">
-          <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
-          <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
-        </div>
+        {actions.canToggleView && (
+          <div className="inline-flex h-8 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-xs">
+            <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
+            <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
+          </div>
+        )}
         {actions.canCopy && (
           <ActionButton onClick={() => copyTextToClipboard(content).catch(() => {})} icon={<Copy className="h-3.5 w-3.5" />} label={t('chatPreview.copy')} compact />
         )}

@@ -116,7 +116,7 @@ function DetailSection({ kind, label, value, live = false, command = false }) {
   )
 }
 
-function ToolCallCard({ call, artifacts = [], onOpenArtifact, expanded, onToggle }) {
+function ToolCallCard({ call, artifacts = [], onOpenArtifact, expanded, onToggle, workspacePath = '' }) {
   const { t } = useT()
   const detailsId = `tool-step-details-${useId().replace(/:/g, '')}`
   // The row reads as what the agent was doing (终端 / 编辑 / 搜索 …), not as the
@@ -124,7 +124,7 @@ function ToolCallCard({ call, artifacts = [], onOpenArtifact, expanded, onToggle
   // by the trace, it is just no longer drawn on the row itself.
   const kind = stepKindForTool(call.name)
   const label = stepRowLabel(call.name, kind, t)
-  const changeStats = toolCallChangeStats(call)
+  const changeStats = toolCallChangeStats(call, { workspacePath })
   const args = parseToolArgs(call.arguments)
   const rawSummary = summarizeToolArgs(call.name, args, t)
   const summary = redactSensitiveText(rawSummary === t('chatMessages.toolEmptyValue') ? t('toolActivity.summaryUnavailable') : rawSummary)

@@ -49,8 +49,12 @@ test('every builtin spec carries a complete explicit risk declaration', () => {
   // A count guard, not a frozen list: any new built-in tool must be declared
   // here with complete risk metadata before it can ship. The count moved 66 → 67
   // when `record_experience` was added (write_local, exclusive, approval-free
-  // bookkeeping into the workspace's own .agent/ journal).
-  assert.equal(names.length, 67)
+  // bookkeeping into the workspace's own .agent/ journal), and 67 → 75 with the
+  // preview family: three read-only page reads (screenshot, DOM, console) and
+  // five that act inside the reader's own dev server (start, stop, click, type,
+  // navigate). See the declarations in toolSchemaMetadata for why those five
+  // carry no per-call approval.
+  assert.equal(names.length, 75)
   for (const name of names) {
     const spec = getBuiltinSpec(name)
     assert.ok(spec?.metadata, `${name} metadata`)

@@ -5,7 +5,7 @@ import { isPreExecutionFailure } from '../../../../lib/chatFlowGuards.js'
 import { executionResultSummary } from '../../../../lib/executionResultSummary.js'
 import { ToolCallTrace } from '../ActivityTraces.jsx'
 
-export function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, streaming }) {
+export function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, streaming, workspacePath = '' }) {
   return segments.map((segment, index) => segment.kind === 'tools' ? (
     <ToolCallTrace
       key={segment.key}
@@ -13,6 +13,7 @@ export function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segme
       stepOffset={segment.stepOffset}
       artifacts={artifacts}
       onOpenArtifact={onOpenArtifact}
+      workspacePath={workspacePath}
     />
   ) : (
     <MarkdownRenderer

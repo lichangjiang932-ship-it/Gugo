@@ -141,6 +141,47 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
     file_download: builtinMetadata('write_local', false),
     request_directory: builtinMetadata('external', false),
     sleep_until: builtinMetadata('external', false),
+    // The preview tools work inside the page the reader is already looking at,
+    // on a dev server they started for their own project. Reading that page
+    // changes nothing; starting, clicking and typing inside it are the ordinary
+    // steps of verifying an edit, and asking for a decision before each one would
+    // turn the verification loop into a queue of modals. What actually bounds
+    // them is elsewhere: starting a command answers to the workspace's shell
+    // capability and trust — the same gate run_command passes — and navigation
+    // refuses anything that is not this machine.
+    preview_screenshot: builtinMetadata('read', true),
+    preview_inspect_dom: builtinMetadata('read', true),
+    preview_get_console_logs: builtinMetadata('read', true),
+    preview_start_server: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: true,
+      isDestructive: false,
+    }),
+    preview_stop_server: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: true,
+      isDestructive: false,
+    }),
+    preview_click: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isDestructive: false,
+    }),
+    preview_type: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isDestructive: false,
+    }),
+    // Navigation is the one preview tool with a second gate: an address that is
+    // not on this machine is confirmed per call, by argument, in approvalPolicy —
+    // this declaration covers the local case, which is what the preview is for.
+    preview_navigate: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isDestructive: false,
+    }),
   })
 }
 

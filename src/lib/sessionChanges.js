@@ -1,29 +1,38 @@
 import {
   MUTATION_TOOL_NAMES,
-  absolutePath,
   callArguments,
   callId,
   callName,
   callResult,
   callSucceeded,
+  isDryRunCall,
   resultPaths,
   validChangeStats,
+  workspacePathResolver,
 } from './toolCallMutationEvidence.js'
 
-export function sessionPathResolver(workspacePath = '') {
-  const root = String(workspacePath || '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
-  return (value) => {
-    const raw = String(value || '').trim()
-    if (!raw) return null
-    const direct = absolutePath(raw)
-    if (direct) return direct
-    const relative = raw.replace(/\\/g, '/').replace(/^\.\//, '')
-    if (!relative || relative.startsWith('..')) return null
-    if (root) {
-      const anchored = absolutePath(`${root}/${relative}`)
-      if (anchored) return { ...anchored, relative }
+function* uniqueMutationCalls(messages, resolvePath) {
+  const countedCalls = new Set()
+  const rows = Array.isArray(messages) ? messages : []
+  for (const [messageIndex, message] of rows.entries()) {
+    const calls = Array.isArray(message?.meta?.toolCalls) ? message.meta.toolCalls : []
+    const scope = String(message?.meta?.serverTurnId || message?.id || `message-${messageIndex}`)
+    for (const call of calls) {
+      const name = callName(call)
+      const result = callResult(call)
+      if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)
+        || isDryRunCall(call, result)) continue
+      const paths = resultPaths(result, resolvePath)
+      if (!paths.size) continue
+      const id = callId(call)
+      // Live SSE replay is sequence-fenced and the reducer merges IDs. Keep a
+      // per-turn guard for duplicate restored records without conflating a
+      // provider ID reused in a later turn.
+      const dedupeKey = id ? `${scope}\u0000${id}` : ''
+      if (dedupeKey && countedCalls.has(dedupeKey)) continue
+      if (dedupeKey) countedCalls.add(dedupeKey)
+      yield { name, result, args: callArguments(call), id, paths }
     }
-    return { key: `rel:${relative.toLowerCase()}`, path: relative }
   }
 }
 
@@ -49,36 +58,21 @@ function workspaceRelativePath(path, workspacePath) {
  */
 export function sessionFileChanges(messages = [], { workspacePath = '' } = {}) {
   const files = new Map()
-  const countedCalls = new Set()
-  const resolvePath = sessionPathResolver(workspacePath)
-  for (const message of Array.isArray(messages) ? messages : []) {
-    const calls = Array.isArray(message?.meta?.toolCalls) ? message.meta.toolCalls : []
-    for (const call of calls) {
-      const name = callName(call)
-      const result = callResult(call)
-      if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)) continue
-      const args = callArguments(call)
-      if (args.dry_run === true || args.dryRun === true
-        || result.dry_run === true || result.dryRun === true) continue
-      const id = callId(call)
-      if (id && countedCalls.has(id)) continue
-      if (id) countedCalls.add(id)
-      const paths = resultPaths(result, resolvePath)
-      if (!paths.size) continue
-      const changes = new Map(validChangeStats(result, resolvePath).map((change) => [change.key, change]))
-      for (const [key, path] of paths) {
-        const entry = files.get(key)
-          || { key, path, reported: null, toolNames: [], toolCallIds: [] }
-        const change = changes.get(key)
-        if (change) {
-          entry.reported = entry.reported || { additions: 0, deletions: 0 }
-          entry.reported.additions += change.additions
-          entry.reported.deletions += change.deletions
-        }
-        if (name && !entry.toolNames.includes(name)) entry.toolNames.push(name)
-        if (id && !entry.toolCallIds.includes(id)) entry.toolCallIds.push(id)
-        files.set(key, entry)
+  const resolvePath = workspacePathResolver(workspacePath)
+  for (const { name, result, id, paths } of uniqueMutationCalls(messages, resolvePath)) {
+    const changes = new Map(validChangeStats(result, resolvePath).map((change) => [change.key, change]))
+    for (const [key, path] of paths) {
+      const entry = files.get(key)
+        || { key, path, reported: null, toolNames: [], toolCallIds: [] }
+      const change = changes.get(key)
+      if (change) {
+        entry.reported = entry.reported || { additions: 0, deletions: 0 }
+        entry.reported.additions += change.additions
+        entry.reported.deletions += change.deletions
       }
+      if (name && !entry.toolNames.includes(name)) entry.toolNames.push(name)
+      if (id && !entry.toolCallIds.includes(id)) entry.toolCallIds.push(id)
+      files.set(key, entry)
     }
   }
   const entries = [...files.values()].map((entry) => ({
@@ -143,51 +137,41 @@ function patchSections(patch) {
  */
 export function sessionFileEditIndex(messages = [], { workspacePath = '' } = {}) {
   const index = new Map()
-  const resolvePath = sessionPathResolver(workspacePath)
+  const resolvePath = workspacePathResolver(workspacePath)
   const push = (pathKey, edit) => {
     const edits = index.get(pathKey) || []
     edits.push(edit)
     index.set(pathKey, edits)
   }
-  for (const message of Array.isArray(messages) ? messages : []) {
-    const calls = Array.isArray(message?.meta?.toolCalls) ? message.meta.toolCalls : []
-    for (const call of calls) {
-      const name = callName(call)
-      const result = callResult(call)
-      if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)) continue
-      const args = callArguments(call)
-      if (args.dry_run === true || args.dryRun === true) continue
-      const paths = resultPaths(result, resolvePath)
-      if (!paths.size) continue
-      const record = (edit) => { for (const pathKey of paths.keys()) push(pathKey, edit) }
-      if (['edit_file', 'patch_file'].includes(name) && typeof args.old_string === 'string') {
-        record({ toolName: name, kind: 'replace', removed: textLines(args.old_string), added: textLines(args.new_string) })
-        continue
+  for (const { name, args, paths } of uniqueMutationCalls(messages, resolvePath)) {
+    const record = (edit) => { for (const pathKey of paths.keys()) push(pathKey, edit) }
+    if (['edit_file', 'patch_file'].includes(name) && typeof args.old_string === 'string') {
+      record({ toolName: name, kind: 'replace', removed: textLines(args.old_string), added: textLines(args.new_string) })
+      continue
+    }
+    if (name === 'multi_edit' && Array.isArray(args.edits)) {
+      for (const edit of args.edits) {
+        record({
+          toolName: name,
+          kind: 'replace',
+          removed: textLines(edit?.old_string),
+          added: textLines(edit?.new_string),
+        })
       }
-      if (name === 'multi_edit' && Array.isArray(args.edits)) {
-        for (const edit of args.edits) {
-          record({
-            toolName: name,
-            kind: 'replace',
-            removed: textLines(edit?.old_string),
-            added: textLines(edit?.new_string),
-          })
-        }
-        continue
+      continue
+    }
+    if (['apply_patch', 'patch_file'].includes(name) && typeof args.patch === 'string') {
+      // A patch names its own files, so each section is filed under the path it
+      // edits rather than under every path the call reported.
+      const sections = patchSections(args.patch)
+      for (const section of sections) {
+        const pathKey = resolvePath(section.path)?.key
+        if (pathKey) push(pathKey, { toolName: name, kind: 'patch', removed: section.removed, added: section.added })
       }
-      if (['apply_patch', 'patch_file'].includes(name) && typeof args.patch === 'string') {
-        // A patch names its own files, so each section is filed under the path it
-        // edits rather than under every path the call reported.
-        const sections = patchSections(args.patch)
-        for (const section of sections) {
-          const pathKey = resolvePath(section.path)?.key
-          if (pathKey) push(pathKey, { toolName: name, kind: 'patch', removed: section.removed, added: section.added })
-        }
-        continue
-      }
-      if (name === 'write_file' && typeof args.content === 'string') {
-        record({ toolName: name, kind: 'write', removed: [], added: textLines(args.content) })
-      }
+      continue
+    }
+    if (name === 'write_file' && typeof args.content === 'string') {
+      record({ toolName: name, kind: 'write', removed: [], added: textLines(args.content) })
     }
   }
   return index

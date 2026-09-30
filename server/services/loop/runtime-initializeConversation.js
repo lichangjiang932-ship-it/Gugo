@@ -4,6 +4,7 @@ import { synchronizePresentationPromptContext } from './presentationPromptContex
 import { withAssistantCommunicationPolicy } from '../../../shared/assistantCommunicationPolicy.js'
 import { messageTextContent } from './userMessageText.js'
 import { completionPolicyAttempts } from './completionPolicy.js'
+import { createPreviewVerification } from '../previewVerification.js'
 
 // Exact legacy host records, not a substring/marker match: quoted examples,
 // user content and other system safety instructions must survive recovery.
@@ -58,6 +59,14 @@ function initializeConversationContext(s) {
     : ''
   s.verificationProjectDirectory = configuredRoot || authorizedRoots[0] || ''
   s.verificationProjectDirectories = [...new Set([configuredRoot, ...authorizedRoots].filter(Boolean))]
+  // The preview verifies this conversation's own project, one observation per
+  // edit batch, and obeys that project's .gugo/launch.json about whether to run.
+  s.previewVerification = createPreviewVerification({
+    userId: s.job?.userId || null,
+    sessionId: s.job?.sessionId || s.job?.id || '',
+    workspaceRoot: s.verificationProjectDirectory,
+    signal: s.signal || null,
+  })
   s.requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(s.artifactDelivery.target)
     || s.artifactRevisionMode === 'replace_original'
     || Boolean(String(s.outputDirectoryContext.defaultOutputDirectory || '').trim())

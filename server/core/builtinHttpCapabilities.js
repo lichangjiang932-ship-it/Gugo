@@ -39,6 +39,7 @@ import { handleMobileRequest } from '../routes/mobileRoutes.js'
 import { handleToolPermissionsRequest } from '../routes/toolPermissionRoutes.js'
 import { handleModelProviderRequest } from '../routes/modelProviderRoutes.js'
 import { handleBrowserRequest } from '../routes/browserRoutes.js'
+import { handlePreviewRequest } from '../routes/previewRoutes.js'
 import { handleConnectorRequest } from '../routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from '../routes/localFileAccessRoutes.js'
 import { handleFileSnapshotRequest } from '../routes/fileSnapshotRoutes.js'
@@ -86,6 +87,7 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.system.diagnostics', 9_500, ['/api/system/diagnostics']),
   descriptor('builtin.model.proxy', 9_400, ['/api/model/test', '/api/model/chat']),
   descriptor('builtin.browser', 9_300, ['/api/browser']),
+  descriptor('builtin.preview', 9_250, ['/api/preview']),
   descriptor('builtin.connectors', 9_200, ['/api/connectors']),
   descriptor('builtin.local-files', 9_100, ['/api/local-files']),
   descriptor('builtin.snapshots', 9_000, ['/api/snapshots']),
@@ -241,6 +243,11 @@ export function createBuiltinHttpCapabilities({
       'builtin.browser',
       (req) => req.url?.startsWith('/api/browser/'),
       (req, res) => handleBrowserRequest(req, res),
+    ),
+    capability(
+      'builtin.preview',
+      (req) => req.url?.startsWith('/api/preview/'),
+      (req, res) => handlePreviewRequest(req, res),
     ),
     capability(
       'builtin.connectors',

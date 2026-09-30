@@ -7,6 +7,7 @@ import EmbeddedBrowser from '../../../components/EmbeddedBrowser.jsx'
 import { createTerminalTranscript } from '../../../lib/terminalTranscript.js'
 import { isDesktopTerminalAvailable } from '../../../lib/desktopTerminalClient.js'
 import PtyTerminalPanel from './PtyTerminalPanel.jsx'
+import PreviewServerBar from './PreviewServerBar.jsx'
 import WorkbenchEntry from './WorkbenchEntry.jsx'
 
 function ChatPanel({ isGenerating, messages, setSideInput, sideInput, submitSideChat, t }) {
@@ -80,9 +81,14 @@ export default function RightWorkbenchContent(props) {
 
   return (
     <>
-      {activeTab === 'entry' && <WorkbenchEntry onTabChange={onTabChange} t={t} />}
+      {activeTab === 'entry' && <WorkbenchEntry contributedTabs={contributedTabs} onTabChange={onTabChange} t={t} />}
       {activeTab === 'chat' && <ChatPanel {...props} />}
-      {activeTab === 'browser' && <EmbeddedBrowser t={t} />}
+      {activeTab === 'browser' && (
+        <section className="flex min-h-0 flex-1 flex-col">
+          <PreviewServerBar active t={t} workspacePath={workspacePath} />
+          <EmbeddedBrowser t={t} />
+        </section>
+      )}
       {/* The desktop app gets a real shell; the web build keeps the command console.
           The shell panel is mounted as soon as the workbench exists but starts only
           when the tab is opened, and it stays mounted afterwards so switching tabs

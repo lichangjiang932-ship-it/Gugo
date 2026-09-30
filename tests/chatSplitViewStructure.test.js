@@ -8,6 +8,9 @@ const lineCount = (source) => source.trimEnd().split(/\r?\n/).length
 const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
 const rightPanels = read('../src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx')
 const sessionHeader = read('../src/pages/ChatSplit/chatSplitView/ChatSessionHeader.jsx')
+// The header bar owns the controls the reader sees; ChatSessionHeader.jsx owns
+// the two shared shapes they are built from.
+const headerBar = read('../src/pages/ChatSplit/chatSplitView/ChatSessionHeaderBar.jsx')
 
 test('chat split view and extracted right panels stay within the component size budget', () => {
   assert.ok(lineCount(view) <= 300, `ChatSplitView.jsx has ${lineCount(view)} lines`)
@@ -16,19 +19,23 @@ test('chat split view and extracted right panels stay within the component size 
 })
 
 test('the header opens the checklist instead of the branch navigator', () => {
-  assert.match(view, /data-testid="header-plan-toggle"/)
-  assert.match(view, /aria-pressed=\{planVisible \|\| undefined\}/)
+  assert.match(headerBar, /data-testid="header-plan-toggle"/)
+  assert.match(headerBar, /aria-pressed=\{planVisible \|\| undefined\}/)
+  assert.doesNotMatch(headerBar, /SessionBranchNavigator/)
+  // The view mounts that bar and nothing else of its presentation.
+  assert.match(view, /<ChatSessionHeaderBar/)
   assert.doesNotMatch(view, /SessionBranchNavigator/)
 })
 
 test('chat split view delegates header presentation while keeping its controls and selectors', () => {
-  assert.match(view, /import \{ ChatSessionHeading, ChatWorkbenchToggle \} from '\.\/chatSplitView\/ChatSessionHeader\.jsx'/)
-  assert.match(view, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)
-  assert.match(view, /data-testid="chat-session-title"/)
-  assert.match(view, /<ChatWorkbenchToggle[\s\S]*?open=\{workbenchOpen\}/)
-  assert.match(view, /onClick=\{onWorkbenchToggle\}/)
-  assert.match(view, /aria-controls="right-workbench"/)
-  assert.match(view, /aria-expanded=\{workbenchOpen\}/)
+  assert.match(view, /import ChatSessionHeaderBar from '\.\/chatSplitView\/ChatSessionHeaderBar\.jsx'/)
+  assert.match(headerBar, /import \{ ChatPreviewButton, ChatSessionHeading, ChatWorkbenchToggle \} from '\.\/ChatSessionHeader\.jsx'/)
+  assert.match(headerBar, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)
+  assert.match(headerBar, /data-testid="chat-session-title"/)
+  assert.match(headerBar, /<ChatWorkbenchToggle[\s\S]*?open=\{workbenchOpen\}/)
+  assert.match(headerBar, /onClick=\{onWorkbenchToggle\}/)
+  assert.match(headerBar, /aria-controls="right-workbench"/)
+  assert.match(headerBar, /aria-expanded=\{workbenchOpen\}/)
   assert.match(sessionHeader, /<h1[\s\S]*?\{\.\.\.headingAttributes\}/)
   assert.match(sessionHeader, /<button[\s\S]*?\{\.\.\.buttonAttributes\}/)
 })

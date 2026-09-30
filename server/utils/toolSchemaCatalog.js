@@ -15,6 +15,7 @@ import { CODE_SEARCH_TOOL_SPECS } from './codeSearch.js'
 import { LSP_TOOL_SPECS } from './lspTool.js'
 import { APPLY_PATCH_TOOL_SPECS } from './applyPatch.js'
 import { AGENTIC_TOOL_SPECS } from './agenticTools.js'
+import { PREVIEW_TOOL_SPECS } from '../services/previewTools.js'
 import { RUN_CODE_TOOL_SPECS } from '../services/runCodeRuntime.js'
 import { CODEX_APP_SERVER_TOOL_SPECS, CODEX_MODELS_TOOL_NAME } from '../services/codexAppServerTool.js'
 import { SUBAGENT_MAX_PER_BATCH } from '../services/subagentBatchConfig.js'
@@ -541,6 +542,7 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
   ...specsByName(LSP_TOOL_SPECS),
   ...specsByName(APPLY_PATCH_TOOL_SPECS),
   ...specsByName(AGENTIC_TOOL_SPECS),
+  ...specsByName(PREVIEW_TOOL_SPECS),
   ...specsByName(RUN_CODE_TOOL_SPECS),
   ...specsByName(CODEX_APP_SERVER_TOOL_SPECS),
   ...specsByName(MEMORY_TOOL_SPECS),

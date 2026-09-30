@@ -735,6 +735,29 @@ test('acceptEdits still confirms destructive PDF text/form operations by argumen
   }
 })
 
+test('the preview asks once about an address that leaves this machine', () => {
+  // The project's own preview opens without ceremony: that is what the preview is.
+  for (const url of ['http://localhost:3000/', 'http://127.0.0.1:5173/app', 'http://[::1]:8080/']) {
+    const verdict = classifyToolRisk('preview_navigate', { url }, { origin: 'chat', mode: 'unattended', permissionMode: 'acceptEdits' })
+    assert.notEqual(verdict.needsApproval, true, url)
+  }
+  // Anywhere else is the reader's call, whatever the permission mode would
+  // otherwise allow, and the reason names the address so the card can too.
+  const external = classifyToolRisk('preview_navigate', { url: 'https://example.com/docs' }, {
+    origin: 'chat',
+    mode: 'unattended',
+    permissionMode: 'acceptEdits',
+    metadata: { riskClass: 'external', requiresApproval: false },
+  })
+  assert.equal(external.needsApproval, true)
+  assert.match(external.reason, /example\.com/)
+  // A scheme that is not a page is not a decision to delegate either.
+  const notAPage = classifyToolRisk('preview_navigate', { url: 'file:///etc/passwd' }, {
+    origin: 'chat', mode: 'unattended', permissionMode: 'acceptEdits',
+  })
+  assert.notEqual(notAPage.needsApproval, true)
+})
+
 test('acceptEdits allows reversible PDF transforms and local archive edits', () => {
   for (const [name, args] of [
     ['pdf_transform', { operation: 'watermark' }],

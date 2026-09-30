@@ -31,10 +31,10 @@ function temporaryDirectory(t) {
   return directory
 }
 
-function blockMap({ checksums, sizes }) {
+function blockMap({ checksums, sizes, offset = 0 }) {
   return {
     version: '2',
-    files: [{ name: 'installer.exe', offset: 0, checksums, sizes }],
+    files: [{ name: 'installer.exe', offset, checksums, sizes }],
   }
 }
 
@@ -48,6 +48,22 @@ test('update range plans clamp chunks to the 1-4 MiB safety window', () => {
   assert.equal(Math.max(...largeLengths), MAX_UPDATE_CHUNK_SIZE)
   assert.ok(smallLengths.every((length) => length > 0 && length <= MIN_UPDATE_CHUNK_SIZE))
   assert.ok(largeLengths.every((length) => length > 0 && length <= MAX_UPDATE_CHUNK_SIZE))
+})
+
+test('a next blockmap with a nonzero offset uses full mode rather than creating a shifted sparse plan', () => {
+  const plan = buildUpdatePlan({
+    size: 3,
+    oldBlockMap: blockMap({ checksums: ['old'], sizes: [3] }),
+    newBlockMap: blockMap({ checksums: ['new'], sizes: [3], offset: 1 }),
+  })
+  assert.equal(plan.mode, 'full')
+  assert.deepEqual(plan.operations, [{
+    kind: 'download',
+    sourceStart: 0,
+    sourceEnd: 3,
+    outputStart: 0,
+    outputEnd: 3,
+  }])
 })
 
 test('an interrupted transfer keeps completed chunks and resumes only missing ranges', async (t) => {

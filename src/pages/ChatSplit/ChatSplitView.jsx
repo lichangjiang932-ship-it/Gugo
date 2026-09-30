@@ -8,9 +8,7 @@ import ChatDesktopPetHost from './chatSplitView/ChatDesktopPetHost.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
 import PlanCard from './chatSplitView/PlanCard.jsx'
 import { revealTurnInConversation } from '../../lib/chatMessageSignals.js'
-import { ListChecks } from 'lucide-react'
-import { ChatSessionHeading, ChatWorkbenchToggle } from './chatSplitView/ChatSessionHeader.jsx'
-import SessionChangesReview from './chatSplitView/SessionChangesReview.jsx'
+import ChatSessionHeaderBar from './chatSplitView/ChatSessionHeaderBar.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import ChatNoticeDocks from './chatSplitView/ChatNoticeDocks.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
@@ -89,6 +87,8 @@ export default function ChatSplitView({
   planArtifacts = [],
   onClosePlan, onOpenPlan,
   sessionChangesReview = null,
+  previewOpen = false,
+  onOpenPreview,
   workbenchTab,
   previewArtifact,
   previewTabs,
@@ -121,22 +121,16 @@ export default function ChatSplitView({
   return (
     <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper" mainAs="main" mainClassName="relative flex min-w-0 flex-1 overflow-hidden" mainProps={{ 'data-chat-main-area': true }}>
       <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
-        <header className="chat-session-header flex h-12 shrink-0 items-center gap-2.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
-          <ChatSessionHeading hasWorkspace={hasWorkspace} title={activeSession?.title || t('nav.newChat')} data-testid="chat-session-title" />
-          <button type="button" data-testid="header-plan-toggle" aria-pressed={planVisible || undefined} onClick={() => (planVisible ? onClosePlan?.() : onOpenPlan?.())} title={t('workbench.planCardTitle')} aria-label={t('workbench.planCardTitle')} className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"><ListChecks className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" /></button>
-          <SessionChangesReview review={sessionChangesReview} t={t} />
-          <ChatWorkbenchToggle
-            open={workbenchOpen}
-            onClick={onWorkbenchToggle}
-            title={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
-            aria-label={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
-            aria-controls="right-workbench"
-            aria-expanded={workbenchOpen}
-            data-testid="workbench-toggle"
-          />
-        </header>
+        <ChatSessionHeaderBar
+          activeSession={activeSession} hasWorkspace={hasWorkspace}
+          onClosePlan={onClosePlan} onOpenPlan={onOpenPlan}
+          onOpenPreview={onOpenPreview} onWorkbenchToggle={onWorkbenchToggle}
+          planVisible={planVisible} previewOpen={previewOpen}
+          sessionChangesReview={sessionChangesReview} t={t} workbenchOpen={workbenchOpen}
+        />
         <ChatMessages key={JSON.stringify([recoveryOwnerScope, activeSessionId || '__draft__'])}
           sessionId={activeSessionId} recoveryOwnerScope={recoveryOwnerScope}
+          workspacePath={selectedWorkspacePath || activeSession?.workspacePath || ''}
           onSideEffectResolved={onSideEffectResolved}
           messages={messages} routeHash={messageRouteHash}
           workbenchMessage={workbenchMessage} isGenerating={isGenerating}
@@ -251,6 +245,7 @@ export default function ChatSplitView({
       </div>
 
       <ChatRightPanels
+        onInsertText={(text) => setInput((current) => (current ? `${current} ${text}` : text))}
         workbenchOpen={workbenchOpen}
         sessionId={activeSessionId}
         todos={activeSession?.todos || []}

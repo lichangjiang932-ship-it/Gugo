@@ -6,11 +6,12 @@ import {
   sessionFileChanges,
   sessionFileEditIndex,
 } from '../../src/lib/sessionChanges.js'
+import { toolCallChangeStats } from '../../src/lib/localFileReferences.js'
 
 const WORKSPACE = 'D:/work/project'
 
 function message(calls, extra = {}) {
-  return { role: 'assistant', meta: { toolCalls: calls }, ...extra }
+  return { role: 'assistant', ...extra, meta: { ...(extra.meta || {}), toolCalls: calls } }
 }
 
 function call({ id, name, args = {}, result = {}, status = '' }) {
@@ -70,9 +71,11 @@ test('the panel lists what the agent changed, per file and in the order it happe
 
 test('only successful, non-dry, once-counted mutations are evidence', () => {
   const messages = [
-    message([call({ id: 'x1', name: 'write_file', args: { path: 'a.txt', content: 'one\ntwo' }, result: { ok: true, path: 'a.txt' } })]),
+    message([call({ id: 'x1', name: 'write_file', args: { path: 'a.txt', content: 'one\ntwo' }, result: { ok: true, path: 'a.txt' } })],
+      { id: 'assistant-x1-a', meta: { serverTurnId: 'turn-x1' } }),
     // The same call restored twice in the transcript is one change.
-    message([call({ id: 'x1', name: 'write_file', args: { path: 'a.txt', content: 'one\ntwo' }, result: { ok: true, path: 'a.txt' } })]),
+    message([call({ id: 'x1', name: 'write_file', args: { path: 'a.txt', content: 'one\ntwo' }, result: { ok: true, path: 'a.txt' } })],
+      { id: 'assistant-x1-b', meta: { serverTurnId: 'turn-x1' } }),
     message([call({ id: 'x2', name: 'apply_patch', args: { patch: '*** Update File: b.txt\n-a\n+b', dry_run: true }, result: { ok: true, changes: [{ path: 'b.txt', additions: 1, deletions: 1 }] } })]),
     message([call({ id: 'x3', name: 'edit_file', args: { path: 'c.txt', old_string: 'a', new_string: 'b' }, result: { ok: false, error: 'no match' }, status: 'error' })]),
     message([call({ id: 'x4', name: 'read_file', args: { path: 'd.txt' }, result: { ok: true, path: 'd.txt' } })]),
@@ -158,4 +161,70 @@ test('the recorded edits are what the review shows, per tool', () => {
   // A file only a script touched has nothing recorded, and nothing is invented.
   assert.equal(index.size, 3, 'only files with a recorded edit are indexed')
   assert.deepEqual(countRecordedEditLines([]), { additions: 0, deletions: 0 })
+})
+
+test('the panel and message-row stats share workspace path resolution', () => {
+  const mutation = call({
+    id: 'relative-change-stats',
+    name: 'edit_file',
+    args: { path: 'src/app.js', old_string: 'old', new_string: 'new' },
+    result: {
+      ok: true,
+      path: 'src/app.js',
+      changes: [{ path: 'src/app.js', additions: 3, deletions: 1 }],
+    },
+  })
+  const messages = [message([mutation])]
+  const panel = sessionFileChanges(messages, { workspacePath: WORKSPACE })
+  const messageRow = toolCallChangeStats(mutation, { workspacePath: WORKSPACE })
+
+  assert.deepEqual(panel.files[0].reported, { additions: 3, deletions: 1 })
+  assert.deepEqual(messageRow, panel.files[0].reported)
+})
+
+test('the edit index ignores replayed call IDs and result-level dry runs like the panel', () => {
+  const replay = call({
+    id: 'replayed-edit',
+    name: 'edit_file',
+    args: { path: 'src/app.js', old_string: 'old', new_string: 'new' },
+    result: { ok: true, path: 'src/app.js' },
+  })
+  const dryRun = call({
+    id: 'result-dry-run',
+    name: 'apply_patch',
+    args: { patch: '*** Update File: src/dry.js\n-old\n+new' },
+    result: { ok: true, dry_run: true, changes: [{ path: 'src/dry.js', additions: 1, deletions: 1 }] },
+  })
+  const messages = [
+    message([replay, dryRun], { id: 'replay-a', meta: { serverTurnId: 'turn-replay' } }),
+    message([replay], { id: 'replay-b', meta: { serverTurnId: 'turn-replay' } }),
+  ]
+  const panel = sessionFileChanges(messages, { workspacePath: WORKSPACE })
+  const index = sessionFileEditIndex(messages, { workspacePath: WORKSPACE })
+  const appKey = panel.files.find((file) => file.displayPath === 'src/app.js')?.key
+
+  assert.deepEqual(panel.files.map((file) => file.displayPath), ['src/app.js'])
+  assert.equal(index.size, 1)
+  assert.equal(index.get(appKey).length, 1)
+})
+
+test('a call ID reused in another turn remains a distinct edit', () => {
+  const first = call({
+    id: 'provider-reused-id',
+    name: 'write_file',
+    args: { path: 'first.txt', content: 'first' },
+    result: { ok: true, path: 'first.txt' },
+  })
+  const second = call({
+    ...first,
+    args: { path: 'second.txt', content: 'second' },
+    result: { ok: true, path: 'second.txt' },
+  })
+  const messages = [
+    message([first], { id: 'assistant-first', meta: { serverTurnId: 'turn-first' } }),
+    message([second], { id: 'assistant-second', meta: { serverTurnId: 'turn-second' } }),
+  ]
+
+  assert.deepEqual(sessionFileChanges(messages).files.map((file) => file.displayPath), ['first.txt', 'second.txt'])
+  assert.equal(sessionFileEditIndex(messages).size, 2)
 })

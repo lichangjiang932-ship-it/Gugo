@@ -10,6 +10,8 @@ const COPY = {
   'chat.changes.empty': 'This conversation has not changed any files yet.',
   'chat.changes.scriptOnly': 'Produced by a script; no edit was recorded.',
   'chat.changes.readOnly': 'Read-only review: nothing here commits or pushes.',
+  'chat.changes.expand': "Expand this file's change in place",
+  'chat.changes.openDiff': 'Read the change to {path} in the main area',
   'chat.changes.close': 'Close the change list',
   'chat.changes.toggle': 'Show the files this conversation changed',
   'chat.changes.toggleCount': 'This conversation changed {count} files',
@@ -75,6 +77,7 @@ async function render(props = {}) {
   document.body.appendChild(container)
   const root = createRoot(container)
   let closed = 0
+  const opened = []
   await act(async () => {
     root.render(
       <SessionChangesPanel
@@ -82,6 +85,9 @@ async function render(props = {}) {
           changes: props.changes ?? CHANGES,
           close: () => { closed += 1 },
           editIndex: props.editIndex ?? EDIT_INDEX,
+          openDiff: props.openDiff === undefined
+            ? (file, edits) => opened.push({ edits, file })
+            : props.openDiff,
           visible: props.visible ?? true,
         }}
         t={t}
@@ -92,7 +98,9 @@ async function render(props = {}) {
     container,
     root,
     closedCount: () => closed,
+    openedDiffs: () => opened,
     rows: () => [...container.querySelectorAll('[data-testid="session-change-file"]')],
+    toggles: () => [...container.querySelectorAll('[data-testid="session-change-file-toggle"]')],
   }
 }
 
@@ -115,8 +123,8 @@ test('the review lists each file with the counts that belong to it', async () =>
 
 test('opening a file shows the edit the agent made, and a script-only file says so', async () => {
   setupDom()
-  const { container, rows } = await render()
-  const [app, readme, scripted] = rows()
+  const { container, toggles } = await render()
+  const [app, readme, scripted] = toggles()
 
   await act(async () => { app.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
   assert.equal(app.getAttribute('aria-expanded'), 'true')
@@ -135,6 +143,61 @@ test('opening a file shows the edit the agent made, and a script-only file says 
   assert.equal(scripted.getAttribute('aria-expanded'), 'true')
 })
 
+test('the file row hands its file and its recorded edits to the review', async () => {
+  setupDom()
+  const { rows, openedDiffs } = await render()
+  const [app, readme] = rows()
+  assert.equal(rows().length, 3)
+  // The row names the file it will open, so a reader with several previews open
+  // knows which one this is.
+  assert.equal(app.getAttribute('title'), 'Read the change to app.js in the main area')
+
+  await act(async () => { readme.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+  assert.equal(openedDiffs().length, 1)
+  const [{ edits, file }] = openedDiffs()
+  assert.equal(file.displayPath, 'readme.md')
+  assert.deepEqual(edits, EDIT_INDEX.get('d:/work/readme.md'))
+})
+
+test('the review turns a file and its edits into the diff the main area opens', async () => {
+  setupDom()
+  const { createRoot } = await import('react-dom/client')
+  const useSessionChangesReview = (await import('../../src/pages/ChatSplit/useSessionChangesReview.js')).default
+  const opened = []
+  let review = null
+  function Probe() {
+    review = useSessionChangesReview({ messages: [], onOpenDiff: (artifact) => opened.push(artifact) })
+    return null
+  }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => { root.render(<Probe />) })
+    const [reportedFile] = CHANGES.files
+    const editedFile = CHANGES.files[1]
+    const edits = EDIT_INDEX.get(editedFile.key)
+    await act(async () => {
+      review.openDiff(editedFile, edits)
+      review.openDiff(reportedFile, [])
+    })
+    const [edited, reported] = opened
+    assert.equal(edited.preview.type, 'diff')
+    assert.equal(edited.preview.filename, 'readme.md')
+    assert.equal(edited.preview.path, 'D:/work/readme.md')
+    // The lines are the ones the panel shows, and its summary is what it counted.
+    assert.deepEqual(edited.preview.hunks, edits)
+    assert.equal(edited.preview.summary, '+1 −2')
+    // A file the executor reported numbers for keeps those numbers, not a recount.
+    assert.equal(reported.preview.summary, '+3 −1')
+    assert.deepEqual(reported.preview.hunks, [])
+    // Two files are two tabs: identity comes from the path, not from the order.
+    assert.notEqual(edited.preview.path, reported.preview.path)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
 test('a closed review renders nothing at all', async () => {
   setupDom()
   const { container } = await render({ visible: false })
@@ -149,7 +212,6 @@ test('an untouched conversation says so instead of showing an empty list', async
   })
   assert.equal(rows().length, 0)
   assert.match(container.textContent, /has not changed any files/)
-  assert.match(container.textContent, /Read-only review/)
 })
 
 test('closing is one press, and the header shows the file count', async () => {

@@ -96,8 +96,8 @@ const EVIDENCE_CLASSES = Object.freeze({
 function Section({ action, children, count, testId, title }) {
   return (
     <section className="border-b border-ink/[0.08] px-3 py-3 last:border-b-0" data-testid={testId}>
-      <div className="mb-2 flex items-center gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-fade">{title}</h3>
+      <div className="mb-3 flex items-center gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink">{title}</h3>
         {Number.isFinite(count) && count > 0 && <span className="font-mono text-xs text-ink-fade">{count}</span>}
         {action && <span className="ml-auto">{action}</span>}
       </div>
@@ -268,7 +268,7 @@ export default function WorkbenchPlan({ artifacts = [], onOpenArtifact, onReveal
             onClick={reload}
             aria-label={t('workbench.planRefresh')}
             title={t('workbench.planRefresh')}
-            className="flex h-6 w-6 items-center justify-center rounded-control text-ink-fade hover:bg-ink/5 hover:text-ink"
+            className="flex h-6 w-6 items-center justify-center rounded-control text-ink-fade transition-transform hover:rotate-90 hover:bg-ink/5 hover:text-ink"
           >
             <RefreshCw className="h-3 w-3" aria-hidden="true" />
           </button>
@@ -328,11 +328,11 @@ export default function WorkbenchPlan({ artifacts = [], onOpenArtifact, onReveal
                 <li key={artifact.id || artifact.url}>
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-xs text-ink-soft hover:bg-ink/[0.035]"
+                    className="flex w-full items-center gap-2 rounded-control px-3 py-1.5 text-left text-xs text-ink transition-colors hover:bg-[var(--color-row-hover)]"
                     data-testid="workbench-plan-artifact"
                     onClick={() => onOpenArtifact?.(artifact)}
                   >
-                    <span className="chat-output-file-name min-w-0 truncate">{artifact.filename || artifact.title || artifact.type}</span>
+                    <span className="chat-output-file-name min-w-0 flex-1 truncate font-medium">{artifact.filename || artifact.title || artifact.type}</span>
                   </button>
                 </li>
               ))}

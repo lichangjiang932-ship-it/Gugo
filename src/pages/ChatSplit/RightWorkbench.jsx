@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import { useToast } from '../../components/Toast.jsx'
+import { savePreviewScreenshot } from '../../lib/previewScreenshot.js'
+import usePreviewElementPicker from './rightWorkbench/usePreviewElementPicker.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { stripAnsiSequences } from '../../lib/terminalText.js'
 import { appendTerminalEntry, createTerminalTranscript, TERMINAL_STREAM } from '../../lib/terminalTranscript.js'
@@ -23,6 +26,7 @@ export default function RightWorkbench({
   activeTab,
   onTabChange,
   onClose,
+  onInsertText,
   onOpenArtifact,
   onSendMessage,
   selectedWorkspacePath = '',
@@ -30,6 +34,7 @@ export default function RightWorkbench({
   statusMessage = '',
 }) {
   const { t } = useT()
+  const toast = useToast()
   const contributedTabs = useUiContributions('workbench-tab')
   const artifacts = useMemo(() => collectArtifacts(messages, attachments), [attachments, messages])
   const resizeRef = useRef(null)
@@ -102,6 +107,17 @@ export default function RightWorkbench({
   }
 
   const resetWidth = () => setPanelWidth(clampWidth(DEFAULT_WIDTH))
+  // The capture is of the docked view, so it is the panel's own pixels; the toast
+  // is where a failure explains itself, since a menu that closes on click has
+  // nowhere left to say anything.
+  // Picking hands the selector to the composer so the next message names it.
+  const elementPicker = usePreviewElementPicker({ insertText: onInsertText, t, toast })
+  const takeScreenshot = () => {
+    void savePreviewScreenshot().then((result) => {
+      if (result.ok) toast.success(t('workbench.previewScreenshotSaved', { width: result.width, height: result.height }))
+      else toast.error(t('workbench.previewScreenshotFailed'))
+    })
+  }
 
   const submitSideChat = async (event) => {
     event.preventDefault()
@@ -172,7 +188,10 @@ export default function RightWorkbench({
               activeTab={activeTab}
               contributedTabs={contributedTabs}
               onClose={onClose}
+              onPickElement={elementPicker.toggle}
               onResetWidth={resetWidth}
+              onScreenshot={takeScreenshot}
+              picking={elementPicker.picking}
               onTabChange={onTabChange}
               onToggleExpand={toggleExpand}
               panelExpanded={panelExpanded}

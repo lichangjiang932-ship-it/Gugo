@@ -12,3 +12,28 @@ export function getDesktopBrowserHost() {
 export function isDesktopBrowserAvailable() {
   return getDesktopBrowserHost() !== null
 }
+
+/**
+ * Whether this host can report what the page shows. A host that only navigates
+ * (an older shell, or the web build) cannot answer, and the preview says so
+ * rather than pretending a screenshot arrived.
+ */
+export function isDesktopPageFactsAvailable() {
+  const host = getDesktopBrowserHost()
+  return typeof host?.capture === 'function' && typeof host?.evaluate === 'function'
+}
+
+export function captureDesktopPreview({ host = getDesktopBrowserHost() } = {}) {
+  if (typeof host?.capture !== 'function') return Promise.resolve({ ok: false, reason: 'unsupported' })
+  return host.capture()
+}
+
+export function evaluateInDesktopPreview(script, { host = getDesktopBrowserHost() } = {}) {
+  if (typeof host?.evaluate !== 'function') return Promise.resolve({ ok: false, reason: 'unsupported' })
+  return host.evaluate(script)
+}
+
+export function readDesktopPreviewConsole(options = {}, { host = getDesktopBrowserHost() } = {}) {
+  if (typeof host?.consoleEntries !== 'function') return Promise.resolve({ ok: false, reason: 'unsupported' })
+  return host.consoleEntries(options)
+}

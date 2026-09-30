@@ -35,9 +35,11 @@ export function shortcutLabelFor(tool, { platform } = {}) {
   if (isMac(platform)) {
     if (tool.ctrl) parts.push('⌘')
     if (tool.alt) parts.push('⌥')
+    if (tool.shift) parts.push('⇧')
   } else {
     if (tool.ctrl) parts.push('Ctrl')
     if (tool.alt) parts.push('Alt')
+    if (tool.shift) parts.push('Shift')
   }
   parts.push(tool.key === '\\' ? '\\' : tool.key.toUpperCase())
   // macOS writes shortcuts without separators (⌘⌥S); other platforms use "+".

@@ -109,21 +109,38 @@ test('the header toolbar offers exactly the three tools and the panel resizes', 
       )
     })
 
-    // The vertical edge strip is gone; the switch lives in the header as one row.
+    // The vertical edge strip is gone; the top bar follows the reference order.
     assert.equal(rootElement.querySelector('[data-testid="workbench-tool-rail"]'), null)
     const toolbar = rootElement.querySelector('[data-testid="workbench-tool-switch"]')
     assert.ok(toolbar)
     assert.doesNotMatch(toolbar.className, /flex-col/)
-    // Home returns to the entry page — the way back the removed strip took with it.
-    assert.ok(rootElement.querySelector('[data-testid="workbench-tool-entry"]'))
-    const tools = [...toolbar.querySelectorAll('button[data-tool]')]
-    assert.equal(toolbar.querySelector('[aria-current="page"]').getAttribute('data-tool'), 'chat')
-    assert.deepEqual(tools.map((button) => button.getAttribute('data-tool')), ['chat', 'browser', 'terminal'])
-    // The active tool is announced, and each label carries its own key, so a
-    // tooltip can never promise a shortcut nobody bound.
+    const orderedIds = [
+      'workbench-tool-entry', 'workbench-tool-forward', 'workbench-tool-select', 'workbench-tool-refresh',
+      'workbench-tool-settings', 'workbench-tool-open-external', 'workbench-tool-expand', 'workbench-close',
+    ]
+    const shownIds = [...toolbar.querySelectorAll('[data-testid]')]
+      .map((node) => node.getAttribute('data-testid'))
+      .filter((id) => orderedIds.includes(id))
+    assert.deepEqual(shownIds, orderedIds, 'icons appear exactly in the reference order')
+    // Selection awaits the Preview runtime; preview controls stay quiet off the browser tab.
+    assert.equal(toolbar.querySelector('[data-testid="workbench-tool-select"]').disabled, true)
+    assert.equal(toolbar.querySelector('[data-testid="workbench-tool-refresh"]').disabled, true)
+    assert.equal(toolbar.querySelector('[data-testid="workbench-settings-tip"]').textContent, 'Preview settings')
+    // The bar itself only holds those icons, so switching tools lives in the
+    // settings menu: all three, each with its own label and shortcut, none lost.
+    const menu = toolbar.querySelector('[role="menu"]')
+    assert.ok(menu)
+    const tools = [...menu.querySelectorAll('[data-tool]')]
+    assert.deepEqual(tools.map((node) => node.getAttribute('data-tool')), ['chat', 'browser', 'terminal'])
+    assert.ok(tools.every((node) => node.parentElement === menu), 'tools are menu entries, not a second bar')
+    assert.equal(tools[0].getAttribute('aria-current'), 'page')
+    // The label carries its own key, so a tooltip can never promise a shortcut
+    // nobody bound.
     assert.equal(tools[0].getAttribute('title'), '侧边聊天（Ctrl+Alt+S）')
     assert.equal(tools[1].getAttribute('title'), '浏览器（Ctrl+T）')
     assert.equal(tools[2].getAttribute('title'), '终端（Ctrl+\\）')
+    // With no workspace named there is nothing to copy, and the entry says so.
+    assert.equal(menu.querySelector('[data-testid="preview-menu-copy-workspace"]').disabled, true)
 
     const resizeHandle = rootElement.querySelector('[data-testid="workbench-resize-handle"]')
     assert.ok(resizeHandle)
@@ -138,9 +155,17 @@ test('the header toolbar offers exactly the three tools and the panel resizes', 
     assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '520')
 
     await act(async () => {
-      tools[1].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      toolbar.querySelector('[data-testid="workbench-tool-entry"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
     })
-    assert.deepEqual(selectedTabs, ['browser'])
+    assert.deepEqual(selectedTabs, ['entry'])
+    // A tool in the menu is one press away, and the menu closes behind it.
+    const menuDetails = toolbar.querySelector('[data-testid="workbench-tool-settings"]').closest('details')
+    menuDetails.open = true
+    await act(async () => {
+      toolbar.querySelector('[data-tool="browser"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    assert.deepEqual(selectedTabs, ['entry', 'browser'])
+    assert.equal(menuDetails.open, false)
 
     resizeHandle.setPointerCapture = () => {}
     await act(async () => {
@@ -886,11 +911,16 @@ test('the toolbar walks back to entry, forward to the tool, grows the panel and 
     await act(async () => expand.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(panel.style.width, readerWidth, 'the second click restores the reader own width')
 
-    const copy = rootElement.querySelector('[data-testid="workbench-tool-copy"]')
+    // The workspace path is still one press away, and it is the real path.
+    const copy = rootElement.querySelector('[data-testid="preview-menu-copy-workspace"]')
     assert.equal(copy.disabled, false)
     await act(async () => copy.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     await new Promise((resolve) => { setTimeout(resolve, 0) })
     assert.deepEqual(copied, ['/wsp/project'])
+
+    // Preview controls stay disabled until a browser tab is showing.
+    assert.equal(rootElement.querySelector('[data-testid="workbench-tool-refresh"]').disabled, true)
+    assert.equal(rootElement.querySelector('[data-testid="workbench-tool-open-external"]').disabled, true)
   } finally {
     if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator)
     else delete globalThis.navigator

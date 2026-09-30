@@ -36,6 +36,7 @@ import { isPausedDirectoryMessage } from '../chatDirectoryDecisions.js'
 export default function MessageRow({
   msg,
   sessionId,
+  workspacePath = '',
   recoveryOwnerScope,
   onSideEffectResolved,
   rowKey,
@@ -191,6 +192,7 @@ export default function MessageRow({
               isCurrentStreamingMessage={isCurrentStreamingMessage}
               isMessageComplete={isMessageComplete}
               msg={msg}
+              workspacePath={workspacePath}
               onManageModels={onManageModels}
               onOpenArtifact={openArtifact}
               showArtifactPreview={showArtifactPreview}

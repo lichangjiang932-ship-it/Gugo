@@ -30,11 +30,11 @@ export function importSkillPack(files, { fetchImpl = fetch } = {}) {
  * Install the skill a memory proposes. The reader pressed the button; the server
  * turns the proposal into an ordinary skill pack.
  */
-export function installSkillFromMemory(memoryId, { fetchImpl = fetch } = {}) {
+export function installSkillFromMemory(memoryId, { fetchImpl = fetch, locale = 'zh' } = {}) {
   return readJsonResponse(fetchImpl('/api/skills/from-memory', {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ memoryId }),
+    body: JSON.stringify({ memoryId, locale: locale === 'en' ? 'en' : 'zh' }),
   }))
 }
 

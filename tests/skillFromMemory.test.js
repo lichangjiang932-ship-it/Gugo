@@ -62,7 +62,15 @@ test('a proposal becomes a skill pack the importer already understands', () => {
   // The pack carries the procedure as its system prompt: what the skill does when
   // it is activated is exactly what the journal taught.
   assert.match(pack.files['prompts/system.md'], /生成后回读页数/)
+  assert.match(pack.files['prompts/system.md'], /这个技能由本机经验日志抽象而来/u)
   assert.match(pack.files['prompts/system.md'], /步骤：1\) 生成/)
+
+  const englishPack = buildSkillPackFromProposal({
+    title: 'readback',
+    body: 'Read back every generated file and verify its page count.',
+  }, { locale: 'en' })
+  assert.match(englishPack.files['prompts/system.md'], /This skill was distilled from local experience/u)
+  assert.doesNotMatch(englishPack.files['prompts/system.md'], /这个技能由本机经验日志抽象而来/u)
 
   assert.equal(buildSkillPackFromProposal({ title: '', body: 'x' }).reason, 'PROPOSAL_TITLE_MISSING')
   assert.equal(buildSkillPackFromProposal({ title: 'ok', body: '' }).reason, 'PROPOSAL_BODY_MISSING')

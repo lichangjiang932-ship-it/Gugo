@@ -9,6 +9,8 @@ const translations = {
       "empty": "本次对话还没有改动过文件。",
       "scriptOnly": "由脚本产生，没有记录到具体的编辑内容。",
       "readOnly": "只读审查：这里不会提交或推送，提交请用终端或 Git 工作台。",
+      "expand": "就地展开这个文件的改动",
+      "openDiff": "在主区查看 {path} 的改动",
       "close": "关闭改动清单"
     },
     "contextUsage": {
@@ -113,6 +115,8 @@ const translations = {
       "empty": "This conversation has not changed any files yet.",
       "scriptOnly": "Produced by a script; no edit was recorded.",
       "readOnly": "Read-only review: nothing here commits or pushes. Use the terminal or the Git workbench to commit.",
+      "expand": "Expand this file's change in place",
+      "openDiff": "Read the change to {path} in the main area",
       "close": "Close the change list"
     },
     "contextUsage": {

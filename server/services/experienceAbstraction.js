@@ -1,5 +1,5 @@
 import { logWarn } from '../utils/logger.js'
-import { storeMemoryCandidates } from './autoMemoryService.js'
+import { MIN_CONFIDENCE, storeMemoryCandidates } from './autoMemoryService.js'
 import { archiveExperienceEntries, readExperienceJournal } from './experienceRecorder.js'
 
 /**
@@ -13,9 +13,8 @@ import { archiveExperienceEntries, readExperienceJournal } from './experienceRec
  * Design decisions worth knowing:
  * - The journal is the source of truth and the evidence trail. Consumed entries
  *   move to `experience.archive.md`, never out of existence.
- * - Only consumed entries are archived, and only when the run produced something:
- *   an empty abstraction means the journal was not understood, not that it was
- *   handled.
+ * - Only consumed entries are archived, and only after at least one candidate
+ *   has passed persistence guards. Parsed output alone does not consume evidence.
  * - Long-term and project knowledge land in the memory store, under the guards
  *   every machine-written memory already passes (see storeMemoryCandidates).
  * - Skills are *proposed*, never installed. Installing one grants a capability,
@@ -102,6 +101,7 @@ export function buildExperienceAbstractionMessages(entries = []) {
           'skills are repeatable procedures worth reusing as a skill; propose one only when the episodes show a procedure, not a one-off fix.',
           'When two episodes disagree, keep the newer lesson and say so in the body.',
           'Never include passwords, API keys, tokens, private keys, or other credentials.',
+          `Only return an item with confidence at least ${MIN_CONFIDENCE}.`,
           `Emit at most ${MAX_ITEMS_PER_SECTION.longTerm} longTerm, ${MAX_ITEMS_PER_SECTION.project} project, and ${MAX_ITEMS_PER_SECTION.skills} skills items.`,
           'Return empty arrays when nothing generalizes.',
         ].join(' '),
@@ -255,10 +255,16 @@ export async function abstractExperienceJournal({
     return { ok: true, skipped: true, reason: 'nothing_generalized', pending: due.pending, rejected: abstained.rejected }
   }
 
-  const stored = storeMemoryCandidates({
+  const storedLongTerm = storeMemoryCandidates({
     userId,
     source: 'experience_abstraction',
-    candidates: knowledge,
+    candidates: abstained.longTerm,
+    signal,
+  })
+  const storedProject = storeMemoryCandidates({
+    userId,
+    source: 'experience_abstraction',
+    candidates: abstained.project,
     signal,
   })
   // A skill proposal is a memory too, but marked as a proposal: it points at a
@@ -271,6 +277,20 @@ export async function abstractExperienceJournal({
   })
   if (signal?.aborted) return { ok: false, skipped: true, reason: 'aborted' }
 
+  const storedCount = storedLongTerm.stored.length + storedProject.stored.length + proposals.stored.length
+  const refused = [...storedLongTerm.refused, ...storedProject.refused, ...proposals.refused]
+  if (storedCount === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'nothing_stored',
+      pending: due.pending,
+      stored: { longTerm: 0, project: 0, skills: 0 },
+      refused,
+      rejected: abstained.rejected,
+    }
+  }
+
   const archived = await archiveExperienceEntries({ userId, workspaceRoot, entryIds: consumedEntryIds })
   return {
     ok: archived.ok !== false,
@@ -278,11 +298,11 @@ export async function abstractExperienceJournal({
     consumed: consumedEntryIds.length,
     archived: archived.archived || [],
     stored: {
-      longTerm: abstained.longTerm.length,
-      project: abstained.project.length,
-      skills: abstained.skills.length,
+      longTerm: storedLongTerm.stored.length,
+      project: storedProject.stored.length,
+      skills: proposals.stored.length,
     },
-    refused: [...stored.refused, ...proposals.refused],
+    refused,
     rejected: abstained.rejected,
     reason: due.reason,
   }

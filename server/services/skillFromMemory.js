@@ -29,7 +29,7 @@ function manifestIdFrom(title) {
  * The pack a proposal becomes, or why it cannot become one. Pure: the caller
  * gets the files, the install step is separate.
  */
-export function buildSkillPackFromProposal(memory) {
+export function buildSkillPackFromProposal(memory, { locale = 'zh' } = {}) {
   const title = String(memory?.title || '').trim()
   const body = String(memory?.body || '').trim()
   if (!title) return { ok: false, reason: 'PROPOSAL_TITLE_MISSING' }
@@ -37,6 +37,9 @@ export function buildSkillPackFromProposal(memory) {
   const id = manifestIdFrom(title)
   if (!id) return { ok: false, reason: 'PROPOSAL_ID_INVALID' }
   const firstLine = body.split('\n').map((line) => line.trim()).find(Boolean) || title
+  const intro = locale === 'en'
+    ? 'This skill was distilled from local experience. Its trigger and steps follow:'
+    : '这个技能由本机经验日志抽象而来，触发条件与步骤如下：'
   return {
     ok: true,
     manifestId: id,
@@ -54,7 +57,7 @@ export function buildSkillPackFromProposal(memory) {
       'prompts/system.md': [
         '# ' + title,
         '',
-        '这个技能由本机经验日志抽象而来，触发条件与步骤如下：',
+        intro,
         '',
         body.slice(0, PROCEDURE_LIMIT),
         '',
@@ -69,7 +72,7 @@ export function buildSkillPackFromProposal(memory) {
  * Idempotent: a second press returns the already-installed skill instead of
  * creating a duplicate, because the button is a decision, not a counter.
  */
-export function installSkillFromMemory({ userId = null, memoryId = '' } = {}) {
+export function installSkillFromMemory({ userId = null, memoryId = '', locale = 'zh' } = {}) {
   if (!userId) return { ok: false, code: 'MEMORY_USER_REQUIRED', error: '未登录' }
   const memory = getMemory(userId, String(memoryId || '').trim())
   if (!memory) return { ok: false, code: 'MEMORY_NOT_FOUND', error: '记忆不存在' }
@@ -79,7 +82,7 @@ export function installSkillFromMemory({ userId = null, memoryId = '' } = {}) {
   const installedSkillId = String(memory.frontmatter?.installedSkillId || '').trim()
   if (installedSkillId) return { ok: true, alreadyInstalled: true, skillId: installedSkillId, memory }
 
-  const pack = buildSkillPackFromProposal(memory)
+  const pack = buildSkillPackFromProposal(memory, { locale })
   if (!pack.ok) return { ok: false, code: pack.reason, error: '技能候选内容不完整，无法生成技能包' }
 
   const installed = installValidatedSkillPack({

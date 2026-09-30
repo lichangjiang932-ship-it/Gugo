@@ -7,6 +7,7 @@ import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 import { translateKey } from '../../src/i18n/translations.js'
 import MessageRow from '../../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 import { setupDom } from './helpers/messageRowActivityTestUtils.js'
+import { sessionFileChanges } from '../../src/lib/sessionChanges.js'
 import { createTurnEvent } from '../../shared/turnEvents.js'
 import { dispatchTurnEvent } from '../../src/lib/turnClient/turnEventDispatch.js'
 import { reduceMessageState } from '../../src/store/reducers/messageReducer.js'
@@ -816,6 +817,54 @@ test('execution disclosure auto-collapses after completion and preserves later m
     }, '')
     assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'true')
     assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), manuallyExpandedContent)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('message-row diffstats match the session panel for workspace-relative paths', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const workspacePath = 'D:/work/project'
+  const msg = {
+    id: 'relative-diffstat',
+    role: 'assistant',
+    content: '',
+    meta: {
+      streaming: false,
+      toolCalls: [{
+        id: 'relative-edit',
+        name: 'edit_file',
+        arguments: JSON.stringify({ path: 'src/app.js', old_string: 'old', new_string: 'new' }),
+        result: JSON.stringify({
+          ok: true,
+          path: 'src/app.js',
+          changes: [{ path: 'src/app.js', additions: 3, deletions: 1 }],
+        }),
+        status: 'success',
+      }],
+    },
+  }
+  const translate = (key, values = {}) => translateKey(key, 'en')
+    .replace(/\{(\w+)\}/g, (_, name) => values[name])
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" workspacePath={workspacePath}
+          lang="en" t={translate} />
+      </I18nProvider>,
+    ))
+    await act(async () => element.querySelector('[data-testid="execution-toggle"]').click())
+
+    const messageRowStat = element.querySelector('[data-testid="tool-diffstat"]')
+    const panelStat = sessionFileChanges([msg], { workspacePath }).files[0].reported
+    assert.ok(messageRowStat)
+    assert.match(messageRowStat.textContent, /\+3/u)
+    assert.match(messageRowStat.textContent, /-1/u)
+    assert.deepEqual(panelStat, { additions: 3, deletions: 1 })
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

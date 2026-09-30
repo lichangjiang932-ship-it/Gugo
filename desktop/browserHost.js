@@ -10,6 +10,48 @@ import {
 
 const UPDATED_CHANNEL = 'desktop:browser-updated'
 
+// Page facts the preview asks for: a screenshot, what a script evaluated to, and
+// what the page logged. Every one of them is bounded, because all three are read
+// by whoever asked and a page can produce an unbounded amount of each.
+const MAX_CAPTURE_BYTES = 8 * 1024 * 1024
+const MAX_EVALUATE_CHARS = 64 * 1024
+const CONSOLE_LIMIT = 200
+const CONSOLE_MESSAGE_CHARS = 2_000
+
+/** Electron reports console levels as numbers below 32 and as names from 32 on. */
+function consoleLevelName(level) {
+  if (typeof level === 'string') return level
+  return ({ 0: 'debug', 1: 'info', 2: 'warning', 3: 'error' })[level] || 'info'
+}
+
+function readConsoleEntry(...args) {
+  // Electron hands the page's message either as an event object or as positional
+  // arguments depending on its version; both shapes end up the same here.
+  const event = args[0]
+  const shaped = event && typeof event === 'object' && 'message' in event
+    ? { level: event.level, message: event.message, line: event.lineNumber, source: event.sourceId }
+    : { level: args[0], message: args[1], line: args[2], source: args[3] }
+  return {
+    level: consoleLevelName(shaped.level),
+    message: String(shaped.message ?? '').slice(0, CONSOLE_MESSAGE_CHARS),
+    line: Number(shaped.line) || 0,
+    source: String(shaped.source || '').slice(0, 300),
+    at: Date.now(),
+  }
+}
+
+function clampEvaluated(value) {
+  let text
+  try {
+    text = JSON.stringify(value)
+  } catch {
+    text = String(value)
+  }
+  if (text === undefined) text = String(value)
+  const truncated = text.length > MAX_EVALUATE_CHARS
+  return { text: truncated ? text.slice(0, MAX_EVALUATE_CHARS) : text, truncated }
+}
+
 /**
  * Electron is required lazily, on the first real use.
  *
@@ -83,6 +125,7 @@ export function createDesktopBrowserHost({
   let dockedBounds = null
   let hardened = false
   let listenedWindow = null
+  let consoleEntries = []
 
   function liveContents() {
     const current = view
@@ -128,6 +171,7 @@ export function createDesktopBrowserHost({
     view = null
     dockedBounds = null
     listenedWindow = null
+    consoleEntries = []
     if (!current) return
     const window = getMainWindow?.()
     try {
@@ -165,6 +209,13 @@ export function createDesktopBrowserHost({
     ]) {
       contents.on(name, emit)
     }
+    // Every page's console, kept only as the tail: the preview's job is to tell
+    // the agent what went wrong, and that answer is at the end of the log.
+    consoleEntries = []
+    contents.on('console-message', (...args) => {
+      consoleEntries.push(readConsoleEntry(...args))
+      if (consoleEntries.length > CONSOLE_LIMIT) consoleEntries.shift()
+    })
 
     window.contentView.addChildView(created)
     // It must not paint until it has been given a real rectangle.
@@ -240,6 +291,58 @@ export function createDesktopBrowserHost({
       // page it left behind is still loaded. Asking is how it picks the page back
       // up instead of showing a blank panel over a live view.
       return { ok: true, state: stateOf() }
+    })
+    /**
+     * Page facts, for the preview and for the agent verifying through it.
+     *
+     * The sender is the app's own window, which relays what the backend asked
+     * for — the same trust path the browser controls already use. The page itself
+     * cannot reach these channels: it is a sandboxed view with no preload, so the
+     * only way in is through the renderer that is already allowed to drive the
+     * panel.
+     */
+    ipcMain.handle('desktop:preview-capture', async (event) => {
+      assertTrusted(event)
+      const contents = liveContents()
+      if (!contents) return { ok: false, reason: 'no-view' }
+      try {
+        const image = await contents.capturePage()
+        const size = image?.getSize?.() || {}
+        const png = image?.toPNG?.()
+        if (!png?.length) return { ok: false, reason: 'empty' }
+        // A whole-screen page can exceed what an IPC message should carry; better
+        // to say so than to make the main process allocate it.
+        if (png.length > MAX_CAPTURE_BYTES) return { ok: false, reason: 'too-large', bytes: png.length }
+        return {
+          ok: true,
+          width: Number(size.width) || 0,
+          height: Number(size.height) || 0,
+          dataUrl: `data:image/png;base64,${Buffer.from(png).toString('base64')}`,
+        }
+      } catch (error) {
+        return { ok: false, reason: 'capture-failed', message: error?.message || String(error) }
+      }
+    })
+    ipcMain.handle('desktop:preview-evaluate', async (event, script) => {
+      assertTrusted(event)
+      const contents = liveContents()
+      if (!contents) return { ok: false, reason: 'no-view' }
+      if (typeof script !== 'string' || !script.trim()) return { ok: false, reason: 'script' }
+      try {
+        // userGesture=false: reading the page must not let it take actions only a
+        // real click should allow.
+        const value = await contents.executeJavaScript(script, false)
+        const { text, truncated } = clampEvaluated(value)
+        return { ok: true, result: text, truncated }
+      } catch (error) {
+        return { ok: false, reason: 'evaluate-failed', message: error?.message || String(error) }
+      }
+    })
+    ipcMain.handle('desktop:preview-console', (event, options) => {
+      assertTrusted(event)
+      const entries = consoleEntries.slice()
+      if (options?.clear === true) consoleEntries = []
+      return { ok: true, entries }
     })
     ipcMain.handle('desktop:browser-hide', (event) => {
       assertTrusted(event)

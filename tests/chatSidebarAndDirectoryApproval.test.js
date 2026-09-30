@@ -79,6 +79,7 @@ test('local paths are authorized before the model call and paused turns resume i
 test('right workbench toggle leaves the navigation rail mounted', () => {
   const chat = readSourceTree('../src/pages/ChatSplit/')
   const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const headerBar = read('../src/pages/ChatSplit/chatSplitView/ChatSessionHeaderBar.jsx')
   const rightPanels = read('../src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx')
   const layout = read('../src/components/AppLayout.jsx')
   const shortcuts = read('../src/components/GlobalShortcuts.jsx')
@@ -87,9 +88,9 @@ test('right workbench toggle leaves the navigation rail mounted', () => {
   assert.match(view, /<AppLayout/)
   assert.match(layout, /<LeftRail \/>/)
   assert.doesNotMatch(layout, /\{workbenchOpen && <LeftRail \/>\}/)
-  assert.match(view, /data-testid="workbench-toggle"/)
-  assert.match(view, /aria-controls="right-workbench"/)
-  assert.match(view, /aria-expanded=\{workbenchOpen\}/)
+  assert.match(headerBar, /data-testid="workbench-toggle"/)
+  assert.match(headerBar, /aria-controls="right-workbench"/)
+  assert.match(headerBar, /aria-expanded=\{workbenchOpen\}/)
   assert.match(view, /<ChatRightPanels/)
   assert.match(rightPanels, /<RightWorkbench/)
   assert.match(rightPanels, /if \(!workbenchOpen\) return null[\s\S]*if \(previewArtifact\)/)
@@ -134,15 +135,23 @@ test('right workbench exposes exactly the three tool buttons', () => {
   assert.doesNotMatch(shortcuts, /id: 'files'|id: 'git'|id: 'plan'/, 'the removed tabs are not tools')
   assert.match(workbench, /data-testid="workbench-tool-switch"/)
   assert.doesNotMatch(workbench, /WorkbenchToolRail/, 'the vertical edge strip is gone')
+  assert.match(workbench, /data-testid="workbench-entry-row"/, 'tools are reachable from the entry page')
+  assert.match(workbench, /data-testid="workbench-settings-tip"/, 'the settings icon carries its tooltip')
+  // The bar holds only the reference icons, so the three tools are mapped from
+  // the shared list into the settings menu rather than dropped from the panel.
+  assert.match(workbench, /WORKBENCH_TOOLS\.map\(\(tool\) =>/)
   assert.match(workbench, /data-testid=\{`workbench-tool-\$\{tool\.id\}`\}/)
+  assert.match(workbench, /data-tool=\{tool\.id\}/)
   assert.match(workbench, /workbench-tool-\$\{contribution\.tabId\}/)
   assert.match(workbench, /resolveDeliveryArtifacts/)
   assert.doesNotMatch(workbench, /buildMessageArtifactPreview/)
   assert.match(workbench, /runWorkbenchTerminal/)
-  // The browser tab is the one shared browser. Its frame fallback keeps the same
-  // sandbox wherever it is rendered, so the requirement is asserted against the
-  // component that owns it.
-  assert.match(workbench, /activeTab === 'browser' && <EmbeddedBrowser/)
+  // The browser tab is the one shared browser — mounted under the preview's server
+  // bar, which is part of the same tab. Its frame fallback keeps the same sandbox
+  // wherever it is rendered, so the requirement is asserted against the component
+  // that owns it.
+  assert.match(workbench, /activeTab === 'browser' && \([\s\S]{0,600}?<EmbeddedBrowser/)
+  assert.match(workbench, /<PreviewServerBar active t=\{t\} workspacePath=\{workspacePath\} \/>/)
   const embeddedBrowser = read('../src/components/EmbeddedBrowser.jsx')
   assert.match(embeddedBrowser, /sandbox="allow-scripts allow-forms allow-popups"/)
   assert.match(embeddedBrowser, /data-testid="embedded-browser-backend"/)

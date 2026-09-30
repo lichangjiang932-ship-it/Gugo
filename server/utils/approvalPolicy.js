@@ -274,8 +274,29 @@ function str(value) {
   return typeof value === 'string' ? value : ''
 }
 
+const PREVIEW_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+
+/** The preview opens this machine; anywhere else is the reader's decision. */
+function externalPreviewUrl(value) {
+  try {
+    const parsed = new URL(str(value).trim())
+    if (!/^https?:$/.test(parsed.protocol)) return null
+    return PREVIEW_LOOPBACK_HOSTS.has(parsed.hostname) ? null : parsed.origin
+  } catch {
+    return null
+  }
+}
+
 function explicitConfirmationReason(toolName, args = {}) {
-  if (toolName !== 'pdf_transform') return null
+  const name = str(toolName).trim()
+  if (name === 'preview_navigate') {
+    // Localhost is what the preview is for and needs no ceremony; an address that
+    // leaves this machine is asked about once, and "remember" answers it for that
+    // address afterwards.
+    const external = externalPreviewUrl(args.url)
+    return external ? `预览将打开本机之外的地址：${external}` : null
+  }
+  if (name !== 'pdf_transform') return null
   const operation = str(args.operation).trim().toLowerCase()
   if (operation === 'fill_form') return '填写 PDF 表单可能写入错误或敏感内容'
   if (operation === 'overlay_text') return '覆盖 PDF 原文区域可能遮盖既有内容'
@@ -444,7 +465,12 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       return { needsApproval: false, risk: 'low', reason: null }
     }
     risk = metadata.riskClass === 'exec' ? 'high' : 'medium'
-    reason = metadata.reason || (metadata.riskClass === 'write_local' ? '修改本地数据' : metadata.riskClass === 'exec' ? '执行外部工具' : '调用可能产生副作用的外部工具')
+    // A reason built from this call's own arguments beats the tool's generic one:
+    // "预览将打开本机之外的地址：https://example.com" tells the reader what they
+    // are deciding about, and "调用可能产生副作用的外部工具" does not.
+    reason = parameterConfirmationReason
+      || metadata.reason
+      || (metadata.riskClass === 'write_local' ? '修改本地数据' : metadata.riskClass === 'exec' ? '执行外部工具' : '调用可能产生副作用的外部工具')
   }
 
   if (!risk) {

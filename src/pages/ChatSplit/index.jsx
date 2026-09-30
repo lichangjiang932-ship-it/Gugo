@@ -10,11 +10,10 @@ import { TASK_STATUS } from '../../store/taskStatus.js'
 import { persistSlashGoals } from '../../lib/slashGoals.js'
 import { recordChatFeedback } from '../../lib/evolutionClient.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
-import useSessionChangesReview from './useSessionChangesReview.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import usePlanCardState from './usePlanCardState.js'
-import useWorkbenchShortcuts from './useWorkbenchShortcuts.js'
+import useChatOverlays from './useChatOverlays.js'
 import ChatSplitView from './ChatSplitView.jsx'
 import useInputHistory from './useInputHistory.js'
 import useChatApprovals from './useChatApprovals.js'
@@ -241,11 +240,10 @@ export default function ChatSplit() {
     onOpenPlan, planArtifacts, planCardVisible, planSignature, setDismissedPlanSignature, setPlanVisible,
   } = usePlanCardState({ activeSession, attachments, messages })
 
-  // Same two setters as the rail button, so a key can only do what the button does —
-  // and it reveals the panel, which is what makes the key useful while it is closed.
-  useWorkbenchShortcuts({ onSelectTool: (tool) => { setWorkbenchTab(tool); setWorkbenchOpen(true) } })
-
-  const sessionChangesReview = useSessionChangesReview({ messages, onOpen: () => setPlanVisible(false), workspacePath: selectedWorkspacePath || activeSession?.workspacePath || '' })
+  const { openPreview, sessionChangesReview } = useChatOverlays({
+    dispatch, isGenerating, messages, sessionId: activeSessionId || '', setPlanVisible,
+    setWorkbenchOpen, setWorkbenchTab, workspacePath: selectedWorkspacePath || activeSession?.workspacePath || '',
+  })
   return <ChatSplitView
       activeSession={activeSession} activeSessionId={activeSessionId} approvalMode={approvals.approvalSettings?.mode || 'normal'}
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
@@ -295,5 +293,6 @@ export default function ChatSplit() {
       workspaceBusy={workspaceBusy} workspaceError={workspaceError}
       state={state} t={t} tasks={state.tasks} toolApproval={approvals.toolApproval} voiceState={voiceState}
       workbenchMessage={workbenchMessage} workbenchOpen={workbenchOpen} workbenchTab={workbenchTab}
+      previewOpen={workbenchOpen && workbenchTab === 'browser'} onOpenPreview={openPreview}
     />
 }

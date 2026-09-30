@@ -22,10 +22,11 @@ test('approval and resume notices fit the actual chat pane rather than subtracti
 
 test('chat header distinguishes ordinary conversations from a selected project', () => {
   const view = source('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const headerBar = source('../src/pages/ChatSplit/chatSplitView/ChatSessionHeaderBar.jsx')
   const header = source('../src/pages/ChatSplit/chatSplitView/ChatSessionHeader.jsx')
   assert.match(view, /const hasWorkspace = Boolean\(selectedWorkspacePath \|\| activeSession\?\.workspacePath\)/)
-  assert.match(view, /data-chat-context=\{hasWorkspace \? 'project' : 'conversation'\}/)
-  assert.match(view, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)
+  assert.match(headerBar, /data-chat-context=\{hasWorkspace \? 'project' : 'conversation'\}/)
+  assert.match(headerBar, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)
   assert.match(header, /hasWorkspace\s*\? <Folder[\s\S]*?: <MessageSquare/)
   assert.match(header, /title=\{title\}/)
 })

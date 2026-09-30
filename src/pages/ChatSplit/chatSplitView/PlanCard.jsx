@@ -33,11 +33,11 @@ export default function PlanCard({ artifacts = [], onClose, onOpenArtifact, onRe
     <section
       data-testid="plan-card"
       aria-label={t('workbench.planCardTitle')}
-      className="pointer-events-auto absolute top-3 right-3 z-20 flex max-h-[calc(100%-1.5rem)] w-[min(300px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card border border-ink/15 bg-paper shadow-xl"
+      className="pointer-events-auto absolute top-3 right-3 z-20 flex max-h-[calc(100%-1.5rem)] w-[min(300px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card overlay-float"
     >
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-ink/10 pl-2.5 pr-1">
-        <h2 className="min-w-0 shrink-0 truncate text-xs font-semibold text-ink">{t('workbench.planCardTitle')}</h2>
-        <div className="flex min-w-0 flex-1 items-center justify-center gap-0.5" role="tablist" aria-label={t('workbench.planCardTitle')}>
+        <h2 className="min-w-0 shrink-0 truncate text-sm font-semibold text-ink">{t('workbench.planCardTitle')}</h2>
+        <div className="flex min-w-0 flex-1 items-end justify-center gap-1" role="tablist" aria-label={t('workbench.planCardTitle')}>
           {CARD_TABS.map((entry) => (
             <button
               key={entry.id}
@@ -46,7 +46,7 @@ export default function PlanCard({ artifacts = [], onClose, onOpenArtifact, onRe
               data-testid={`plan-card-tab-${entry.id}`}
               aria-selected={tab === entry.id}
               onClick={() => setTab(entry.id)}
-              className={`rounded-control px-2 py-1 text-xs transition-colors ${tab === entry.id ? 'bg-ink/[0.07] font-medium text-ink' : 'text-ink-fade hover:bg-ink/5 hover:text-ink'}`}
+              className={`border-b-2 px-2 pb-1 pt-0.5 text-xs transition-colors ${tab === entry.id ? 'border-accent font-semibold text-ink' : 'border-transparent text-ink-fade hover:text-ink'}`}
             >
               {t(entry.labelKey)}
             </button>

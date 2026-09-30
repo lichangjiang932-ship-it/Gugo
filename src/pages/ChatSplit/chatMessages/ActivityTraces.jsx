@@ -39,7 +39,9 @@ export function ReasoningTrace({ text = '', streaming = false, completed = false
  * view, so a step looks and behaves the same wherever it appears — including
  * whatever a plugin contributes for that tool.
  */
-export function ToolStepRow({ call, artifacts = [], contributedToolViews = [], expanded, onOpenArtifact, onToggle, stepNumber }) {
+export function ToolStepRow({
+  call, artifacts = [], contributedToolViews = [], expanded, onOpenArtifact, onToggle, stepNumber, workspacePath = '',
+}) {
   // The run timeline drives one open row at a time from above. The ReAct loop
   // renders rows on their own, so an uncontrolled row keeps its own state —
   // without it the row had nothing to open with and the call could not be
@@ -57,6 +59,7 @@ export function ToolStepRow({ call, artifacts = [], contributedToolViews = [], e
         onOpenArtifact={onOpenArtifact}
         expanded={isExpanded}
         onToggle={toggle}
+        workspacePath={workspacePath}
       />
   const contributedView = contributedToolViews.find((entry) => entry.toolNames.includes(call?.name))
   return (
@@ -72,7 +75,7 @@ export function ToolStepRow({ call, artifacts = [], contributedToolViews = [], e
   )
 }
 
-export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOpenArtifact }) {
+export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOpenArtifact, workspacePath = '' }) {
   const { t } = useT()
   const normalizedCalls = Array.isArray(calls) ? calls : []
   const contributedToolViews = useUiContributions('tool-view')
@@ -126,6 +129,7 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
         onOpenArtifact={onOpenArtifact}
         onToggle={toggle}
         stepNumber={stepNumber}
+        workspacePath={workspacePath}
       />
     )
   }

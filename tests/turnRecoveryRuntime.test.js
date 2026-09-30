@@ -35,6 +35,8 @@ for (const [label, activity] of [
     { ok: true, error: 'failed' }, { ok: true, isError: true }, { ok: true, exitCode: 1 },
     { ok: true, exitCode: null }, { ok: true, requiresUserVerification: true },
     { ok: true, status: 'unknown' }, { ok: true, status: 'running' },
+    { ok: true, denied: true }, { ok: true, timeout: true }, { ok: true, timedOut: true },
+    { ok: true, timed_out: true }, { ok: true, expired: true }, { ok: true, status: 'timeout' },
     { ok: true, cancelled: true }, { ok: true, paused: true }, { ok: true, dryRun: true },
     { ok: true, incomplete: true }].map((result) => [JSON.stringify(result), completedRead('bad', result)]),
   ['outer failure', completedRead('bad', { ok: true }, { error: { code: 'FAILED', message: 'failed', retryable: false } })],

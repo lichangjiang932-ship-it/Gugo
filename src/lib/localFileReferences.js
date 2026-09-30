@@ -12,8 +12,10 @@ import {
   callName,
   callResult,
   callSucceeded,
+  isDryRunCall,
   resultPaths,
   validChangeStats,
+  workspacePathResolver,
 } from './toolCallMutationEvidence.js'
 
 
@@ -82,16 +84,12 @@ function mutationEvidence(toolCalls = []) {
   return mutations
 }
 
-export function toolCallChangeStats(call = {}) {
+export function toolCallChangeStats(call = {}, { workspacePath = '' } = {}) {
   const name = callName(call)
   const result = callResult(call)
   if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)) return null
-  const args = callArguments(call)
-  if (args.dry_run === true
-    || args.dryRun === true
-    || result.dry_run === true
-    || result.dryRun === true) return null
-  const changes = validChangeStats(result)
+  if (isDryRunCall(call, result)) return null
+  const changes = validChangeStats(result, workspacePathResolver(workspacePath))
   if (changes.length === 0) return null
   let additions = 0
   let deletions = 0

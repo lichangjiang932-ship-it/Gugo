@@ -11,6 +11,7 @@ export default function ChatMessages({
   messages,
   sessionId,
   recoveryOwnerScope,
+  workspacePath = '',
   onSideEffectResolved,
   workbenchMessage,
   isGenerating = false,
@@ -72,6 +73,7 @@ export default function ChatMessages({
                 key={msg.id ?? hiddenCount + index}
                 msg={msg}
                 sessionId={sessionId}
+                workspacePath={workspacePath}
                 recoveryOwnerScope={recoveryOwnerScope}
                 onSideEffectResolved={onSideEffectResolved}
                 rowKey={msg.id ?? hiddenCount + index}

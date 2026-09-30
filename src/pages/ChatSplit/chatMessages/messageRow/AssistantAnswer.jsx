@@ -40,6 +40,7 @@ export default function AssistantAnswer({
   isCurrentStreamingMessage,
   isMessageComplete,
   msg,
+  workspacePath = '',
   onManageModels,
   onOpenArtifact,
   retainedLocalFileReferences,
@@ -163,6 +164,7 @@ export default function AssistantAnswer({
                 artifacts={inlineFileReferences}
                 onOpenArtifact={openToolArtifact}
                 rounds={rounds}
+                workspacePath={workspacePath}
                 t={t}
               />
             ) : (
@@ -172,6 +174,7 @@ export default function AssistantAnswer({
                 onOpenArtifact={openToolArtifact}
                 segments={presentation.execution}
                 streaming={isCurrentStreamingMessage}
+                workspacePath={workspacePath}
               />
             )}
             {isCurrentStreamingMessage && <ActivityStream msg={msg} />}

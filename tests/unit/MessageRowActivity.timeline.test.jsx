@@ -100,6 +100,76 @@ for (const terminal of ['turn.completed', 'turn.cancelled']) {
   })
 }
 
+test('streaming and completed views keep the same public process structure when the host confirms identical anchors', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const opening = 'I will inspect the file first.\n\n'
+  const narrative = [
+    '【Thought】Check the file structure.',
+    '【Action】read_file path=fixture.txt',
+    '【Observation】The file is present.',
+    '【任务完成报告】',
+    'The result is verified.',
+  ].join('\n')
+  const content = opening + narrative
+  const publicTimeline = {
+    version: 1,
+    turnId: 'turn-stable-display',
+    canonicalText: content,
+    text: content,
+    toolAnchors: [{ id: 'read-stable-display', name: 'read_file', textOffset: opening.length }],
+  }
+  const toolCall = {
+    id: 'read-stable-display',
+    name: 'read_file',
+    arguments: JSON.stringify({ path: 'fixture.txt' }),
+    status: 'running',
+    textOffset: opening.length,
+  }
+  const message = {
+    id: 'stable-display',
+    role: 'assistant',
+    content,
+    timestamp: Date.now(),
+    meta: {
+      serverTurnId: 'turn-stable-display',
+      publicTimeline,
+      toolCalls: [toolCall],
+    },
+  }
+  const render = (streaming, calls = [toolCall]) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={{ ...message, meta: { ...message.meta, streaming, toolCalls: calls } }}
+        rowKey={message.id}
+        generatingMessageId={streaming ? message.id : ''}
+        lang="en"
+        t={translate}
+      />
+    </I18nProvider>,
+  ))
+  const processOrder = () => [...element.querySelectorAll(
+    '[data-testid="agent-round"], [data-testid="tool-call-step"]',
+  )].map((node) => node.getAttribute('data-round-kind') || 'tool')
+
+  try {
+    await render(true)
+    const liveAnswer = element.querySelector('.chat-assistant-answer')?.textContent
+    const liveOrder = processOrder()
+    assert.deepEqual(liveOrder, ['thought', 'action', 'tool', 'observation'])
+
+    await render(false, [{ ...toolCall, status: 'success', result: '{"ok":true}' }])
+    await act(async () => element.querySelector('[data-testid="execution-toggle"]').click())
+    assert.deepEqual(processOrder(), liveOrder)
+    assert.equal(element.querySelector('.chat-assistant-answer')?.textContent, liveAnswer)
+    assert.match(liveAnswer, /The result is verified/u)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('a choice block before a tool cannot shift the tool past the following public answer', async () => {
   const dom = setupDom()
   const element = document.getElementById('root')

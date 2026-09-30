@@ -23,6 +23,10 @@ html[data-theme="light"] {
   --color-focus: #2563EB;
   /* Accent alpha variants; UI classes use semantic tokens. */
   --color-accent-soft: rgba(22, 163, 74, 0.18);
+  --color-selected: #F3F4F6;
+  --color-row-hover: #F9FAFB;
+  --color-tip-bg: #1E1E1E;
+  --color-tip-fg: #FFFFFF;
   --color-accent-line: rgba(22, 163, 74, 0.55);
   --color-accent-glow: rgba(22, 163, 74, 0.10);
   --color-cyan: #2E8FA3;
@@ -132,6 +136,10 @@ html[data-theme="dark"] {
   --color-focus: #60A5FA;
   /* Accent alpha variants; UI classes use semantic tokens. */
   --color-accent-soft: rgba(22, 163, 74, 0.18);
+  --color-selected: #2A2A2A;
+  --color-row-hover: #1F1F1F;
+  --color-tip-bg: #1E1E1E;
+  --color-tip-fg: #FFFFFF;
   --color-accent-line: rgba(22, 163, 74, 0.55);
   --color-accent-glow: rgba(22, 163, 74, 0.10);
   --color-cyan: #2E8FA3;
@@ -209,6 +217,10 @@ html[data-theme="white"] {
   --color-focus: #2563EB;
   /* Accent alpha variants; UI classes use semantic tokens. */
   --color-accent-soft: rgba(22, 163, 74, 0.14);
+  --color-selected: #F3F4F6;
+  --color-row-hover: #F9FAFB;
+  --color-tip-bg: #1E1E1E;
+  --color-tip-fg: #FFFFFF;
   --color-accent-line: rgba(22, 163, 74, 0.48);
   --color-accent-glow: rgba(22, 163, 74, 0.08);
   --color-cyan: #247F91;
@@ -2274,6 +2286,15 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   }
 }
 
+/* The preview bar keeps its name, its state dot and its buttons at any width;
+   the words beside them are what a narrow panel cannot afford. */
+@container workbench-surface (max-width: 300px) {
+  .preview-server-detail,
+  .preview-server-label {
+    display: none;
+  }
+}
+
 /* Desktop pet: every work state has a distinct code-native pose. */
 .desktop-pet {
   transition: color 180ms ease;
@@ -2461,4 +2482,114 @@ html:has(.pet-window-root) #root {
 @keyframes pet-window-interact {
   0%, 100% { transform: translateY(0) scale(1); }
   45% { transform: translateY(-4px) scale(1.03); }
+}
+
+/* Floating review surfaces (changes + task list) share one silhouette: the
+   theme surface, 10px corners and a soft lift — no hard border. */
+.overlay-float {
+  background: rgb(var(--color-surface-rgb));
+  border: 0;
+  border-radius: 10px;
+  /* The shadow token is a space-separated channel triplet, so the alpha has to
+     arrive as `rgb(... / a)`; `rgba(var(--token), a)` is invalid and the whole
+     declaration — the lift these panels are known by — would be dropped. */
+  box-shadow: 0 8px 24px rgb(var(--color-shadow-rgb) / 0.12);
+}
+
+/* The one raised item inside the preview menu: the reference's pill. */
+.preview-menu-pill {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 9999px;
+  background: rgb(var(--color-surface-rgb));
+  color: rgb(var(--color-ink-rgb));
+  font-size: var(--type-ui);
+  text-align: left;
+  box-shadow: 0 1px 3px rgb(var(--color-shadow-rgb) / 0.18);
+  transition: background-color 150ms ease;
+}
+
+.preview-menu-pill:hover:not(:disabled) {
+  background: var(--color-row-hover);
+}
+
+.preview-menu-pill:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* A header button's tooltip: the label plus its key, dark in every theme. */
+.chat-chrome-tip {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--color-tip-bg);
+  color: var(--color-tip-fg);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition: opacity 0.15s, visibility 0.15s;
+}
+
+.chat-chrome-tip-key {
+  color: rgb(255 255 255 / 0.6);
+  font-weight: 400;
+}
+
+.chat-chrome-button:hover .chat-chrome-tip,
+.chat-chrome-button:focus-visible .chat-chrome-tip {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Preview settings tooltip: black/white in both themes, fixed by spec. */
+.preview-settings-tip {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--color-tip-bg);
+  color: var(--color-tip-fg);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s, visibility 0.15s;
+}
+
+.preview-settings-tip::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--color-tip-bg);
+}
+
+.group:hover .preview-settings-tip,
+.preview-settings-tip:hover {
+  visibility: visible;
+  opacity: 1;
 }

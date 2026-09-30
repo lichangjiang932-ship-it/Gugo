@@ -13,7 +13,7 @@ const TYPE_IDS = ['user', 'feedback', 'project', 'reference']
 const emptyMemory = () => ({ id: '', type: 'user', title: '', body: '', pinned: false, agentId: null, frontmatter: {} })
 
 export default function MemoryView() {
-  const { t } = useT()
+  const { lang, t } = useT()
   const { agents, activeAgentId } = useActiveAgent()
   const types = TYPE_IDS.map((id) => { const [label, hint] = t(`memory.types.${id}`); return { id, label, hint } })
   const [memories, setMemories] = useState([])
@@ -50,7 +50,7 @@ export default function MemoryView() {
     setSkillInstalling(true)
     setSkillInstallError('')
     try {
-      const result = await installSkillFromMemory(memory.id)
+      const result = await installSkillFromMemory(memory.id, { locale: lang })
       setEditing({
         ...memory,
         frontmatter: { ...(memory.frontmatter || {}), installedSkillId: result.skillId },

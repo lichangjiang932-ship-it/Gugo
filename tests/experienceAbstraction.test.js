@@ -13,6 +13,7 @@ import {
 } from '../server/services/experienceAbstraction.js'
 import { readExperienceJournal, recordExperience } from '../server/services/experienceRecorder.js'
 import { experienceJournalPath, parseExperienceJournal } from '../server/services/experienceJournal.js'
+import { MIN_CONFIDENCE } from '../server/services/autoMemoryService.js'
 import { closeDb, createUser } from '../server/db.js'
 import { listMemories } from '../server/services/memoryStore.js'
 import { setApprovalMode } from '../server/services/approvalSettingsStore.js'
@@ -49,6 +50,7 @@ beforeEach(() => {
   closeDb()
   fs.rmSync(process.env.APP_DB_PATH, { force: true })
   fs.rmSync(experienceJournalPath(workspace), { force: true })
+  fs.rmSync(path.join(path.dirname(experienceJournalPath(workspace)), 'experience.archive.md'), { force: true })
   createUser({ id: USER, email: 'experience-abstraction@example.com' })
   setApprovalMode({ userId: USER, mode: 'normal' })
   resetExperienceAbstractionCooldown()
@@ -262,3 +264,50 @@ test('an abstraction that reads nothing consumes nothing', async () => {
   })
   assert.equal(cooled.reason, 'cooldown')
 })
+
+for (const confidence of [0.6, 0.7, 0.78]) {
+  test(`an experience abstraction at confidence ${confidence} follows the persistence threshold before archiving`, async () => {
+    const ids = await seedJournal(20)
+    let request
+    const report = await abstractExperienceJournal({
+      userId: USER,
+      workspaceRoot: workspace,
+      callModel: async (value) => {
+        request = value
+        return JSON.stringify({
+          longTerm: [{
+            type: 'user',
+            title: `confidence-${confidence}`,
+            body: `Durable preference at confidence ${confidence}.`,
+            confidence,
+            sources: [ids[0]],
+          }],
+          project: [],
+          skills: [],
+        })
+      },
+    })
+
+    assert.equal(MIN_CONFIDENCE, 0.78)
+    assert.match(request.messages[0].content, /confidence at least 0\.78/u)
+    const archivePath = path.join(path.dirname(experienceJournalPath(workspace)), 'experience.archive.md')
+
+    if (confidence < MIN_CONFIDENCE) {
+      assert.equal(report.skipped, true)
+      assert.equal(report.reason, 'nothing_stored')
+      assert.equal(fs.existsSync(archivePath), false)
+      assert.deepEqual(listMemories({ userId: USER, limit: 50 }), [])
+      const journal = readExperienceJournal({ userId: USER, workspaceRoot: workspace })
+      assert.equal(journal.entries.length, 20)
+      assert.ok(journal.entries.every((entry) => entry.status === 'pending'))
+    } else {
+      assert.equal(report.skipped, false)
+      assert.equal(report.stored.longTerm, 1)
+      assert.equal(fs.existsSync(archivePath), true)
+      assert.equal(readExperienceJournal({ userId: USER, workspaceRoot: workspace }).entries.length, 0)
+      const archive = parseExperienceJournal(fs.readFileSync(archivePath, 'utf8'))
+      assert.equal(archive.entries.length, 20)
+      assert.equal(listMemories({ userId: USER, limit: 50 }).length, 1)
+    }
+  })
+}

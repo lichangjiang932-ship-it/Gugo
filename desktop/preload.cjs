@@ -68,6 +68,10 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
     stop: () => ipcRenderer.invoke('desktop:browser-action', 'stop'),
     setBounds: (rect) => ipcRenderer.invoke('desktop:browser-set-bounds', rect || null),
     state: () => ipcRenderer.invoke('desktop:browser-state'),
+    // Page facts, for the preview panel and the agent verifying through it.
+    capture: () => ipcRenderer.invoke('desktop:preview-capture'),
+    evaluate: (script) => ipcRenderer.invoke('desktop:preview-evaluate', String(script ?? '')),
+    consoleEntries: (options) => ipcRenderer.invoke('desktop:preview-console', options || {}),
     hide: () => ipcRenderer.invoke('desktop:browser-hide'),
     destroy: () => ipcRenderer.invoke('desktop:browser-destroy'),
     onUpdated(callback) {

@@ -18,7 +18,7 @@ import { TOOL_GLYPHS } from './workbenchToolGlyphs.js'
  * conversation, and a page that wants the full width of the window (the Git
  * workbench) is not reached from here.
  */
-export default function WorkbenchEntry({ onTabChange, t }) {
+export default function WorkbenchEntry({ contributedTabs = [], onTabChange, t }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col justify-center gap-1 px-4" data-testid="workbench-entry">
       {WORKBENCH_TOOLS.map((tool) => {
@@ -43,6 +43,20 @@ export default function WorkbenchEntry({ onTabChange, t }) {
           </button>
         )
       })}
+      {contributedTabs.map((contribution) => (
+        <button
+          key={contribution.key}
+          type="button"
+          data-testid={`workbench-tool-${contribution.tabId}`}
+          data-tool={contribution.tabId}
+          data-ui-plugin={contribution.pluginId}
+          onClick={() => onTabChange?.(contribution.tabId)}
+          className="group flex items-center gap-3 rounded-card px-3 py-3 text-left text-sm text-ink-soft transition-colors hover:bg-ink/[0.05] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
+        >
+          <ToolIconTile icon={contribution.icon} toolId="fallback" />
+          <span className="min-w-0 flex-1 truncate">{contribution.labelKey ? t(contribution.labelKey) : contribution.label}</span>
+        </button>
+      ))}
     </section>
   )
 }

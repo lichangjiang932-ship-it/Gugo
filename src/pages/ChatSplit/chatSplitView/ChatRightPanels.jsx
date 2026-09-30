@@ -2,6 +2,7 @@ import RightPreviewPane from '../RightPreviewPane.jsx'
 import RightWorkbench from '../RightWorkbench.jsx'
 
 export default function ChatRightPanels({
+  onInsertText,
   workbenchOpen,
   sessionId,
   todos,
@@ -44,6 +45,7 @@ export default function ChatRightPanels({
       activeTab={workbenchTab}
       onTabChange={onWorkbenchTabChange}
       onClose={onCloseWorkbench}
+      onInsertText={onInsertText}
       onOpenArtifact={onOpenArtifact}
       onSendMessage={onWorkbenchSend}
       selectedWorkspacePath={selectedWorkspacePath}

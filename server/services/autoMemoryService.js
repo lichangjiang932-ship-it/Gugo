@@ -3,7 +3,7 @@ import { logWarn } from '../utils/logger.js'
 
 const ALLOWED_TYPES = new Set(['user', 'feedback', 'project', 'reference'])
 const MAX_MEMORIES_PER_TURN = 3
-const MIN_CONFIDENCE = 0.78
+export const MIN_CONFIDENCE = 0.78
 const RUNTIME_CAPABILITY_SUBJECT = /(?:workspace[_\s-]*fs(?:[_\s-]*enabled)?|local\s+(?:file(?:system)?|path)|file(?:system)?\s+(?:access|permission)|list_directory|read_file|tool\s+(?:access|availability|permission)|permission|authori[sz](?:e|ed|ation)|grant|runtime|environment\s+variable|env(?:ironment)?\s+setting|\u672c\u5730\u6587\u4ef6(?:\u7cfb\u7edf)?|\u6587\u4ef6\u7cfb\u7edf|\u5de5\u5177|\u6743\u9650|\u6388\u6743|\u8fd0\u884c\u65f6|\u73af\u5883\u53d8\u91cf)/iu
 const RUNTIME_CAPABILITY_STATE = /(?:unavailable|available|disabled|enabled|not\s+enabled|cannot|can't|failed|failure|timeout|timed\s+out|denied|allowed|read[-\s]*only|read\s+and\s+write|must\s+(?:paste|provide)|\u4e0d\u53ef\u7528|\u53ef\u7528|\u672a\u542f\u7528|\u5df2\u542f\u7528|\u7981\u7528|\u65e0\u6cd5|\u4e0d\u80fd|\u5931\u8d25|\u8d85\u65f6|\u62d2\u7edd|\u5141\u8bb8|\u5df2\u6388\u6743|\u53ea\u8bfb|\u8bfb\u5199|\u7c98\u8d34|\u63d0\u4f9b\u6587\u672c)/iu
 const SIMPLE_GREETING = /^(?:hi|hello|hey|你好|您好|嗨|谢谢|多谢|ok|okay)[.!！。?？\s]*$/iu

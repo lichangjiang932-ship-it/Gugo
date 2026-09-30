@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Download, Eye, FileText, Files } from 'lucide-react'
 import { classifyDirectFile, withArtifactPreviewMode } from '../../../lib/directFilePreview.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
@@ -15,28 +16,33 @@ function openArtifact(event, onOpenArtifact, artifact) {
   onOpenArtifact(artifact.previewArtifact || { messageId: artifact.messageId || '', content: '', preview: null, directFile: artifact })
 }
 
-function FileRow({ artifact, onOpenArtifact, t }) {
+function FileRow({ artifact, onOpenArtifact, onSelect, selected = false, t }) {
   const filename = artifact.filename || t('workbench.untitledArtifact')
   const snapshot = artifact.previewArtifact?.preview && !artifact.previewArtifact?.directFile
   return (
-    <div className="group flex w-full items-center rounded-control transition-colors hover:bg-ink/5">
+    <div
+      data-selected={selected || undefined}
+      className="group flex w-full cursor-pointer items-center rounded-control transition-colors hover:bg-[var(--color-row-hover)]"
+      data-testid="workbench-file-row"
+      onClick={() => onSelect?.()}
+    >
       <a href={withArtifactPreviewMode(withDownloadToken(artifact.url))} target="_blank" rel="noopener noreferrer"
         data-testid="workbench-file-open" aria-label={t('workbench.previewFile', { filename })}
         onClick={(event) => openArtifact(event, onOpenArtifact, artifact)}
-        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left">
+        className={`flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left ${selected ? 'bg-[var(--color-selected)] rounded-control' : ''}`}>
         <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-control bg-ink/5 text-ink-fade"><FileVisual artifact={artifact} /></span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-ink">{filename}</span>
+          <span className={`block truncate text-sm font-medium ${selected ? 'text-accent-ink' : 'text-ink'}`}>{filename}</span>
           <span className="mt-0.5 block truncate text-xs uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span>
           {artifact.path && <span className="mt-0.5 block truncate text-xs text-ink-fade" title={artifact.path}>{artifact.path}</span>}
           {snapshot && <span className="block text-xs text-ink-fade">{t('workbench.fileSnapshot')}</span>}
           {artifact.verificationPending && <span className="block text-xs text-ink-fade">{t('workbench.fileVerificationPending')}</span>}
         </span>
-        <Eye className="h-3.5 w-3.5 text-ink-fade" aria-hidden="true" />
+        <Eye className="h-3.5 w-3.5 text-ink-fade opacity-60 transition-opacity group-hover:opacity-100" aria-hidden="true" />
       </a>
       {!snapshot && <a href={withDownloadToken(artifact.url)} download={artifact.filename || ''}
         aria-label={t('chatPreview.download', { filename })} title={t('chatPreview.download', { filename })}
-        className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:bg-paper hover:text-accent-ink">
+        className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade opacity-60 transition-opacity hover:bg-paper hover:text-accent-ink group-hover:opacity-100">
         <Download className="h-3.5 w-3.5" aria-hidden="true" />
       </a>}
     </div>
@@ -44,6 +50,10 @@ function FileRow({ artifact, onOpenArtifact, t }) {
 }
 
 export default function WorkbenchFiles({ artifacts, onOpenArtifact, t }) {
+  // "Currently selected" is local to this list: clicking a row marks it, so the
+  // reader always sees which file the preview would act on.
+  const [selectedKey, setSelectedKey] = useState(() => '')
+  const selectKey = (artifact) => String(artifact.id || artifact.url || artifact.filename || '')
   const groups = [
     { key: 'outputs', title: 'workbench.outputFiles', files: artifacts.filter((file) => !file.userAttachment) },
     { key: 'sources', title: 'workbench.sourceFiles', files: artifacts.filter((file) => file.userAttachment) },
@@ -56,7 +66,16 @@ export default function WorkbenchFiles({ artifacts, onOpenArtifact, t }) {
       ) : groups.filter((group) => group.files.length > 0).map((group) => (
         <section key={group.key} data-testid={`workbench-${group.key}`} className="mb-4">
           <h3 className="mb-1 px-1 text-xs font-semibold text-ink">{t(group.title)}</h3>
-          {group.files.map((artifact) => <FileRow key={artifact.id} artifact={artifact} onOpenArtifact={onOpenArtifact} t={t} />)}
+          {group.files.map((artifact) => (
+            <FileRow
+              key={artifact.id}
+              artifact={artifact}
+              selected={selectKey(artifact) === selectedKey}
+              onSelect={() => setSelectedKey(selectKey(artifact))}
+              onOpenArtifact={onOpenArtifact}
+              t={t}
+            />
+          ))}
         </section>
       ))}
     </section>

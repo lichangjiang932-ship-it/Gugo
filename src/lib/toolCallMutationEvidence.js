@@ -58,11 +58,33 @@ export function callSucceeded(call, result) {
   return result?.ok !== false && !call?.error
 }
 
+export function isDryRunCall(call = {}, result = callResult(call)) {
+  const args = callArguments(call)
+  return args.dry_run === true || args.dryRun === true
+    || result?.dry_run === true || result?.dryRun === true
+}
 
 export function absolutePath(value) {
   const path = String(value || '').trim()
   const key = normalizeVerifiedLocalFilePath(path)
   return key ? { key, path } : null
+}
+
+export function workspacePathResolver(workspacePath = '') {
+  const root = String(workspacePath || '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  return (value) => {
+    const raw = String(value || '').trim()
+    if (!raw) return null
+    const direct = absolutePath(raw)
+    if (direct) return direct
+    const relative = raw.replace(/\\/g, '/').replace(/^\.\//, '')
+    if (!relative || relative.startsWith('..')) return null
+    if (root) {
+      const anchored = absolutePath(`${root}/${relative}`)
+      if (anchored) return { ...anchored, relative }
+    }
+    return { key: `rel:${relative.toLowerCase()}`, path: relative }
+  }
 }
 
 

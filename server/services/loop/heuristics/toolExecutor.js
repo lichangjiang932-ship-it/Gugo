@@ -16,6 +16,8 @@ import { GOAL_TOOL_NAMES, dispatchGoalTool } from '../../../utils/goalTools.js'
 import { dispatchSkillResourceTool, SKILL_RESOURCE_TOOL_NAME } from '../../../utils/skillResourceTools.js'
 import { dispatchPdfTool } from '../../../adapters/pdfTools.js'
 import { executeBrowserTool } from '../../browserToolExecutor.js'
+import { executePreviewTool } from '../../previewTools.js'
+import { getProjectDirectory } from '../../localFileAccessService.js'
 import { executeSubagentBatch } from '../../subagentBatchBridge.js'
 import { fetchAndExtract } from '../../../adapters/toolProxy.js'
 import { getTurnArtifactById } from '../../turnArtifactStore.js'
@@ -399,6 +401,25 @@ async function executeAgentOrExternalTool(context, registeredTool) {
       return {
         ok: false,
         code: error?.code || (error?.name === 'AbortError' ? 'browser_cancelled' : 'browser_tool_failed'),
+        cancelled: error?.name === 'AbortError',
+        error: error?.message || String(error),
+        retryable: error?.name !== 'AbortError',
+      }
+    }
+  }
+  if (name.startsWith('preview_')) {
+    try {
+      // The project the reader picked is the workspace the preview belongs to;
+      // without one there is no launch.json to honour and no panel to ask.
+      return await executePreviewTool(name, args || {}, {
+        userId: job?.userId || null,
+        workspaceRoot: getProjectDirectory({ userId: job?.userId || null }) || '',
+        signal,
+      })
+    } catch (error) {
+      return {
+        ok: false,
+        code: error?.code || (error?.name === 'AbortError' ? 'preview_cancelled' : 'preview_tool_failed'),
         cancelled: error?.name === 'AbortError',
         error: error?.message || String(error),
         retryable: error?.name !== 'AbortError',

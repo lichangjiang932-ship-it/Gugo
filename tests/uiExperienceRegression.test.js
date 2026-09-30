@@ -119,6 +119,7 @@ test('chat chrome stays focused on conversations and essential composer controls
   const chatSendActions = read('../src/pages/ChatSplit/chatSendActions.js')
   const sendFlow = read('../src/pages/ChatSplit/useChatSendFlow.js')
   const chatView = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const headerBar = read('../src/pages/ChatSplit/chatSplitView/ChatSessionHeaderBar.jsx')
   const messages = read('../src/pages/ChatSplit/ChatMessages.jsx')
   const welcome = read('../src/pages/ChatSplit/chatMessages/NewConversationWelcome.jsx')
   const composer = read('../src/pages/ChatSplit/ChatComposer.jsx')
@@ -148,7 +149,8 @@ test('chat chrome stays focused on conversations and essential composer controls
   assert.match(sessionMenu, /onDelete\(session\)/)
   assert.match(sessionMenu, /<X className=/)
 
-  assert.match(chatView, /data-testid="chat-session-title"/)
+  assert.match(chatView, /<ChatSessionHeaderBar/)
+  assert.match(headerBar, /data-testid="chat-session-title"/)
   assert.doesNotMatch(`${chat}\n${chatView}`, /<TodoTracker|<CodingWorkbench/)
   assert.doesNotMatch(chat, /if \(!state\.activeSessionId\) \{\s*dispatch\(\{ type: 'NEW_SESSION'/)
   assert.match(sendFlow, /if \(!activeSession\) \{[\s\S]*?type: 'NEW_SESSION'/)

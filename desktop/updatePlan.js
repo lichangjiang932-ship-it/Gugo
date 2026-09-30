@@ -25,10 +25,13 @@ function blockMapFile(blockMap, label) {
   if (!file || !Array.isArray(file.sizes) || !Array.isArray(file.checksums)) {
     throw updateError(`${label} blockmap is invalid`, 'UPDATE_BLOCKMAP_INVALID')
   }
-  if (file.sizes.length !== file.checksums.length || file.sizes.some((size) => !Number.isInteger(size) || size <= 0)) {
+  const offset = file.offset === undefined ? 0 : Number(file.offset)
+  if (!Number.isSafeInteger(offset) || offset < 0
+    || file.sizes.length !== file.checksums.length
+    || file.sizes.some((size) => !Number.isInteger(size) || size <= 0)) {
     throw updateError(`${label} blockmap blocks are invalid`, 'UPDATE_BLOCKMAP_INVALID')
   }
-  return file
+  return { ...file, offset }
 }
 
 export function blockMapSize(blockMap) {
@@ -65,9 +68,12 @@ export function computeDifferentialOperations(oldBlockMap, newBlockMap) {
   if (oldFile.name !== newFile.name) {
     throw updateError('blockmap file names do not match', 'UPDATE_BLOCKMAP_FILE_MISMATCH')
   }
+  if (newFile.offset !== 0) {
+    throw updateError('next blockmap does not cover the start of the installer', 'UPDATE_BLOCKMAP_OFFSET_UNSUPPORTED')
+  }
 
   const oldBlocks = new Map()
-  let oldOffset = Number(oldFile.offset) || 0
+  let oldOffset = oldFile.offset
   for (let index = 0; index < oldFile.checksums.length; index += 1) {
     const checksum = oldFile.checksums[index]
     const size = oldFile.sizes[index]
@@ -76,7 +82,7 @@ export function computeDifferentialOperations(oldBlockMap, newBlockMap) {
   }
 
   const operations = []
-  let newOffset = Number(newFile.offset) || 0
+  let newOffset = newFile.offset
   for (let index = 0; index < newFile.checksums.length; index += 1) {
     const size = newFile.sizes[index]
     const oldBlock = oldBlocks.get(newFile.checksums[index])
@@ -126,9 +132,12 @@ export function buildUpdatePlan({ size, oldBlockMap = null, newBlockMap = null, 
   }
   let mode = 'full'
   let operations = [{ kind: 'download', sourceStart: 0, sourceEnd: totalSize, outputStart: 0, outputEnd: totalSize }]
-  if (oldBlockMap && newBlockMap && blockMapSize(newBlockMap) === totalSize) {
-    operations = computeDifferentialOperations(oldBlockMap, newBlockMap)
-    mode = 'differential'
+  if (oldBlockMap && newBlockMap) {
+    const nextFile = blockMapFile(newBlockMap, 'update')
+    if (nextFile.offset === 0 && blockMapSize(newBlockMap) === totalSize) {
+      operations = computeDifferentialOperations(oldBlockMap, newBlockMap)
+      mode = 'differential'
+    }
   }
   operations = splitDownloadOperations(operations, chunkSize)
   const downloadBytes = operations

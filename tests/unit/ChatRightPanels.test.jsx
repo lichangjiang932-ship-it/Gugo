@@ -87,12 +87,14 @@ test('a generated file preview is the only mounted right panel', async () => {
       <I18nProvider><ChatRightPanels {...baseProps} previewArtifact={null} /></I18nProvider>,
     ))
     assert.ok(rootElement.querySelector('[data-testid="right-workbench"]'))
-    // The header tool switch is the evidence that the workbench mounted and
-    // marked its active tool; the vertical edge strip no longer exists.
+    // The top bar marks the active tool in its settings menu; the vertical edge
+    // strip no longer exists.
     assert.equal(
       rootElement.querySelector('[data-testid="workbench-tool-switch"] [aria-current="page"]').getAttribute('data-tool'),
       'chat',
     )
+    assert.ok(rootElement.querySelector('[data-testid="workbench-tool-entry"]'))
+    assert.ok(rootElement.querySelector('textarea'), 'the side chat panel renders')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -8,7 +8,9 @@ import {
   RotateCw,
   X,
 } from 'lucide-react'
+import { copyTextToClipboard } from '../lib/clipboard.js'
 import { isDesktopBrowserAvailable } from '../lib/desktopBrowserClient.js'
+import { publishPreviewPageStatus } from '../lib/previewPageStore.js'
 import useEmbeddedBrowser from './useEmbeddedBrowser.js'
 
 const ERROR_KEYS = Object.freeze({
@@ -33,6 +35,49 @@ function controlClass(enabled) {
 export default function EmbeddedBrowser({ active = true, t }) {
   const containerRef = useRef(null)
   const browser = useEmbeddedBrowser({ containerRef, active })
+  // The top bar names preview intents; this component owns the URL, so it is
+  // the one that executes them (reload, open outside, copy the address).
+  useEffect(() => {
+    const openExternal = () => {
+      const target = browser.url
+      if (!target) return
+      // An anchor click, not window.open: same new-tab behaviour, and the
+      // guard that keeps window.open out of the UI keeps holding.
+      const anchor = document.createElement('a')
+      anchor.href = target
+      anchor.target = '_blank'
+      anchor.rel = 'noopener noreferrer'
+      anchor.click()
+    }
+    const copyUrl = () => {
+      if (browser.url) void copyTextToClipboard(browser.url)
+    }
+    window.addEventListener('workbench-preview:reload', browser.reload)
+    window.addEventListener('workbench-preview:back', browser.goBack)
+    window.addEventListener('workbench-preview:forward', browser.goForward)
+    window.addEventListener('workbench-preview:open-external', openExternal)
+    window.addEventListener('workbench-preview:copy-url', copyUrl)
+    return () => {
+      window.removeEventListener('workbench-preview:reload', browser.reload)
+      window.removeEventListener('workbench-preview:back', browser.goBack)
+      window.removeEventListener('workbench-preview:forward', browser.goForward)
+      window.removeEventListener('workbench-preview:open-external', openExternal)
+      window.removeEventListener('workbench-preview:copy-url', copyUrl)
+    }
+  }, [browser.goBack, browser.goForward, browser.reload, browser.url])
+
+  // The top bar's arrows act on this page when this panel is the active tool, and
+  // it can only know whether they should be enabled from here.
+  useEffect(() => {
+    publishPreviewPageStatus({
+      url: browser.url,
+      title: browser.status?.title || '',
+      canGoBack: browser.status?.canGoBack === true,
+      canGoForward: browser.status?.canGoForward === true,
+      loading: browser.status?.loading === true,
+      backend: browser.backend,
+    })
+  }, [browser.backend, browser.status, browser.url])
   const hosted = isDesktopBrowserAvailable()
   // A refused embed fires an error on the frame. Without this the panel would keep
   // showing a white rectangle and the reader would have no way to tell a refusal

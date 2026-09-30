@@ -1,8 +1,10 @@
 import { DocxPreview, HtmlPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
 import ReactArtifactPreview from './ReactArtifactPreview.jsx'
+import DiffPreview from './DiffPreview.jsx'
 
-export default function PreviewBody({ preview, content, view }) {
+export default function PreviewBody({ preview, content, view, t }) {
   if (view === 'source') return <SourceView content={content}/>
+  if (preview.type === 'diff') return <DiffPreview preview={preview} t={t}/>
   if (['html', 'html_multi', 'mermaid', 'chart', 'svg'].includes(preview.type)) return <HtmlPreview html={preview.html} previewType={preview.type}/>
   if (preview.type === 'pptx') return <PptxPreview content={content}/>
   if (preview.type === 'docx') return <DocxPreview blocks={preview.blocks} title={preview.title}/>

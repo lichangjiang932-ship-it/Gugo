@@ -67,7 +67,7 @@ function RoundRow({ label, text, t }) {
   )
 }
 
-export default function AgentRoundList({ artifacts = [], onOpenArtifact, rounds = [], t }) {
+export default function AgentRoundList({ artifacts = [], onOpenArtifact, rounds = [], t, workspacePath = '' }) {
   const contributedToolViews = useUiContributions('tool-view')
   const list = Array.isArray(rounds) ? rounds : []
   if (list.length === 0) return null
@@ -97,6 +97,7 @@ export default function AgentRoundList({ artifacts = [], onOpenArtifact, rounds 
                     contributedToolViews={contributedToolViews}
                     onOpenArtifact={onOpenArtifact}
                     stepNumber={(tool.index ?? 0) + 1}
+                    workspacePath={workspacePath}
                   />
                 )}
               </div>

@@ -77,7 +77,11 @@ export async function handleSkillRequest(req, res) {
   // 把一条「技能候选」记忆装成技能：由经验抽象化产出，安装与否由使用者按下按钮决定
   if (req.method === 'POST' && url.pathname === '/api/skills/from-memory') {
     const body = await readJson(req)
-    const result = installSkillFromMemory({ userId, memoryId: body?.memoryId })
+    const result = installSkillFromMemory({
+      userId,
+      memoryId: body?.memoryId,
+      locale: body?.locale === 'en' ? 'en' : 'zh',
+    })
     if (!result.ok) {
       const status = result.code === 'MEMORY_NOT_FOUND' ? 404 : 400
       return sendJson(res, status, { error: result.error, code: result.code })

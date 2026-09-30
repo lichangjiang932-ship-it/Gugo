@@ -49,7 +49,7 @@ export default function SessionChangesPanel({ review, t }) {
   const [openKey, setOpenKey] = useState('')
   // Closed is the common case: the review is only computed while it is open.
   if (!review?.visible) return null
-  const { changes, editIndex, close } = review
+  const { changes, editIndex, close, openDiff: onOpenDiff } = review
   const files = changes?.files || []
   const totals = changes?.totals || { files: 0, additions: 0, deletions: 0 }
 
@@ -57,16 +57,22 @@ export default function SessionChangesPanel({ review, t }) {
     <section
       aria-label={t('chat.changes.title')}
       data-testid="session-changes-panel"
-      className="pointer-events-auto absolute top-3 right-3 z-20 flex max-h-[calc(100%-1.5rem)] w-[min(420px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card border border-ink/15 bg-paper shadow-xl"
+      className="pointer-events-auto absolute top-3 right-3 z-20 flex max-h-[calc(100%-1.5rem)] w-[min(420px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card overlay-float"
     >
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-ink/10 pl-2.5 pr-1">
         <FileDiff className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" />
-        <h2 className="shrink-0 truncate text-xs font-semibold text-ink">{t('chat.changes.title')}</h2>
+        <h2 className="shrink-0 truncate text-sm font-semibold text-ink">{t('chat.changes.title')}</h2>
         {totals.files > 0 && (
           <span className="min-w-0 flex-1 truncate px-1 text-xs text-ink-fade" data-testid="session-changes-totals">
             {t('chat.changes.summary', { count: totals.files })}
-            {totals.reportedFiles > 0
-              && ` · ${t('chat.changes.totals', { additions: totals.additions, deletions: totals.deletions })}`}
+            {totals.reportedFiles > 0 && (
+              <>
+                {' · '}
+                <span className="font-mono text-accent">+{totals.additions}</span>
+                {' '}
+                <span className="font-mono text-danger">-{totals.deletions}</span>
+              </>
+            )}
           </span>
         )}
         <button
@@ -93,21 +99,37 @@ export default function SessionChangesPanel({ review, t }) {
           const open = openKey === file.key
           return (
             <div key={file.key} role="listitem" className="mb-1 last:mb-0">
-              <button
-                type="button"
-                onClick={() => setOpenKey(open ? '' : file.key)}
-                aria-expanded={open}
-                data-testid="session-change-file"
-                data-path={file.displayPath}
-                className="flex w-full min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left transition-colors hover:bg-ink/5"
-              >
-                {open
-                  ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" />
-                  : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" />}
-                <span className="min-w-0 flex-1 truncate text-xs text-ink" title={file.path}>{file.displayPath}</span>
-                <span className="shrink-0 font-mono text-xs text-success">+{counts.additions}</span>
-                <span className="shrink-0 font-mono text-xs text-danger">−{counts.deletions}</span>
-              </button>
+              <div className="flex w-full min-w-0 items-center rounded-control transition-colors hover:bg-[var(--color-row-hover)]">
+                <button
+                  type="button"
+                  onClick={() => setOpenKey(open ? '' : file.key)}
+                  aria-expanded={open}
+                  data-testid="session-change-file-toggle"
+                  aria-label={t('chat.changes.expand')}
+                  title={t('chat.changes.expand')}
+                  className="flex h-8 w-7 shrink-0 items-center justify-center rounded-control text-ink-fade transition-colors hover:text-ink"
+                >
+                  {open
+                    ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                    : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
+                </button>
+                {/* The row is the review's entry point: it opens the file's diff in
+                    the main area, where there is room to read it. The arrow beside
+                    it is the shortcut for a glance without leaving the conversation. */}
+                <button
+                  type="button"
+                  onClick={() => onOpenDiff?.(file, edits)}
+                  data-testid="session-change-file"
+                  data-path={file.displayPath}
+                  aria-label={t('chat.changes.openDiff', { path: file.displayPath })}
+                  title={t('chat.changes.openDiff', { path: file.displayPath })}
+                  className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-3 text-left"
+                >
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink" title={file.path}>{file.displayPath}</span>
+                  <span className="shrink-0 font-mono text-xs text-accent">+{counts.additions}</span>
+                  <span className="shrink-0 font-mono text-xs text-danger">−{counts.deletions}</span>
+                </button>
+              </div>
               {open && (
                 <div className="pl-6 pr-1 pb-1.5">
                   {edits.length === 0
@@ -119,10 +141,6 @@ export default function SessionChangesPanel({ review, t }) {
           )
         })}
       </div>
-
-      <footer className="shrink-0 border-t border-ink/10 px-2.5 py-1.5 text-xs leading-5 text-ink-fade">
-        {t('chat.changes.readOnly')}
-      </footer>
     </section>
   )
 }
