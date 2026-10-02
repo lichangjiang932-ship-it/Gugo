@@ -6,6 +6,41 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Preparing 0.11.67. It carries the preview panel and its verification loop (unreleased since
+0.11.66) and a pass over the agent's behaviour and the interface to bring both closer to Claude Code
+and Codex. The Windows build remains explicitly unsigned through the version-bound
+`scripts/release/policy.json`; verification of checksums and build provenance stays required.
+
+### Added
+
+- A preview panel that owns the dev server declared in `.gugo/launch.json`: argument-vector spawn with no shell, readiness from the declared pattern, tree kill on stop, a bounded log, and eight preview tools whose observations ride the edit that triggered them. The docked browser opens by itself when the server becomes ready.
+- Refusing an approval can carry a note ("do it another way…"): the note is handed to the model with the refusal, so it changes course instead of starting over.
+- Plan mode allows research the way Claude Code's does: web search, GET fetches and explore/plan subagents. A subagent started in plan mode is bound read-only, so it cannot write or run commands even with the general tool set.
+- Subagents get `search_tools`: tools they are authorized for but rarely need are found on demand instead of shown up front, and every mounted tool still goes through the same approval gate. `load_skill` reaches subagents through the main agent's own activation and ownership check.
+- The workbench's files tool (Ctrl+Alt+F) replaces the side chat; the task card shows only progress.
+- A unified diff with folded context in the change review and diff previews, and a `+a −d` line count on the header's change chip; a progress ring with a `2/5` count on the task chip.
+- The browser's address bar reads input the way a browser does: local hosts open over http, words become a search, and recent sites are one click away (Ctrl+L focuses it).
+- Context-aware starter cards on the welcome page, a redesigned new-chat icon with Alt+N, a project glyph beside the conversation title, and long code blocks folded after 24 lines.
+
+### Changed
+
+- A refused tool call goes back to the model as its result instead of ending the turn. Each refusal costs one more model call; two consecutive refused rounds end the turn, and declining a check a write still needs ends it at once.
+- The file tools' HTTP face carries only what the app itself uses — listing, reading and the terminal's shell — with exact path matching. Writing and editing files are model tools executed in-process behind the approval gate and have no HTTP route.
+- Esc pauses a running turn from the composer; tool names, rejected arguments and authorization stops read as words in the trace, in both languages.
+
+### Fixed
+
+- A subagent's `git_log` and `git_blame` reach the Git history adapter instead of falling through as unknown tools.
+- A turn whose last event was left non-terminal reports itself as interrupted instead of still running.
+- Inline code no longer renders literal backticks; popovers above the composer no longer hide behind it; terminal transcripts normalize CRLF line endings.
+- A file request written in a language the intent vocabulary cannot read is still offered the edit tools.
+
+### Removed
+
+- The unused standalone tool client under `src/lib/tools/` (its executors, spec builder and approval wrapper) and the tests that only exercised it. Model tool calls never went through it.
+
+## [0.11.66] - 2026-09-28
+
 Preparing 0.11.66. `v0.11.65` was published and is broken: it starts, then the main process
 crashes with `ERR_MODULE_NOT_FOUND` for `desktop/updateErrors.js`. The 0.11.65 work split
 `desktop/updateRuntime.js` into `desktop/updatePlan.js` and `desktop/updateErrors.js` and added
