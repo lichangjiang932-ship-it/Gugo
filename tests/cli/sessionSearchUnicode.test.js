@@ -64,11 +64,14 @@ test('normalized substring fallback remains owner/session scoped beyond 2000 rec
   })()
   foreign.insert('foreign', '记录上下文工程的其他用户秘密。')
   scope.insert('other-session', '上下文工程的另一会话内容。', { sessionId: otherSession })
-  const page = await searchTurnEvents({ ...scope, query: '上下文工程' })
-  assert.equal(page.matches.length, 1)
+  // Scope, not speed, is under test: a frozen clock keeps the 100 ms scan budget
+  // from ending a 2012-row scan early on a loaded CI runner.
+  const frozen = { now: () => 0 }
+  const page = searchMessagesPage({ ...scope, query: '上下文工程' }, frozen)
+  assert.equal(page.matches.length, 1, JSON.stringify(page.diagnostics || null))
   assert.equal(page.matches[0].sessionId, scope.sessionId)
   assert.equal(page.totalIsExact, true)
-  assert.deepEqual((await searchTurnEvents({ userId: foreign.userId, sessionId: scope.sessionId, query: '上下文' })).matches, [])
+  assert.deepEqual(searchMessagesPage({ userId: foreign.userId, sessionId: scope.sessionId, query: '上下文' }, frozen).matches, [])
 })
 
 test('a bounded partial scan exposes coverage and a usable continuation instead of no match', () => {
