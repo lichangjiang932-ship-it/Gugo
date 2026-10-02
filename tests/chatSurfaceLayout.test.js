@@ -27,7 +27,10 @@ test('chat header distinguishes ordinary conversations from a selected project',
   assert.match(view, /const hasWorkspace = Boolean\(selectedWorkspacePath \|\| activeSession\?\.workspacePath\)/)
   assert.match(headerBar, /data-chat-context=\{hasWorkspace \? 'project' : 'conversation'\}/)
   assert.match(headerBar, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)
-  assert.match(header, /hasWorkspace\s*\? <Folder[\s\S]*?: <MessageSquare/)
+  // A project conversation carries the project's own glyph and name before the
+  // title; an ordinary one keeps the plain conversation mark.
+  assert.match(header, /hasWorkspace && project\s*\? <ProjectGlyph[\s\S]*?: <MessageSquare/)
+  assert.match(header, /data-testid="chat-session-project"/)
   assert.match(header, /title=\{title\}/)
 })
 

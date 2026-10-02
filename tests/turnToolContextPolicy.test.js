@@ -98,10 +98,12 @@ test('plan mode projects the model schema to the execution policy read-only allo
     catalogs.set(permissionMode, namesOf(resolved))
   }
 
-  assert.deepEqual(catalogs.get('plan'), ['git_status', 'list_directory', 'read_file', 'request_directory'])
+  // Plan mode researches like Claude Code's: the web tools join the local reads
+  // (a non-GET fetch is still refused per call at execution).
+  assert.deepEqual(catalogs.get('plan'), ['fetch_url', 'git_status', 'list_directory', 'read_file', 'request_directory', 'web_search'])
   for (const name of [
-    'apply_patch', 'bash_exec', 'create_docx', 'fetch_url', 'mcp__docs__read',
-    'mcp__docs__write', 'set_deliverables', 'web_search', 'write_file',
+    'apply_patch', 'bash_exec', 'create_docx', 'mcp__docs__read',
+    'mcp__docs__write', 'set_deliverables', 'write_file',
   ]) {
     assert.equal(catalogs.get('plan').includes(name), false, name)
     assert.ok(decisions.get('plan').excludedTools.some((entry) => (
@@ -117,7 +119,7 @@ test('plan mode projects the model schema to the execution policy read-only allo
   assert.ok(catalogs.get('normal').includes('bash_exec'))
 })
 
-test('unauthorized plan mode exposes only the directory authorization entry point', async () => {
+test('unauthorized plan mode exposes only the directory authorization entry point and web research', async () => {
   const resolved = await resolveTurnToolSpecs({
     userId: null,
     baseSpecs: BASE_SPECS,
@@ -127,7 +129,9 @@ test('unauthorized plan mode exposes only the directory authorization entry poin
     prompt: '只读分析这个项目。',
   })
 
-  assert.deepEqual(namesOf(resolved), ['request_directory'])
+  // Web research needs no local directory grant, so it is the one other thing
+  // a plan-mode turn without a workspace can do.
+  assert.deepEqual(namesOf(resolved), ['fetch_url', 'request_directory', 'web_search'])
 })
 
 for (const permissionMode of ['normal', 'acceptEdits', 'bypass']) {
@@ -175,11 +179,15 @@ test('workspace-independent web schemas still honor turn and per-user disabling'
   assert.deepEqual(namesOf(secondUser), ['web_search', 'fetch_url'])
 })
 
-test('web visibility does not relax plan mode, external-write approval, or pure-local outbound policy', async () => {
+test('plan-mode web research does not relax external-write approval or pure-local outbound policy', async () => {
   const projected = projectToolSpecsForRuntimePolicy([spec('web_search'), spec('fetch_url')], {
     permissionMode: 'plan', fileAccessStatus: { grants: [] }, userToolPermissions: {},
   })
-  assert.deepEqual(projected, [])
+  assert.deepEqual(namesOf(projected), ['web_search', 'fetch_url'])
+  // Visible is not executable for every call: plan mode still refuses a POST.
+  assert.equal(classifyToolRisk('fetch_url', { method: 'POST', url: 'https://example.com' }, {
+    permissionMode: 'plan', mode: 'unattended', origin: 'chat',
+  }).denied, true)
   assert.equal(classifyToolRisk('fetch_url', { method: 'POST', url: 'https://example.com' }, {
     permissionMode: 'normal', mode: 'unattended', origin: 'chat',
   }).needsApproval, true)
@@ -446,4 +454,28 @@ test('an integration that is not connected stays absent with a structured discov
     decision?.excludedTools.find((entry) => entry.name === 'notion_search'),
     { name: 'notion_search', stage: 'availability', reason: 'integration_disabled' },
   )
+})
+
+test('plan mode with a workspace offers research and read-only subagents from the real server catalog', async () => {
+  const { SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+  const resolved = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    permissionMode: 'plan',
+    fileAccessStatus: { grants: [{ id: 'plan-ws', path: process.cwd(), resourceType: 'directory', accessMode: 'read_write', available: true }] },
+    enabledConnectorTools: [],
+    prompt: 'Research how routing works and plan a change.',
+  })
+  const names = namesOf(resolved)
+  for (const name of ['Agent', 'web_search', 'fetch_url', 'read_file', 'grep_code']) {
+    assert.ok(names.includes(name), `${name} is available in plan mode`)
+  }
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_command', 'run_project_check', 'git_commit']) {
+    assert.equal(names.includes(name), false, `${name} stays out of plan mode`)
+  }
+  // The Agent schema is visible, but only explore/plan subagents run in plan mode.
+  assert.equal(classifyToolRisk('Agent', { subagent_type: 'explore', prompt: 'map the router' },
+    { permissionMode: 'plan', mode: 'unattended', origin: 'chat' }).denied, undefined)
+  assert.equal(classifyToolRisk('Agent', { subagent_type: 'general', prompt: 'edit the router' },
+    { permissionMode: 'plan', mode: 'unattended', origin: 'chat' }).denied, true)
 })

@@ -39,7 +39,6 @@ export default function RightWorkbench({
   const artifacts = useMemo(() => collectArtifacts(messages, attachments), [attachments, messages])
   const resizeRef = useRef(null)
   const [panelWidth, setPanelWidth] = useState(readStoredWidth)
-  const [sideInput, setSideInput] = useState('')
   const [command, setCommand] = useState('')
   const [cwd, setCwd] = useState('.')
   // The transcript is bounded as it grows (see lib/terminalTranscript.js): a long
@@ -117,21 +116,6 @@ export default function RightWorkbench({
       if (result.ok) toast.success(t('workbench.previewScreenshotSaved', { width: result.width, height: result.height }))
       else toast.error(t('workbench.previewScreenshotFailed'))
     })
-  }
-
-  const submitSideChat = async (event) => {
-    event.preventDefault()
-    const inputSnapshot = sideInput
-    const content = inputSnapshot.trim()
-    if (!content || isGenerating) return
-    try {
-      const accepted = await onSendMessage?.(content)
-      if (accepted === true) {
-        setSideInput((current) => current === inputSnapshot ? '' : current)
-      }
-    } catch {
-      // Keep the draft intact. The parent surface owns the actionable error.
-    }
   }
 
   const runCommand = async (event) => {
@@ -217,10 +201,7 @@ export default function RightWorkbench({
           runCommand={runCommand}
           setCommand={setCommand}
           setCwd={setCwd}
-          setSideInput={setSideInput}
           setTerminalTranscript={setTerminalTranscript}
-          sideInput={sideInput}
-          submitSideChat={submitSideChat}
           t={t}
           terminalBusy={terminalBusy}
           terminalTranscript={terminalTranscript}

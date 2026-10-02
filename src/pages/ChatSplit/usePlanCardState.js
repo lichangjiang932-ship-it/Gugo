@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { readPlanVisible, writePlanVisible } from '../../lib/chatUiPreferences.js'
-import { collectArtifacts } from './rightWorkbench/rightWorkbenchArtifacts.js'
 
 function planTodoSignature(todos) {
   return (Array.isArray(todos) ? todos : [])
@@ -22,7 +21,7 @@ function planTodoSignature(todos) {
  * re-opening what was deliberately put away. Derived rather than written from an
  * effect, so there is exactly one rule and no render where the two disagree.
  */
-export default function usePlanCardState({ activeSession, attachments, messages }) {
+export default function usePlanCardState({ activeSession }) {
   const [planVisible, setPlanVisible] = useState(readPlanVisible)
   useEffect(() => { writePlanVisible(planVisible) }, [planVisible])
   const planSignature = planTodoSignature(activeSession?.todos)
@@ -30,10 +29,8 @@ export default function usePlanCardState({ activeSession, attachments, messages 
   const [initialPlanSignature] = useState(() => planTodoSignature(activeSession?.todos))
   const planCardVisible = planVisible
     || (planSignature !== '' && planSignature !== initialPlanSignature && planSignature !== dismissedPlanSignature)
-  const planArtifacts = useMemo(() => collectArtifacts(messages, attachments), [messages, attachments])
   return {
     onOpenPlan: () => setPlanVisible(true),
-    planArtifacts,
     planCardVisible,
     planSignature,
     setDismissedPlanSignature,

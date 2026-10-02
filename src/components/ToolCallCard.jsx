@@ -203,7 +203,9 @@ function ToolCallCard({ call, artifacts = [], onOpenArtifact, expanded, onToggle
             {call.status === 'error' && (errorFacts.length > 0 || call.errorHint) && (
               <div className="chat-tool-error-context">
                 {errorFacts.length > 0 && <div className="chat-tool-error-facts">{errorFacts.map((fact) => <span key={fact}>{fact}</span>)}</div>}
-                {call.errorHint && <div className="chat-tool-error-hint">{call.errorHint}</div>}
+                {/* A schema rejection's hint is an instruction to the model; the
+                    summary above already tells the reader what happened. */}
+                {call.errorHint && call.errorCode !== 'tool_arguments_validation_failed' && <div className="chat-tool-error-hint">{call.errorHint}</div>}
               </div>
             )}
           </section>

@@ -75,7 +75,9 @@ const TASKS = [
       })
 
       assert.deepEqual(executions, [], 'a denied tool call must not reach the executor')
-      assert.equal(modelCalls, 1, 'a denial stops the turn instead of asking the model again')
+      // The first refusal goes back to the model (Claude Code behaviour); a
+      // second identical proposal is refused too and then the turn waits.
+      assert.equal(modelCalls, 2, 'one refusal is read by the model; a repeated one stops the turn')
       assert.equal(result.incomplete, true)
       assert.equal(result.reason, 'approval_denied')
       assert.deepEqual(
@@ -184,7 +186,10 @@ const TASKS = [
         'a denied verification must not execute',
       )
       assert.equal(result.incomplete, true)
+      // Declining the check that the write needs is the one refusal that still
+      // ends the turn: going on could only re-ask for the same check.
       assert.equal(result.reason, 'approval_denied')
+      assert.equal(modelCalls, 2)
       // The already-executed write is reported, so the user can see what stands.
       assert.match(result.text || '', /src\/result\.js/u)
       assert.doesNotMatch(result.text || '', /tests pass/u)

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, Folder, FolderOpen, GitFork, MoreHorizontal, Pin, PinOff, Search, SquarePen, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Folder, FolderOpen, GitFork, MoreHorizontal, Pin, PinOff, Search, X } from 'lucide-react'
+import NewChatGlyph from './NewChatGlyph.jsx'
 import { groupSessionsByProject, pinnedTimestampOf, sessionTimePresentation } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
@@ -289,7 +290,7 @@ export default function SessionList({
           className="left-rail-action"
           data-new-project-chat={project.path}
         >
-          <SquarePen className="h-3.5 w-3.5" aria-hidden="true" />
+          <NewChatGlyph className="h-[15px] w-[15px]" />
         </button>
       </div>
       <div id={regionId} hidden={isCollapsed} className="left-rail-project-sessions" data-project-sessions={project.path}>
@@ -315,7 +316,7 @@ export default function SessionList({
           <Search className="h-3.5 w-3.5" />
         </button>}
         <button type="button" onClick={() => { onMenuClose(); onNewRecent?.() }} title={t('nav.newChat')} aria-label={t('nav.newChat')} className="left-rail-action" data-new-recent-chat>
-          <SquarePen className="h-3.5 w-3.5" />
+          <NewChatGlyph className="h-[15px] w-[15px]" />
         </button>
       </div>
       {orderedSessions.length

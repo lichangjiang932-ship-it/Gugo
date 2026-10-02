@@ -175,6 +175,7 @@ test('subagent policies reuse canonical catalog objects without expanding their 
     'web_search', 'fetch_url', 'list_directory', 'read_file',
     'grep_code', 'find_symbol', 'list_imports', 'lsp',
     'reflect', 'request_clarification', 'request_directory', 'sleep_until',
+    'load_skill',
   ]
   for (const [type, policy] of Object.entries(SUBAGENT_TYPES)) {
     const expected = type === 'general'
@@ -259,4 +260,112 @@ test('read pagination and web-search limits use the shared parameter contract', 
         'tool_arguments_validation_failed')
     }
   }
+})
+
+test('every tool a subagent is shown has a dispatcher behind it', async (t) => {
+  // The schema list and the dispatcher are written in two places. A name in the
+  // first and not the second is a tool the model can call that always fails with
+  // "unknown subagent tool" — git_log and git_blame were exactly that.
+  fixture(t, 'dispatch probe')
+  const { executeSubagentTool } = _testing
+  const shown = new Set(Object.values(SUBAGENT_TYPES).flatMap((policy) => policy.tools.map((tool) => tool.function.name)))
+  for (const name of shown) {
+    if (name === 'Agent') continue // nested runs need a loop runner; its routing has its own tests
+    let result
+    try {
+      result = await executeSubagentTool(name, {}, { userId, signal: new AbortController().signal })
+    } catch (error) {
+      result = { ok: false, error: error?.message || String(error) }
+    }
+    assert.doesNotMatch(String(result?.error || ''), /unknown subagent tool|unknown git tool/u, `${name} reaches a dispatcher`)
+  }
+})
+
+test('a subagent git_log call reaches the git-history adapter', async (t) => {
+  fixture(t, 'history probe')
+  const { executeSubagentTool } = _testing
+  // The adapter's own behaviour is covered in gitHistoryTools.test.js. Here the
+  // point is the route: the answer must come from that adapter (here, its own
+  // "git is not enabled" gate), never the subagent's "unknown tool" fallback.
+  for (const name of ['git_log', 'git_blame']) {
+    const result = await executeSubagentTool(name, { path: 'sample.txt' }, { userId })
+    assert.equal(result?.ok, false)
+    assert.doesNotMatch(String(result?.error || ''), /unknown subagent tool|unknown git tool/u, name)
+    assert.match(String(result?.error || ''), /WORKSPACE_GIT_ENABLED|git|Git/u, name)
+  }
+})
+
+test('a subagent opens with a smaller schema and search_tools mounts only its own authorized tools', async (t) => {
+  fixture(t, 'deferred probe')
+  // explore: lsp/find_symbol/list_imports/... are deferred; write_file is not
+  // authorized at all and must never be mounted by a search for it.
+  const { modelTools, outcomes } = await runScript([
+    { name: 'search_tools', args: () => ({ query: 'find_symbol write_file edit_file', limit: 8 }) },
+  ], { type: 'explore' })
+  const first = modelTools[0].map((tool) => tool.function.name)
+  assert.ok(first.includes('search_tools'))
+  assert.equal(first.includes('find_symbol'), false, 'deferred tools are not shown up front')
+  const searched = outcomes.find((entry) => entry.name === 'search_tools').result
+  assert.ok(searched.activatedToolNames.includes('find_symbol'))
+  assert.equal(searched.activatedToolNames.includes('write_file'), false, 'search never reaches outside the authorized set')
+  assert.equal(searched.activatedToolNames.includes('edit_file'), false)
+  const next = modelTools[1].map((tool) => tool.function.name)
+  assert.ok(next.includes('find_symbol'), 'the mounted tool is shown on the next request')
+  assert.equal(next.includes('write_file'), false)
+})
+
+test('a tool mounted through search_tools still goes through the same approval gate', async (t) => {
+  const filepath = fixture(t, 'gate probe')
+  const approvals = []
+  const executions = []
+  const shown = []
+  let index = 0
+  const script = [
+    { name: 'search_tools', args: { query: 'run_project_check', limit: 3 } },
+    { name: 'run_project_check', args: { check: 'test', cwd: path.dirname(filepath) } },
+  ]
+  await _testing.subagentToolsLoop({
+    userId,
+    locale: 'en',
+    messages: [{ role: 'user', content: 'Run the project check.' }],
+    tools: SUBAGENT_TYPES.general.tools,
+    maxIters: 4,
+    modelRuntimeEnv: { MODEL_BASE_URL: 'http://127.0.0.1:9/v1', MODEL_NAME: 'offline-schema-model' },
+    approveTool: async (request) => {
+      approvals.push(request.toolName)
+      // Everything else gets the real policy answer (search_tools is never
+      // asked about); the mounted tool is refused — the point is that the gate
+      // is asked about it at all.
+      if (request.toolName !== 'run_project_check') {
+        const gate = revalidateToolPermission({ ...request, allowAsk: true })
+        return { ...gate, approvalId: `gate-approval-${approvals.length}` }
+      }
+      return { proceed: false, deniedByUser: true, reason: 'refused in test' }
+    },
+    executeTool: (name, args, options) => {
+      executions.push(name)
+      return _testing.executeSubagentTool(name, args, options)
+    },
+    callModel: async ({ tools }) => {
+      shown.push(tools.map((tool) => tool.function.name))
+      const operation = script[index++]
+      return operation ? wireCall(operation.name, operation.args, index) : { content: 'done', toolCalls: [] }
+    },
+  })
+  // It was not shown at first: the only way it reached the gate is through the mount.
+  assert.equal(shown[0].includes('run_project_check'), false)
+  assert.ok(shown[1].includes('run_project_check'))
+  assert.ok(approvals.includes('run_project_check'), 'the mounted tool reached the approval gate')
+  assert.equal(executions.includes('run_project_check'), false, 'refused, so it never executed')
+})
+
+test('a subagent load_skill goes through the main agent activation and its ownership check', async (t) => {
+  fixture(t, 'skill probe')
+  const { outcomes } = await runScript([
+    { name: 'load_skill', args: () => ({ skill_id: 'not-a-skill-this-user-can-see' }) },
+  ], { type: 'explore' })
+  const loaded = outcomes.find((entry) => entry.name === 'load_skill').result
+  // The same code as the main loop's runtimeSkillActivation: no second path.
+  assert.equal(loaded.ok, false)
+  assert.equal(loaded.code, 'skill_not_available')
 })

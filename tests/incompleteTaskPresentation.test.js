@@ -364,3 +364,22 @@ test('a recovery dead letter explains why automation stopped and what must be re
   assert.equal(value.nextStep, 'chatMessages.incompleteNextManualRecovery')
   assert.equal(value.manualRetryable, true)
 })
+
+test('refusal and permission stops explain themselves instead of printing raw codes', async () => {
+  const { incompleteCardExplainsStop } = await import('../src/pages/ChatSplit/chatMessages/messageRow/incompleteTaskPresentation.js')
+  const { translateKey } = await import('../src/i18n/translations.js')
+  for (const lang of ['zh', 'en']) {
+    const localized = (key, values = {}) => translateKey(key, lang).replace(/\{(\w+)\}/g, (_, name) => values[name])
+    for (const reason of ['approval_denied', 'approval_required', 'approval_expired', 'tool_permission_denied',
+      'tool_authorization_unavailable', 'explicit_read_only_constraint', 'explicit_tool_free_constraint', 'tool_disabled_by_config']) {
+      const failure = normalizeTurnFailure({ code: reason.toUpperCase(), incompleteReason: reason })
+      const result = buildIncompleteTaskPresentation({ meta: { failed: true, serverFailure: failure } }, localized)
+      // The card used to say "the runtime recorded APPROVAL_DENIED" and list
+      // "the structured requirement for USER_DIRECTION".
+      assert.doesNotMatch(result.reason, /[A-Z]{3,}_[A-Z_]+/u, `${lang}/${reason} reason`)
+      for (const item of result.missing) assert.doesNotMatch(item, /[A-Z]{3,}_[A-Z_]+/u, `${lang}/${reason} missing`)
+      assert.equal(incompleteCardExplainsStop(failure), true, reason)
+    }
+  }
+  assert.equal(incompleteCardExplainsStop({ incompleteReason: 'model_call_interrupted' }), false)
+})

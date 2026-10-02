@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Ban, Check, ChevronDown, Circle, Loader2, Minus, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Ban, Check, ChevronDown, Circle, CircleDot, Loader2, Minus, RefreshCw, ShieldCheck } from 'lucide-react'
 import { approveGoalPlanApi, listGoalPlansApi, pickActivePlan, showGoalPlanApi } from '../../../lib/goalPlanClient.js'
 import { subscribeGoalPlanChanged } from '../../../lib/goalPlanSignals.js'
 
@@ -33,11 +33,6 @@ const PLAN_STATUS_KEYS = Object.freeze({
   superseded: 'workbench.planStatusSuperseded',
 })
 
-/**
- * The three marks the task list already uses, plus the two terminal states, so a
- * step and a todo that mean the same thing look the same.
- */
-const TODO_ICONS = Object.freeze({ completed: Check, in_progress: Loader2, pending: Circle })
 const STEP_ICONS = Object.freeze({
   done: Check,
   in_progress: Loader2,
@@ -92,6 +87,64 @@ const EVIDENCE_CLASSES = Object.freeze({
   unverified: 'text-warning',
   missing: 'text-danger',
 })
+
+function TodoMark({ status }) {
+  if (status === 'completed') {
+    return (
+      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-success" aria-hidden="true">
+        <Check className="h-2.5 w-2.5 text-paper" strokeWidth={3.25} />
+      </span>
+    )
+  }
+  if (status === 'in_progress') {
+    // A ring with a live centre rather than a spinner: one task is "the one",
+    // and a spinning glyph on a list reads as loading, not as focus.
+    return <CircleDot className="plan-todo-active-dot mt-0.5 h-4 w-4 shrink-0 text-running" strokeWidth={2} aria-hidden="true" />
+  }
+  return <Circle className="mt-0.5 h-4 w-4 shrink-0 text-ink/25" strokeWidth={1.75} aria-hidden="true" />
+}
+
+function TaskList({ t, taskList }) {
+  const done = taskList.filter((todo) => todo?.status === 'completed').length
+  const percent = taskList.length ? Math.round((done / taskList.length) * 100) : 0
+  return (
+    <>
+      <div className="mb-2.5 flex items-center gap-2" data-testid="workbench-plan-progress">
+        <div
+          className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-ink/[0.08]"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={taskList.length}
+          aria-valuenow={done}
+          aria-label={t('workbench.planProgress', { done, total: taskList.length })}
+        >
+          <div className="h-full rounded-full bg-success transition-[width] duration-300" style={{ width: `${percent}%` }} />
+        </div>
+        <span className="shrink-0 font-mono text-xs tabular-nums text-ink-fade">{done}/{taskList.length}</span>
+      </div>
+      <ul className="space-y-0.5">
+        {taskList.map((todo, index) => {
+          const status = todo?.status || 'pending'
+          return (
+            <li
+              key={todo?.id || index}
+              className={`flex items-start gap-2 rounded-control px-1.5 py-1 text-xs leading-5 ${status === 'in_progress' ? 'bg-running/[0.07]' : ''}`}
+              data-testid="workbench-plan-task"
+              data-status={status}
+              aria-current={status === 'in_progress' ? 'step' : undefined}
+            >
+              <TodoMark status={status} />
+              <span className={`min-w-0 ${status === 'completed' ? 'text-ink-fade line-through decoration-ink/30' : status === 'in_progress' ? 'font-medium text-ink' : 'text-ink-soft'}`}>
+                <span className="sr-only">{t(TODO_STATUS_KEYS[status] || 'workbench.planTodoPending')}</span>
+                {todoLabel(todo)}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+}
 
 function Section({ action, children, count, testId, title }) {
   return (
@@ -160,7 +213,7 @@ function PlanStep({ onRevealTurn, step, t }) {
   )
 }
 
-export default function WorkbenchPlan({ artifacts = [], onOpenArtifact, onRevealTurn, sessionId = '', todos = [], t }) {
+export default function WorkbenchPlan({ onRevealTurn, sessionId = '', todos = [], t }) {
   const [plan, setPlan] = useState(null)
   const [planError, setPlanError] = useState('')
   const [loadedFor, setLoadedFor] = useState('')
@@ -233,7 +286,6 @@ export default function WorkbenchPlan({ artifacts = [], onOpenArtifact, onReveal
 
   const taskList = (Array.isArray(todos) ? todos : []).filter((todo) => todoLabel(todo))
   const steps = Array.isArray(plan?.steps) ? plan.steps : []
-  const files = Array.isArray(artifacts) ? artifacts : []
   const planLoading = Boolean(sessionId) && loadedFor !== sessionId && !planError
   const canApprove = plan?.status === 'awaiting_approval'
 
@@ -242,22 +294,7 @@ export default function WorkbenchPlan({ artifacts = [], onOpenArtifact, onReveal
       <Section count={taskList.length} testId="workbench-plan-tasks" title={t('workbench.planTasks')}>
         {taskList.length === 0
           ? <p className="text-xs text-ink-fade" data-testid="workbench-plan-tasks-empty">{t('workbench.planTasksEmpty')}</p>
-          : (
-            <ul className="space-y-1.5">
-              {taskList.map((todo, index) => {
-                const Icon = TODO_ICONS[todo?.status] || Circle
-                return (
-                  <li key={todo?.id || index} className="flex items-start gap-2 text-xs leading-5" data-testid="workbench-plan-task" data-status={todo?.status || 'pending'}>
-                    <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${todo?.status === 'completed' ? 'text-success' : 'text-ink-fade'}`} aria-hidden="true" />
-                    <span className={`min-w-0 ${todo?.status === 'completed' ? 'text-ink-fade line-through' : 'text-ink-soft'}`}>
-                      <span className="sr-only">{t(TODO_STATUS_KEYS[todo?.status] || 'workbench.planTodoPending')}</span>
-                      {todoLabel(todo)}
-                    </span>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
+          : <TaskList t={t} taskList={taskList} />}
       </Section>
 
       <Section
@@ -318,27 +355,8 @@ export default function WorkbenchPlan({ artifacts = [], onOpenArtifact, onReveal
                 </>
               )}
       </Section>
-
-      <Section count={files.length} testId="workbench-plan-output" title={t('workbench.planOutput')}>
-        {files.length === 0
-          ? <p className="text-xs text-ink-fade" data-testid="workbench-plan-output-empty">{t('workbench.planOutputEmpty')}</p>
-          : (
-            <ul className="space-y-1">
-              {files.map((artifact) => (
-                <li key={artifact.id || artifact.url}>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-control px-3 py-1.5 text-left text-xs text-ink transition-colors hover:bg-[var(--color-row-hover)]"
-                    data-testid="workbench-plan-artifact"
-                    onClick={() => onOpenArtifact?.(artifact)}
-                  >
-                    <span className="chat-output-file-name min-w-0 flex-1 truncate font-medium">{artifact.filename || artifact.title || artifact.type}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-      </Section>
+      {/* Outputs are not progress: the files a session produced live in the
+          workbench's own "workspace files" tool, with room to preview them. */}
     </section>
   )
 }

@@ -784,7 +784,7 @@ test('★ 系统故障标记为 retryable,且明确告诉模型这不是用户�
   assert.match(out.error, /重试/)
 })
 
-test('★ 用户拒绝不标 retryable,并等待用户明确下一步', () => {
+test('★ 用户拒绝不标 retryable,并告诉模型别原样重试、换路继续', () => {
   const out = formatDeniedToolResult({
     proceed: false,
     reason: '用户拒绝了这次调用',
@@ -795,7 +795,11 @@ test('★ 用户拒绝不标 retryable,并等待用户明确下一步', () => {
   assert.equal(out.deniedByUser, true)
   assert.notEqual(out.retryable, true, '用户说不,重试是骚扰')
   assert.notEqual(out.systemFailure, true)
-  assert.match(out.error, /本轮已停止/)
+  // Claude Code behaviour: the refusal is a tool result the model reads and
+  // works around, not the end of the turn.
+  assert.match(out.error, /未执行/)
+  assert.match(out.error, /不要原样重试/)
+  assert.doesNotMatch(out.error, /本轮已停止/)
   assert.equal(out.code, 'approval_denied')
 })
 

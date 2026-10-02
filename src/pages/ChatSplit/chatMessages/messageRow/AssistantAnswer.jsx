@@ -26,6 +26,7 @@ import {
   RuntimeRecoveryCard,
 } from './FailureCards.jsx'
 import { failurePresentation } from './failurePresentation.js'
+import { incompleteCardExplainsStop } from './incompleteTaskPresentation.js'
 import { assistantTimelinePresentation, stableTimelineSegments } from './timelinePresentation.js'
 import { assistantPublicTimeline } from '../../../../lib/assistantPublicTimeline.js'
 import { parseAgentReportSections } from '../../../../../shared/agentReportSections.js'
@@ -135,6 +136,7 @@ export default function AssistantAnswer({
     || (msg.meta?.cancelled === true
       ? t('chat.serverTurn.cancelled')
       : (msg.meta?.failed === true || msg.meta?.interrupted === true || genericRecoveryBlocked) && hasStructuredFailure
+        && !incompleteCardExplainsStop(msg.meta.serverFailure)
         ? getVisibleModelErrorMessage(msg, t)
         : '')
   // A completed turn that would otherwise render nothing at all — no answer text

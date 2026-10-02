@@ -84,7 +84,6 @@ export default function ChatSplitView({
   workbenchMessage,
   workbenchOpen,
   planVisible,
-  planArtifacts = [],
   onClosePlan, onOpenPlan,
   sessionChangesReview = null,
   previewOpen = false,
@@ -122,7 +121,7 @@ export default function ChatSplitView({
     <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper" mainAs="main" mainClassName="relative flex min-w-0 flex-1 overflow-hidden" mainProps={{ 'data-chat-main-area': true }}>
       <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
         <ChatSessionHeaderBar
-          activeSession={activeSession} hasWorkspace={hasWorkspace}
+          activeSession={activeSession} hasWorkspace={hasWorkspace} workspacePath={selectedWorkspacePath || activeSession?.workspacePath || ''}
           onClosePlan={onClosePlan} onOpenPlan={onOpenPlan}
           onOpenPreview={onOpenPreview} onWorkbenchToggle={onWorkbenchToggle}
           planVisible={planVisible} previewOpen={previewOpen}
@@ -272,9 +271,7 @@ export default function ChatSplitView({
           drawn over the main area and stays put whether or not the panel is open. */}
       {planVisible && (
         <PlanCard
-          artifacts={planArtifacts}
           onClose={onClosePlan}
-          onOpenArtifact={onOpenArtifact}
           onRevealTurn={revealTurnInConversation}
           sessionId={activeSessionId}
           t={t}

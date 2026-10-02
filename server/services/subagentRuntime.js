@@ -136,6 +136,13 @@ async function executeSubagentTool(toolName, args, {
     case 'request_directory':
     case 'sleep_until':
       return dispatchAgenticTool(toolName, args, { userId })
+    // Control tools the shared loop resolves itself: search_tools mounts from
+    // this run's authorized snapshot, load_skill activates through the same
+    // runtimeSkillActivation as the main agent. The executor only acknowledges.
+    case 'search_tools':
+      return { ok: true, query: String(args?.query || '').trim(), requestedLimit: args?.limit }
+    case 'load_skill':
+      return { ok: true, requestedSkillId: String(args?.skill_id || '').trim() }
     case 'Agent': {
       const rawRequest = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
       const request = { ...rawRequest }

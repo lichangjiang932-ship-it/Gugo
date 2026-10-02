@@ -13,7 +13,7 @@ function createRegistry(lang = 'en') {
 test('core slash actions mirror the useful Codex action set and order', () => {
   const registry = createRegistry()
   assert.deepEqual(CORE_SLASH_COMMANDS, [
-    'mcp', 'side', 'init', 'compact', 'feedback', 'continue', 'pet', 'new', 'status', 'goals', 'plan',
+    'mcp', 'init', 'compact', 'feedback', 'continue', 'pet', 'new', 'status', 'goals', 'plan',
   ])
   assert.deepEqual(
     registry.listCommands().filter((entry) => entry.source === 'core').map((entry) => entry.name),
@@ -35,27 +35,25 @@ test('Chinese labels and descriptions use the Codex-style wording', () => {
   assert.equal(registry.getCommand('plan').meta.displayName, '计划模式')
 })
 
-test('MCP, side chat, status, pet, and plan actions call their real UI hooks', async () => {
+test('MCP, status, pet, and plan actions call their real UI hooks', async () => {
   const registry = createRegistry()
   let mcp = 0
-  let side = 0
   let pet = 0
   let status = 0
   let mode = null
   const context = {
     openMcp: () => { mcp += 1 },
-    openSideChat: () => { side += 1 },
     togglePet: () => { pet += 1 },
     openStatus: () => { status += 1 },
     setApprovalMode: async (value) => { mode = value },
   }
   await registry.getCommand('mcp').handler('', context)
-  await registry.getCommand('side').handler('', context)
+  // The side chat was removed from the workbench, and its command with it.
+  assert.equal(registry.getCommand('side') ?? undefined, undefined)
   await registry.getCommand('pet').handler('', context)
   await registry.getCommand('status').handler('', context)
   await registry.getCommand('plan').handler('', context)
   assert.equal(mcp, 1)
-  assert.equal(side, 1)
   assert.equal(pet, 1)
   assert.equal(status, 1)
   assert.equal(mode, 'plan')

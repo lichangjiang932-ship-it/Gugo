@@ -589,6 +589,7 @@ test('an executing connector checkpoint switched to plan is denied before idempo
   }
   let executeCalls = 0
   let deniedResult = null
+  const modelRequests = []
   const executeTool = async () => {
     executeCalls += 1
     return { ok: true }
@@ -612,12 +613,19 @@ test('an executing connector checkpoint switched to plan is denied before idempo
       },
       executeTool,
       onToolCompleted: async ({ result }) => { deniedResult = result },
-      runModel: async () => { assert.fail('plan mode refusal cannot request model wrap-up') },
+      // A plan-mode refusal is a tool result the model reads and works around,
+      // as in Claude Code — but the connector write itself must never run.
+      runModel: async ({ messages }) => {
+        modelRequests.push(messages)
+        return { content: 'Plan: create the issue after leaving plan mode.', toolCalls: [] }
+      },
     })
 
-    assert.equal(result.code, 'policy_denied_plan_mode')
-    assert.equal(result.incomplete, true)
     assert.equal(executeCalls, 0)
+    assert.equal(modelRequests.length, 1)
+    const toolMessage = modelRequests[0].find((message) => message.role === 'tool' && message.tool_call_id === toolCallId)
+    assert.match(String(toolMessage?.content || ''), /policy_denied_plan_mode/)
+    assert.notEqual(result.code, 'policy_denied_plan_mode', 'the refusal no longer ends the turn')
     assert.equal(deniedResult.policyDenied, true)
     assert.equal(deniedResult.permissionMode, 'plan')
     assert.match(deniedResult.error, /工具存在/)

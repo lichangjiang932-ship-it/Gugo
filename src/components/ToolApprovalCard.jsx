@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronRight, Terminal, FilePen, FileText, Globe, MousePointerClick, X } from 'lucide-react'
+import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronRight, Terminal, FilePen, FileText, Globe, MessageSquare, MousePointerClick, X } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
+import { toolCallLabel } from '../lib/toolCallPresentation.js'
 
 const RISK_TONE = {
-  high: { border: 'border-danger/50', bg: 'bg-danger/5', text: 'text-danger', dot: 'bg-danger' },
-  medium: { border: 'border-warning/50', bg: 'bg-warning/5', text: 'text-warning', dot: 'bg-warning' },
-  low: { border: 'border-ink-fade/50', bg: 'bg-paper-2', text: 'text-ink-fade', dot: 'bg-ink-fade' },
+  high: { accent: 'border-l-danger', text: 'text-danger', dot: 'bg-danger' },
+  medium: { accent: 'border-l-warning', text: 'text-warning', dot: 'bg-warning' },
+  low: { accent: 'border-l-ink/25', text: 'text-ink-fade', dot: 'bg-ink-fade' },
 }
 
 const TOOL_ICON = {
@@ -81,19 +82,19 @@ function DiffPreview({ changes, t }) {
         const text = Array.isArray(change?.preview) ? change.preview.join('\n') : String(change?.preview || '')
         const lines = text.split('\n').slice(0, 40)
         return (
-          <div key={`${change?.path || i}`} className="rounded border border-ink/15 overflow-hidden">
-            <div className="px-2 py-1 bg-paper-2 font-mono text-[10px] text-ink-soft truncate">
+          <div key={`${change?.path || i}`} className="overflow-hidden rounded-control border border-ink/10">
+            <div className="truncate bg-paper-2 px-2.5 py-1 font-mono text-xs text-ink-soft">
               {change?.op ? `[${change.op}] ` : ''}{change?.path || `(${t('toolApproval.unknownPath')})`}
             </div>
-            <pre className="px-2 py-1.5 font-mono text-[10px] leading-relaxed overflow-x-auto max-h-40">
+            <pre className="max-h-48 overflow-x-auto py-1 font-mono text-xs leading-5">
               {lines.map((line, li) => (
                 <div
                   key={li}
-                  className={
-                    line.startsWith('+') ? 'text-success bg-success/10'
-                      : line.startsWith('-') ? 'text-danger bg-danger/10'
+                  className={`px-2.5 ${
+                    line.startsWith('+') ? 'bg-success/10 text-success'
+                      : line.startsWith('-') ? 'bg-danger/10 text-danger'
                         : 'text-ink-soft'
-                  }
+                  }`}
                 >
                   {line || ' '}
                 </div>
@@ -103,7 +104,7 @@ function DiffPreview({ changes, t }) {
         )
       })}
       {changes.length > 8 && (
-        <p className="font-mono text-[10px] text-ink-fade">
+        <p className="text-xs text-ink-fade">
           {t('toolApproval.moreFiles', { count: changes.length - 8 })}
         </p>
       )}
@@ -113,7 +114,8 @@ function DiffPreview({ changes, t }) {
 
 /**
  * 对话内联的工具审批卡。对齐 Claude Code:允许一次 / 总是允许 / 拒绝,
- * 就在对话流里做决定,不用切到别的页面。
+ * 就在对话流里做决定,不用切到别的页面。拒绝时可以附一句"改成怎么做"，
+ * 这句话会作为引导交给模型，和拒绝结果在同一轮读到。
  */
 export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const { t } = useT()
@@ -121,6 +123,10 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   // 用 request 做 key 让 React 自然重置展开态,不必在 effect 里 setState
   const [expandedFor, setExpandedFor] = useState(null)
   const expanded = expandedFor === request
+  const [feedbackFor, setFeedbackFor] = useState(null)
+  const [feedback, setFeedback] = useState('')
+  const feedbackOpen = feedbackFor === request
+  const submitFeedback = () => onDecide?.({ approved: false, feedback: feedback.trim() })
 
   useEffect(() => {
     if (!open || !request || busy) return undefined
@@ -142,54 +148,105 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const Icon = TOOL_ICON[name] || AlertTriangle
   const main = headline(name, args)
   const canRemember = !ONE_TIME_APPROVAL_TOOL_NAMES.has(name)
+  const toolLabel = toolCallLabel(name, t)
 
   return (
-    <div ref={approvalRef} className={`rounded-md border ${tone.border} ${tone.bg} p-3.5`} data-testid="tool-approval-card">
+    <div ref={approvalRef} className={`rounded-card border border-ink/10 border-l-[3px] ${tone.accent} bg-surface p-3.5 shadow-sm`} data-testid="tool-approval-card">
       <div className="flex items-start gap-2.5">
-        <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${tone.text}`} />
+        <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-control bg-ink/[0.05] ${tone.text}`}>
+          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-ink">{t('toolApproval.title')}</span>
-            <span className="font-mono text-[12px] text-ink">{name}</span>
-            <span className={`inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider ${tone.text}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm font-semibold text-ink">{t('toolApproval.title')}</span>
+            <span className="text-sm text-ink-soft">{toolLabel}</span>
+            {toolLabel !== name && <span className="font-mono text-xs text-ink-fade">{name}</span>}
+            <span className={`inline-flex items-center gap-1 rounded-pill bg-ink/[0.04] px-1.5 py-0.5 text-xs ${tone.text}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} aria-hidden="true" />
               {t(`approvals.risk.${risk}`)}
             </span>
             <span
               data-testid="tool-risk-source"
-              className="font-mono text-[9px] text-ink-fade"
+              className="text-xs text-ink-fade"
             >
               {t('approvals.source.label')}: {t(`approvals.source.${metadataSource}`)}
             </span>
           </div>
-          {reason && <p className="text-xs text-ink-soft mt-1">{reason}</p>}
+          {reason && <p className="mt-1 text-xs leading-5 text-ink-soft">{reason}</p>}
           {main && (
-            <pre className="mt-2 px-2.5 py-1.5 rounded bg-paper border border-ink/15 font-mono text-xs text-ink overflow-x-auto whitespace-pre-wrap break-all">
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-control border border-ink/10 bg-[var(--code-bg)] px-2.5 py-1.5 font-mono text-xs leading-5 text-[var(--code-text)]">
               {main}
             </pre>
           )}
           <DiffPreview changes={preview} t={t} />
 
-          <button
-            type="button"
-            onClick={() => setExpandedFor(expanded ? null : request)}
-            className="mt-2 inline-flex items-center gap-1 font-mono text-[10px] text-ink-fade hover:text-ink-soft transition-colors"
-          >
-            {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            {t('toolApproval.viewArgs')}
-          </button>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpandedFor(expanded ? null : request)}
+              className="inline-flex items-center gap-1 text-xs text-ink-fade transition-colors hover:text-ink-soft"
+            >
+              {expanded ? <ChevronDown className="h-3 w-3" aria-hidden="true" /> : <ChevronRight className="h-3 w-3" aria-hidden="true" />}
+              {t('toolApproval.viewArgs')}
+            </button>
+            <button
+              type="button"
+              data-testid="tool-approval-suggest"
+              aria-expanded={feedbackOpen}
+              disabled={busy}
+              onClick={() => { setFeedbackFor(feedbackOpen ? null : request); setFeedback('') }}
+              className="inline-flex items-center gap-1 text-xs text-ink-fade transition-colors hover:text-ink-soft disabled:opacity-50"
+            >
+              <MessageSquare className="h-3 w-3" aria-hidden="true" />
+              {t('toolApproval.suggestOther')}
+            </button>
+          </div>
           {expanded && (
-            <pre className="mt-1.5 px-2.5 py-1.5 rounded bg-paper border border-ink/15 font-mono text-[10px] text-ink-soft overflow-x-auto max-h-48">
+            <pre className="mt-1.5 max-h-48 overflow-x-auto rounded-control border border-ink/10 bg-[var(--code-bg)] px-2.5 py-1.5 font-mono text-xs text-[var(--code-text)]">
               {JSON.stringify(args ?? {}, null, 2)}
             </pre>
+          )}
+          {feedbackOpen && (
+            <form
+              className="mt-2 flex items-end gap-2"
+              data-testid="tool-approval-feedback"
+              onSubmit={(event) => { event.preventDefault(); if (feedback.trim()) submitFeedback() }}
+            >
+              <textarea
+                autoFocus
+                rows={2}
+                value={feedback}
+                onChange={(event) => setFeedback(event.target.value)}
+                onKeyDown={(event) => {
+                  // Enter sends, Shift+Enter breaks the line, Escape folds the box
+                  // away — and none of them reach the card's own shortcuts.
+                  if (event.key === 'Escape') { event.preventDefault(); setFeedbackFor(null); return }
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent?.isComposing) {
+                    event.preventDefault()
+                    if (feedback.trim()) submitFeedback()
+                  }
+                }}
+                aria-label={t('toolApproval.feedbackLabel')}
+                placeholder={t('toolApproval.feedbackPlaceholder')}
+                className="min-h-[2.5rem] min-w-0 flex-1 resize-none rounded-control border border-ink/15 bg-paper px-2.5 py-1.5 text-xs leading-5 text-ink outline-none placeholder:text-ink-fade focus:border-focus"
+              />
+              <button
+                type="submit"
+                disabled={busy || !feedback.trim()}
+                className="h-8 shrink-0 rounded-control bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40"
+              >
+                {t('toolApproval.sendFeedback')}
+              </button>
+            </form>
           )}
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink/[0.06] pt-3">
         <span
           data-testid="tool-approval-hint"
-          className="mr-auto font-mono text-[10px] text-ink-fade"
+          className="mr-auto text-xs text-ink-fade"
         >
           {t('toolApproval.hint')}
         </span>
@@ -200,31 +257,31 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
           <button
             type="button"
             disabled={busy}
-            onClick={() => onDecide?.({ approved: true })}
-            className="h-8 px-3 rounded-md bg-accent text-accent-contrast text-sm flex items-center gap-1.5 disabled:opacity-50"
+            onClick={() => onDecide?.({ approved: false })}
+            className="flex h-8 items-center gap-1.5 rounded-control border border-ink/15 px-3 text-sm text-ink-soft transition-colors hover:border-ink/30 hover:text-ink disabled:opacity-50"
           >
-            <Check className="w-3.5 h-3.5" />
-            {t('toolApproval.allowOnce')}
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('toolApproval.deny')}
           </button>
           {canRemember && (
             <button
               type="button"
               disabled={busy}
               onClick={() => onDecide?.({ approved: true, remember: true })}
-              className="h-8 px-3 border border-success/60 rounded-md text-sm text-success hover:bg-success/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="flex h-8 items-center gap-1.5 rounded-control border border-ink/15 px-3 text-sm text-ink-soft transition-colors hover:border-ink/30 hover:text-ink disabled:opacity-50"
             >
-              <CheckCheck className="w-3.5 h-3.5" />
+              <CheckCheck className="h-3.5 w-3.5" aria-hidden="true" />
               {t('toolApproval.alwaysAllow')}
             </button>
           )}
           <button
             type="button"
             disabled={busy}
-            onClick={() => onDecide?.({ approved: false })}
-            className="h-8 px-3 border border-ink-fade/60 rounded-md text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            onClick={() => onDecide?.({ approved: true })}
+            className="flex h-8 items-center gap-1.5 rounded-control bg-ink px-3 text-sm font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-50"
           >
-            <X className="w-3.5 h-3.5" />
-            {t('toolApproval.deny')}
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('toolApproval.allowOnce')}
           </button>
         </div>
       </div>

@@ -125,7 +125,9 @@ export default function WorkbenchToolbar({
     menuRef.current?.querySelector('summary')?.focus()
   }
   return (
-    <nav data-testid="workbench-tool-switch" aria-label={t('workbench.tools')} className="flex h-9 shrink-0 items-center justify-end gap-2 pr-3">
+    // gap-1 and no extra right padding: eight 28px controls must fit beside the
+    // title at the panel's 320px minimum, or the close button is pushed off-screen.
+    <nav data-testid="workbench-tool-switch" aria-label={t('workbench.tools')} className="ml-auto flex h-9 shrink-0 items-center justify-end gap-1">
       <button type="button" data-testid="workbench-tool-entry" disabled={!backEnabled}
         onClick={goBack} aria-label={backTitle} title={backTitle} className={BUTTON}>
         <ChevronLeft className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
@@ -153,7 +155,7 @@ export default function WorkbenchToolbar({
           <MoreVertical className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
           {/* Inside the summary: a closed <details> does not render its slot, so a
               tooltip parked beside the menu would never appear on hover. */}
-          <span className="preview-settings-tip" role="tooltip" data-testid="workbench-settings-tip">Preview settings</span>
+          <span className="preview-settings-tip" role="tooltip" data-testid="workbench-settings-tip">{t('workbench.previewSettings')}</span>
         </summary>
         <div role="menu" aria-label={t('workbench.moreActions')} className={MENU}>
           <p className={MENU_GROUP}>{t('workbench.tools')}</p>

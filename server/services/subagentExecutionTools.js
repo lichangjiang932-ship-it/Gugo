@@ -1,5 +1,6 @@
 import { dispatchCodingAgentTool } from '../adapters/codingAgentTools.js'
 import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
+import { dispatchGitHistoryTool, isGitHistoryTool } from '../adapters/gitHistoryTools.js'
 import { dispatchGitTool } from '../adapters/gitWorkbench.js'
 
 const FILE_AND_SHELL_TOOLS = new Set([
@@ -24,6 +25,13 @@ export function dispatchSubagentExecutionTool(toolName, args, context = {}) {
   }
   if (PROJECT_TOOLS.has(toolName)) {
     return dispatchGitTool(toolName, args, { userId, signal, toolCallId, idempotencyKey })
+  }
+  // git_log / git_blame have their own adapter: the workbench's dispatchGitTool
+  // has no branch for them and would throw "unknown git tool".
+  if (isGitHistoryTool(toolName)) {
+    return Promise.resolve()
+      .then(() => dispatchGitHistoryTool(toolName, args || {}, { userId, cwd: args?.cwd }))
+      .catch((error) => ({ ok: false, error: error?.message || String(error) }))
   }
   return undefined
 }

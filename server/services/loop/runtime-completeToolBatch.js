@@ -40,11 +40,16 @@ async function initializeToolBatch(s, i) {
   i.skipRemainingCalls = async (startIndex) => {
     for (const skipped of i.toolCalls.slice(startIndex)) {
       if (skipped.checkpointStatus === 'completed') continue
+      const refused = i.toolStop?.kind === 'refused'
       const skippedResult = {
         ok: false,
         code: 'tool_execution_skipped',
-        error: i.toolStop?.error || i.goalPlanBlocked?.error || i.noProgressReason || i.budgetExceeded
-          || (s.locale === 'zh' ? '当前轮已暂停' : 'The current round was paused.'),
+        error: refused
+          ? (s.locale === 'zh'
+            ? '未执行：用户刚拒绝了本批中较早的一次调用，本批其余调用一并跳过。先根据用户的拒绝调整方案。'
+            : 'Not run: the user declined an earlier call in this batch, so the rest of the batch was skipped. Adjust the approach to that refusal first.')
+          : i.toolStop?.error || i.goalPlanBlocked?.error || i.noProgressReason || i.budgetExceeded
+            || (s.locale === 'zh' ? '当前轮已暂停' : 'The current round was paused.'),
         retryable: false,
         executed: false,
       }

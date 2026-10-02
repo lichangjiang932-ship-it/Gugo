@@ -279,7 +279,11 @@ export function createTurnResolutionRuntime({ normalizePath } = {}) {
     if (lastEvent.type === 'turn.failed') return 'failed'
     if (lastEvent.type === 'turn.interrupted') return 'interrupted'
     if (lastEvent.type === 'approval.required') return 'awaiting_approval'
-    return 'paused'
+    // A non-terminal last event with nothing running is a turn whose process
+    // went away (crash, restart) before startup recovery reached it. That is an
+    // interruption, not the user's pause: calling it 'paused' made it look like
+    // a deliberate stop and kept clients from waking it.
+    return 'interrupted'
   }
 
   return Object.freeze({

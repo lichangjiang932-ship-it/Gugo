@@ -14,7 +14,11 @@ function ContextRing({ percent }) {
   const radius = 7
   const circumference = 2 * Math.PI * radius
   const clamped = Math.max(0, Math.min(100, Number(percent) || 0))
-  const offset = circumference * (1 - clamped / 100)
+  // A real but small use (1% of a large window) drew an arc thinner than its
+  // own round caps, so the ring read as empty — as if it were broken. Any use
+  // shows at least a sliver; the exact figure stays in the tooltip.
+  const shown = clamped > 0 ? Math.max(clamped, 4) : 0
+  const offset = circumference * (1 - shown / 100)
   const color = clamped >= 80
     ? 'rgb(var(--color-danger-rgb))'
     : clamped >= 60

@@ -19,6 +19,7 @@ const {
   buildRememberedGrant,
   isSafeCommandPrefix,
   matchesRememberedGrant,
+  isToolVisibleInPermissionMode,
 } = await import('../server/utils/approvalPolicy.js')
 const { CONNECTOR_WRITE_TOOL_NAMES } = await import('../shared/connectorWriteTools.js')
 
@@ -425,6 +426,8 @@ test('plan mode keeps tools loaded but executes only local read operations', () 
     'write_file', 'apply_patch', 'bash_exec', 'run_project_check', 'create_docx',
     'web_search', 'fetch_url', 'browser_snapshot', 'connected_app_list', 'jira_query',
   ]) {
+    // A dynamic (MCP) registration never inherits plan privileges, even for a
+    // name plan mode allows as a builtin.
     const verdict = classifyToolRisk(name, {}, {
       ...JOB,
       permissionMode: 'plan',
@@ -434,6 +437,35 @@ test('plan mode keeps tools loaded but executes only local read operations', () 
     assert.equal(verdict.denied, true, name)
     assert.match(verdict.reason, /工具仍已加载/, name)
     assert.match(verdict.reason, /自动接受编辑模式或正常模式/, name)
+  }
+})
+
+test('plan mode allows research like Claude Code: web search, GET fetches and read-only subagents', () => {
+  const allowed = [
+    ['web_search', { query: 'node test runner' }],
+    ['fetch_url', { url: 'https://example.com' }],
+    ['fetch_url', { url: 'https://example.com', method: 'HEAD' }],
+    ['Agent', { subagent_type: 'explore', prompt: 'find the router' }],
+    ['Agent', { tasks: [{ subagent_type: 'explore' }, { subagent_type: 'plan' }] }],
+  ]
+  for (const [name, args] of allowed) {
+    assert.deepEqual(
+      classifyToolRisk(name, args, { ...JOB, permissionMode: 'plan', metadata: { origin: 'builtin', riskClass: 'read' } }),
+      { needsApproval: false, risk: 'low', reason: null },
+      `${name} ${JSON.stringify(args)}`,
+    )
+    assert.equal(isToolVisibleInPermissionMode(name, 'plan'), true, name)
+  }
+  const refused = [
+    ['fetch_url', { url: 'https://example.com', method: 'POST' }],
+    ['Agent', { subagent_type: 'general', prompt: 'edit the router' }],
+    ['Agent', { tasks: [{ subagent_type: 'explore' }, { subagent_type: 'general' }] }],
+    ['Agent', { prompt: 'no type means general' }],
+  ]
+  for (const [name, args] of refused) {
+    const verdict = classifyToolRisk(name, args, { ...JOB, permissionMode: 'plan', metadata: { origin: 'builtin' } })
+    assert.equal(verdict.denied, true, `${name} ${JSON.stringify(args)}`)
+    assert.equal(verdict.needsApproval, false)
   }
 })
 
@@ -563,11 +595,11 @@ test('plan cannot be bypassed by read metadata on a known mutating tool', () => 
   }
 })
 
-test('plan rejects write-tool previews and network reads while keeping schemas loaded', () => {
+test('plan rejects write-tool previews and non-GET requests while keeping schemas loaded', () => {
   for (const mode of ['off', 'unattended', 'all']) {
     for (const [name, args] of [
       ['apply_patch', { dry_run: true }],
-      ['fetch_url', { method: 'GET' }],
+      ['fetch_url', { method: 'POST' }],
     ]) {
       const verdict = classifyToolRisk(name, args, { mode, permissionMode: 'plan' })
       assert.equal(verdict.needsApproval, false, `${name}/${mode}`)

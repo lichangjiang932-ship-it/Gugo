@@ -101,9 +101,13 @@ export function formatDeniedToolResult(gate, locale = 'zh') {
       policyDenied: true,
       permissionMode: gate.permissionMode || null,
       suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
-      error: localized(locale,
-        `该工具存在，但操作在${currentMode}下被策略禁止。请切换到${suggestedMode}后继续；不要将此解释为缺少写入或执行工具。`,
-        `The tool exists, but the operation is forbidden by policy under ${currentMode}. Switch to ${suggestedMode} and continue; do not interpret this as a missing write or execution tool.`),
+      error: gate.permissionMode === 'plan'
+        ? localized(locale,
+          `该工具存在，但计划模式只允许只读调研（读文件、搜索、联网检索、只读子代理），此操作未执行。继续调研，把这一步写进计划交给用户批准；用户切换到${suggestedMode}后才会执行。不要将此解释为缺少写入或执行工具。`,
+          `The tool exists, but plan mode allows only read-only research (reading, searching, web lookups, read-only subagents), so this operation did not run. Keep researching and put this step in the plan for the user to approve; it runs after the user switches to ${suggestedMode}. Do not interpret this as a missing write or execution tool.`)
+        : localized(locale,
+          `该工具存在，但操作在${currentMode}下被策略禁止。请切换到${suggestedMode}后继续；不要将此解释为缺少写入或执行工具。`,
+          `The tool exists, but the operation is forbidden by policy under ${currentMode}. Switch to ${suggestedMode} and continue; do not interpret this as a missing write or execution tool.`),
     }
   }
   return {
@@ -111,9 +115,11 @@ export function formatDeniedToolResult(gate, locale = 'zh') {
     code: 'approval_denied',
     deniedByUser: true,
     retryable: false,
+    // Read by the model, which keeps working (Claude Code behaviour): it must
+    // not re-propose the declined call, but the task is not over.
     error: localized(locale,
-      `${gate?.reason || '用户拒绝了这次调用'}。本轮已停止；请由用户明确选择其他方案后再继续。`,
-      `${gate?.reason || 'The user rejected this call'}. This turn stopped; wait for the user to choose how to continue.`),
+      `${gate?.reason || '用户拒绝了这次调用'}，该调用未执行。不要原样重试；改用不需要这一步的办法继续，或说明你需要什么并询问用户。`,
+      `${gate?.reason || 'The user rejected this call'}; it was not executed. Do not retry it as-is: continue with an approach that does not need it, or explain what you need and ask the user.`),
   }
 }
 

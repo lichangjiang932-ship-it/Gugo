@@ -50,6 +50,25 @@ export const TOOL_LABEL_KEYS = {
   process_kill: 'chatMessages.toolProcessKill',
   git_status: 'chatMessages.toolGitStatus',
   git_diff: 'chatMessages.toolGitDiff',
+  git_log: 'toolActivity.labelGitLog',
+  git_blame: 'toolActivity.labelGitBlame',
+  git_commit: 'toolActivity.labelGitCommit',
+  git_push: 'toolActivity.labelGitPush',
+  git_write: 'toolActivity.labelGitWrite',
+  git_rollback: 'toolActivity.labelGitRollback',
+  patch_file: 'chatMessages.toolEditFile',
+  search_tools: 'toolActivity.labelSearchTools',
+  browser_open_url: 'toolActivity.labelBrowserOpen',
+  browser_click: 'toolActivity.labelBrowserClick',
+  browser_type: 'toolActivity.labelBrowserType',
+  browser_screenshot: 'toolActivity.labelBrowserScreenshot',
+  browser_snapshot: 'toolActivity.labelBrowserSnapshot',
+  browser_console: 'toolActivity.labelBrowserConsole',
+  browser_state: 'toolActivity.labelBrowserState',
+  browser_wait: 'toolActivity.labelBrowserWait',
+  goal_plan_status: 'toolActivity.labelGoalPlanStatus',
+  goal_plan_rewrite: 'toolActivity.labelGoalPlanRewrite',
+  goal_step_update: 'toolActivity.labelGoalStepUpdate',
   run_project_check: 'chatMessages.toolRunProjectCheck',
   manage_todos: 'chatMessages.toolManageTodos',
   request_directory: 'chatMessages.toolRequestDirectory',
@@ -83,7 +102,11 @@ export function summarizeToolArgs(name, args, t) {
   if (name === 'web_search') return args.query || empty
   if (name === 'fetch_url') return args.url || empty
   if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return args.path || empty
-  if (name === 'list_directory') return args.path || t('chatMessages.toolCurrentWorkspace')
+  if (name === 'list_directory') {
+    // "." and "./" are the workspace itself; say so the same way every time.
+    const path = String(args.path || '').trim()
+    return path && !/^\.[\\/]?$/u.test(path) ? path : t('chatMessages.toolCurrentWorkspace')
+  }
   if (name === 'grep_code') return args.pattern || t('chatMessages.toolUnspecified')
   if (name === 'find_symbol') return args.name || t('chatMessages.toolUnspecified')
   if (name === 'multi_edit') return t('chatMessages.toolEditCount', { count: (args.edits || []).length })

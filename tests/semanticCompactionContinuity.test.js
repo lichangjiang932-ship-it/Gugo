@@ -219,10 +219,12 @@ test('a semantic summary cannot grant writes against the live read-only task sta
         : { content: 'Read-only analysis completed.' }
     },
   })
+  // The summary's claim grants nothing: the write is refused by the live
+  // read-only state and never runs. The refusal then goes back to the model,
+  // which answers without writing (Claude Code behaviour).
   assert.equal(executed, 0)
-  assert.equal(result.code, 'explicit_read_only_constraint')
-  assert.equal(result.incomplete, true)
-  assert.equal(answerRequests, 1, 'a summary cannot authorize a wrap-up request after the refusal')
+  assert.equal(answerRequests, 2)
+  assert.equal(result.text, 'Read-only analysis completed.')
 })
 
 test('summary requests preserve the first user attachment, recovery event, and visible prompt estimate', async () => {

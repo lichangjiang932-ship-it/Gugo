@@ -30,12 +30,12 @@ test('the entry page lists every tool with the key that reaches it', async () =>
     root.render(<HashRouter><WorkbenchEntry onTabChange={(tool) => picked.push(tool)} t={t} /></HashRouter>)
   })
   const rows = [...document.querySelectorAll('[data-testid="workbench-entry-row"]')]
-  assert.deepEqual(rows.map((row) => row.dataset.tool), ['chat', 'browser', 'terminal'])
+  assert.deepEqual(rows.map((row) => row.dataset.tool), ['files', 'browser', 'terminal'])
   // Each row shows its own shortcut, from the same definitions the key handler uses.
   const chips = [...document.querySelectorAll('[data-testid="workbench-entry-shortcut"]')]
     .map((chip) => chip.textContent)
   assert.equal(chips.length, 3)
-  assert.match(chips[0], /Alt\+S$/u)
+  assert.match(chips[0], /Alt\+F$/u)
   assert.match(chips[1], /T$/u)
   // One click on a row picks that tool.
   await act(async () => {

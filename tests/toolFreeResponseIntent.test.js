@@ -75,11 +75,13 @@ test('a malicious artifact proposal cannot ask approval, dispatch, or request mo
   }), proposal('set_deliverables', { artifact_ids: [] })] })
   assert.deepEqual(outcome.approvals, [])
   assert.deepEqual(outcome.executions, [])
-  assert.equal(outcome.requests.length, 1)
+  // The refusal goes back to the model once (it could still just reply); a
+  // second round of the same proposals ends the turn on the constraint.
+  assert.equal(outcome.requests.length, 2)
   assert.equal(outcome.result.code, 'explicit_tool_free_constraint')
   assert.equal(outcome.result.incomplete, true)
   assert.equal(outcome.completed[0].result.denied, true)
-  assert.equal(outcome.completed[1].result.executed, false)
+  assert.ok(outcome.completed.every(({ result }) => result.ok !== true && result.executed !== true))
 })
 
 test('explicit tool-free replies in both languages do not inherit a previous artifact request', async () => {
@@ -119,7 +121,7 @@ test('even read-only and control proposals are refused without approval or execu
   for (const name of ['read_file', 'search_tools', 'reflect']) {
     const outcome = await runFixture({ modelTools: [proposal(name, name === 'read_file' ? { path: 'x.txt' } : {})] })
     assert.equal(outcome.result.code, 'explicit_tool_free_constraint', name)
-    assert.equal(outcome.requests.length, 1, name)
+    assert.equal(outcome.requests.length, 2, name)
     assert.deepEqual(outcome.approvals, [], name)
     assert.deepEqual(outcome.executions, [], name)
   }
@@ -135,8 +137,11 @@ test('restored pending tools cannot revive old artifact or deferred-tool contrac
   checkpoint.completionGuards.requiredArtifactTools = ['create_html_app']
   checkpoint.completionGuards.dynamicallyMountedToolNames = ['read_file', 'write_file']
   const resumed = await runFixture({ restored: checkpoint })
-  assert.equal(resumed.result.code, 'explicit_tool_free_constraint')
-  assert.equal(resumed.requests.length, 0)
+  // The restored proposal is refused, not revived; the model then gives the
+  // tool-free reply it was asked for.
+  assert.equal(resumed.result.text, reply)
+  assert.equal(resumed.requests.length, 1)
+  assert.deepEqual(resumed.requests[0].tools || [], [])
   assert.deepEqual(resumed.executions, [])
   assert.deepEqual(resumed.approvals, [])
 })

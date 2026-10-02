@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
-import { Plus, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
+import NewChatGlyph from './leftRail/NewChatGlyph.jsx'
 import { useLocation, useNavigate } from '../lib/router.jsx'
 import { useAppContext } from '../store/AppContext'
 import { archiveSessionRemote, forkSessionRemote, pinSessionRemote, unarchiveSessionRemote, unpinSessionRemote } from '../lib/sessionClient.js'
@@ -106,7 +107,9 @@ export default function LeftRail() {
     }
   }
 
-  const searchShortcut = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || '') ? '⌘ K' : 'Ctrl K'
+  const isMac = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || '')
+  const searchShortcut = isMac ? '⌘ K' : 'Ctrl K'
+  const newChatShortcut = isMac ? '⌥ N' : 'Alt N'
 
   return <>
     {narrowViewport && mobileExpanded && <button type="button" data-left-rail-backdrop aria-hidden="true" tabIndex={-1} aria-label={t('chatMessages.hideSidebar')} onClick={() => closeMobileRail({ restoreFocus: true })} className="fixed inset-0 z-40 cursor-default bg-ink/20" />}
@@ -117,7 +120,7 @@ export default function LeftRail() {
       </header>
 
       <div className="mt-2 flex flex-col gap-0.5">
-        <button type="button" onClick={handleNewChat} title={collapsed ? t('nav.newChat') : undefined} aria-label={t('nav.newChat')} className={`left-rail-nav-button flex h-9 w-full items-center rounded-control bg-ink/[0.045] text-ui font-medium text-ink transition-colors hover:bg-ink/[0.075] ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'}`}><Plus className="h-[18px] w-[18px] shrink-0" />{!collapsed && <span>{t('nav.newChat')}</span>}</button>
+        <button type="button" onClick={handleNewChat} data-sidebar-new-chat title={t('nav.newChatShortcut', { shortcut: newChatShortcut })} aria-label={t('nav.newChat')} aria-keyshortcuts="Alt+n" className={`left-rail-nav-button group flex h-9 w-full items-center rounded-control bg-ink/[0.045] text-ui font-medium text-ink transition-colors hover:bg-ink/[0.075] ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'}`}><NewChatGlyph className="h-[18px] w-[18px] shrink-0" />{!collapsed && <><span className="min-w-0 flex-1 truncate text-left">{t('nav.newChat')}</span><kbd className="left-rail-shortcut opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true">{newChatShortcut}</kbd></>}</button>
         <button type="button" onClick={handleSearch} data-sidebar-search aria-label={t('nav.searchPlaceholder')}
           aria-haspopup="dialog" aria-keyshortcuts="Control+k Meta+k" title={t('nav.searchShortcut', { shortcut: searchShortcut })}
           className={`left-rail-nav-button flex h-9 w-full items-center rounded-control text-ui text-ink-soft transition-colors hover:bg-ink/[0.045] hover:text-ink ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'}`}>

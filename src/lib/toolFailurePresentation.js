@@ -29,6 +29,11 @@ export function toolFailureSummary(call = {}, t) {
       .join(' ').match(/slides\[(\d{1,5})\]\.elements\[(\d{1,5})\]/)
     if (path) return t('toolActivity.pptxFrameOverflow', { slide: Number(path[1]) + 1, element: Number(path[2]) + 1 })
   }
+  // The schema check's hint ("fix the arguments and call again") is written for
+  // the model, which acts on it. The reader needs what happened instead.
+  if (typeof t === 'function' && (call.errorCode || result?.code) === 'tool_arguments_validation_failed') {
+    return t('toolActivity.argumentsRejected')
+  }
   const candidates = [
     call.errorHint,
     result?.error?.hint,

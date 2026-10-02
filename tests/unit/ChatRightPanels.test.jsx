@@ -31,7 +31,7 @@ test('a generated file preview is the only mounted right panel', async () => {
       mimeType: 'audio/mpeg',
       downloadUrl: '/api/attachments/current-audio/content',
     }],
-    workbenchTab: 'chat',
+    workbenchTab: 'files',
     onWorkbenchTabChange: noop,
     onCloseWorkbench: noop,
     onOpenArtifact: noop,
@@ -91,10 +91,10 @@ test('a generated file preview is the only mounted right panel', async () => {
     // strip no longer exists.
     assert.equal(
       rootElement.querySelector('[data-testid="workbench-tool-switch"] [aria-current="page"]').getAttribute('data-tool'),
-      'chat',
+      'files',
     )
     assert.ok(rootElement.querySelector('[data-testid="workbench-tool-entry"]'))
-    assert.ok(rootElement.querySelector('textarea'), 'the side chat panel renders')
+    assert.ok(rootElement.querySelector('[data-testid="workbench-files"]'), 'the workspace files panel renders')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

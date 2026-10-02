@@ -1,5 +1,8 @@
 /**
- * The three workbench tools and the keys that open them.
+ * The three workbench tools and the keys that open them: the workspace's files,
+ * the browser and the terminal. (Files took the side chat's place: a second chat
+ * beside the conversation duplicated the composer, while the files the session
+ * produced had no home outside the task card.)
  *
  * One definition, used by both the tool rail (for the tooltip and the hint) and
  * the key handler, so a shortcut shown on a button is always the shortcut that
@@ -13,7 +16,7 @@
  * Ctrl combination is available.
  */
 export const WORKBENCH_TOOLS = Object.freeze([
-  Object.freeze({ id: 'chat', labelKey: 'workbench.chat', ctrl: true, alt: true, key: 's' }),
+  Object.freeze({ id: 'files', labelKey: 'workbench.workspaceFiles', ctrl: true, alt: true, key: 'f' }),
   Object.freeze({ id: 'browser', labelKey: 'workbench.browser', ctrl: true, alt: false, key: 't' }),
   Object.freeze({ id: 'terminal', labelKey: 'workbench.terminal', ctrl: true, alt: false, key: '\\' }),
 ])

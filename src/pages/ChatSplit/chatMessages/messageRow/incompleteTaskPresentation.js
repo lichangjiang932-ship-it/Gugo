@@ -28,6 +28,16 @@ const REASON_KEYS = Object.freeze({
   task_verification_repair_exhausted: 'chatMessages.incompleteReasonVerificationExhausted',
   task_verification_repair_pending: 'chatMessages.incompleteReasonVerificationPending',
   tool_no_progress: 'chatMessages.incompleteReasonNoProgress',
+  // The authorization family. Without these the card printed the raw code
+  // ("APPROVAL_DENIED") as its reason.
+  approval_denied: 'toolApproval.reasonDenied',
+  approval_required: 'toolApproval.reasonRequired',
+  approval_expired: 'toolApproval.reasonExpired',
+  tool_permission_denied: 'toolApproval.reasonPermission',
+  tool_authorization_unavailable: 'toolApproval.reasonAuthorization',
+  explicit_read_only_constraint: 'toolApproval.reasonReadOnly',
+  explicit_tool_free_constraint: 'toolApproval.reasonToolFree',
+  tool_disabled_by_config: 'toolApproval.reasonToolDisabled',
 })
 
 const REQUIREMENT_KEYS = Object.freeze({
@@ -58,6 +68,13 @@ const REQUIREMENT_KEYS = Object.freeze({
   verification_failure_repair: 'chatMessages.incompleteRequirementVerificationRepair',
   conclusive_project_verification: 'chatMessages.incompleteRequirementConclusiveVerification',
   rerun_verification_scope: 'chatMessages.incompleteRequirementVerificationRerun',
+  user_direction: 'toolApproval.requirementUserDirection',
+  tool_approval: 'toolApproval.requirementApproval',
+  renewed_tool_approval: 'toolApproval.requirementRenewedApproval',
+  tool_permission: 'toolApproval.requirementPermission',
+  authorization_state_repair: 'toolApproval.requirementAuthorization',
+  explicit_user_authorization: 'toolApproval.requirementWriteAuthorization',
+  enabled_tool_configuration: 'toolApproval.requirementToolConfig',
 })
 
 const DEFAULT_REQUIREMENTS = Object.freeze({
@@ -123,6 +140,22 @@ function translated(t, key, values) {
 export function normalizeIncompleteReasonCode(value) {
   const reason = String(value || '').trim()
   return INCOMPLETE_REASON_CODE_PATTERN.test(reason) ? reason.toLowerCase() : ''
+}
+
+const AUTHORIZATION_REASONS = new Set([
+  'approval_denied', 'approval_required', 'approval_expired', 'tool_permission_denied',
+  'tool_authorization_unavailable', 'explicit_read_only_constraint',
+  'explicit_tool_free_constraint', 'tool_disabled_by_config',
+])
+
+/**
+ * Whether the incomplete card below the answer already says why the turn
+ * stopped in the user's terms. When it does, the answer must not lead with the
+ * generic "something went wrong — check your model's tool support" line: for a
+ * refusal or a permission stop that sentence is both redundant and wrong.
+ */
+export function incompleteCardExplainsStop(failure) {
+  return AUTHORIZATION_REASONS.has(normalizeIncompleteReasonCode(failure?.incompleteReason))
 }
 
 function normalizeReason(failure) {

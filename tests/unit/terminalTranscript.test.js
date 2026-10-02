@@ -71,3 +71,10 @@ test('an empty or missing transcript is usable rather than throwing', () => {
   const appended = appendTerminalEntry(null, entry('hello'))
   assert.deepEqual(textOf(appended), ['hello'])
 })
+
+test('Windows CRLF output is shown as plain lines without a trailing blank', () => {
+  const transcript = appendTerminalEntry(createTerminalTranscript(), {
+    stream: 'stdout', text: 'gugo-probe \r\nD:\\work\\app\r\n',
+  })
+  assert.equal(transcript.entries[0].text, 'gugo-probe \nD:\\work\\app')
+})

@@ -30,6 +30,8 @@ import chatSteering from './chatSteering.js'
 import chatPreview from './chatPreview.js'
 import chatWindow from './chatWindow.js'
 import chatTimeline from './chatTimeline.js'
+import codeBlock from './codeBlock.js'
+import welcome from './welcome.js'
 import chatAttachments from './chatAttachments.js'
 import localFiles from './localFiles.js'
 import mcp from './mcp.js'
@@ -94,6 +96,8 @@ const domains = [
   ['chatPreview', chatPreview],
   ['chatWindow', chatWindow],
   ['chatTimeline', chatTimeline],
+  ['codeBlock', codeBlock],
+  ['welcome', welcome],
   ['chatAttachments', chatAttachments],
   ['localFiles', localFiles],
   ['mcp', mcp],

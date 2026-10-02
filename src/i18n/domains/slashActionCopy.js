@@ -4,10 +4,6 @@ export const SLASH_ACTION_COPY = {
       "MCP",
       "Show MCP server status"
     ],
-    "side": [
-      "Side chat",
-      "Start a temporary side conversation"
-    ],
     "init": [
       "Initialize",
       "Create an AGENTS.md file with workspace instructions"
@@ -46,7 +42,6 @@ export const SLASH_ACTION_COPY = {
     ],
     "notices": {
       "mcp": "Opened MCP servers.",
-      "side": "Opened side chat.",
       "init": "Creating AGENTS.md.",
       "compact": "Chat context compacted.",
       "compactEmpty": "This chat is still too short to compact.",
@@ -144,10 +139,6 @@ export const SLASH_ACTION_COPY = {
       "MCP",
       "显示 MCP 服务器状态"
     ],
-    "side": [
-      "侧边",
-      "发起临时侧边聊天"
-    ],
     "init": [
       "初始化",
       "创建包含工作区说明的 AGENTS.md 文件"
@@ -186,7 +177,6 @@ export const SLASH_ACTION_COPY = {
     ],
     "notices": {
       "mcp": "已打开 MCP 服务器。",
-      "side": "已打开侧边聊天。",
       "init": "正在创建 AGENTS.md。",
       "compact": "已压缩聊天上下文。",
       "compactEmpty": "当前聊天内容较少，暂时无需压缩。",

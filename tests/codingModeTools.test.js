@@ -1,13 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildToolSpecs, listToolNames, resolveToolsForMode } from '../src/lib/tools/index.js'
-import { listBuiltinSpecs, resolveSpecsForMode } from '../server/services/toolRegistry.js'
+import { getBuiltinSpec, listBuiltinNames, resolveSpecsForMode } from '../server/services/toolRegistry.js'
 
-const SERVER_CATALOG = listBuiltinSpecs()
-
-test('frontend consumes the canonical server git capability catalog', () => {
-  const names = listToolNames(SERVER_CATALOG)
+test('canonical server catalog exposes the git capability tools', () => {
+  const names = listBuiltinNames()
   assert.ok(names.includes('git_status'))
   assert.ok(names.includes('git_diff'))
   assert.ok(names.includes('run_project_check'))
@@ -16,41 +13,38 @@ test('frontend consumes the canonical server git capability catalog', () => {
 })
 
 test('shell and git tool schemas accept authorized directory cwd values', () => {
-  const specs = buildToolSpecs(
-    ['bash_exec', 'git_status', 'git_diff', 'run_project_check'],
-    SERVER_CATALOG,
-  )
-  for (const spec of specs) {
-    assert.ok(spec.function.parameters.properties.cwd, `${spec.function.name} should expose cwd`)
+  for (const name of ['bash_exec', 'git_status', 'git_diff', 'run_project_check']) {
+    const spec = getBuiltinSpec(name)
+    assert.ok(spec, `${name} should be in the server catalog`)
+    assert.ok(spec.function.parameters.properties.cwd, `${name} should expose cwd`)
   }
 })
 
 test('plan mode intersects enabled tools with the canonical server policy catalog', () => {
-  const planCatalog = resolveSpecsForMode('plan')
-  const enabled = resolveToolsForMode({
-    web_search: true,
-    read_file: true,
-    write_file: true,
-    edit_file: true,
-    bash_exec: true,
-    git_status: true,
-    git_diff: true,
-    run_project_check: true,
-  }, 'plan', planCatalog)
+  const planNames = new Set(resolveSpecsForMode('plan').map((entry) => entry.name))
+  const enabled = [
+    'web_search',
+    'read_file',
+    'write_file',
+    'edit_file',
+    'bash_exec',
+    'git_status',
+    'git_diff',
+    'run_project_check',
+  ].filter((name) => planNames.has(name))
+  // Plan mode researches like Claude Code's: web search joins the local reads;
+  // writes, commands and project checks stay out.
   assert.deepEqual(enabled.sort(), [
+    'web_search',
     'read_file',
     'git_status',
     'git_diff',
   ].sort())
-  assert.deepEqual(resolveToolsForMode({ read_file: true }, 'plan'), [])
 })
 
 test('code mode enables Claude/Codex workspace loop tools', () => {
-  const enabled = resolveToolsForMode({}, 'code')
+  const serverCodeNames = new Set(resolveSpecsForMode('code').map((entry) => entry.name))
   for (const name of ['run_code', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check']) {
-    assert.ok(enabled.includes(name), `${name} should be available in code mode`)
+    assert.ok(serverCodeNames.has(name), `${name} should be available in code mode`)
   }
-
-  const serverCodeNames = resolveSpecsForMode('code').map((entry) => entry.name)
-  assert.ok(serverCodeNames.includes('run_code'))
 })

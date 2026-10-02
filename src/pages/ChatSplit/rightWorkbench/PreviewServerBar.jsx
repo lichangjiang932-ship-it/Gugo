@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Play, RotateCw, Server, Square, Wand2 } from 'lucide-react'
 
+import { BROWSER_OPEN_EVENT } from '../../../components/useEmbeddedBrowser.js'
 import usePreviewServer from './usePreviewServer.js'
 
 const STATUS_KEYS = Object.freeze({
@@ -46,6 +47,19 @@ export default function PreviewServerBar({ active = true, t, workspacePath = '' 
   const status = server.status || 'stopped'
   const running = ['starting', 'ready'].includes(status)
   const selected = configurations.find((entry) => entry.name === server.name) || configurations[0] || null
+
+  // The moment the dev server is ready, the browser beneath shows it — the step
+  // a reader would otherwise do by hand every time (Claude Code's preview does
+  // the same). Only on the transition, so a reader who navigated away is not
+  // pulled back on every poll.
+  const lastStatusRef = useRef(status)
+  useEffect(() => {
+    const previous = lastStatusRef.current
+    lastStatusRef.current = status
+    if (status === 'ready' && previous !== 'ready' && server.url) {
+      window.dispatchEvent(new CustomEvent(BROWSER_OPEN_EVENT, { detail: { url: server.url } }))
+    }
+  }, [server.url, status])
 
   if (!workspacePath) {
     return (

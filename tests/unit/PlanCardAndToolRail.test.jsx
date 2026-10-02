@@ -39,8 +39,10 @@ async function mount(panel) {
 // ---------------------------------------------------------------------------
 
 test('exactly the three tool combinations open a tool, and nothing else does', () => {
-  assert.deepEqual(WORKBENCH_TOOLS.map((entry) => entry.id), ['chat', 'browser', 'terminal'])
-  assert.equal(matchWorkbenchShortcut({ key: 's', ctrlKey: true, altKey: true }), 'chat')
+  assert.deepEqual(WORKBENCH_TOOLS.map((entry) => entry.id), ['files', 'browser', 'terminal'])
+  assert.equal(matchWorkbenchShortcut({ key: 'f', ctrlKey: true, altKey: true }), 'files')
+  // The side chat's old key opens nothing now.
+  assert.equal(matchWorkbenchShortcut({ key: 's', ctrlKey: true, altKey: true }), null)
   assert.equal(matchWorkbenchShortcut({ key: 't', ctrlKey: true }), 'browser')
   assert.equal(matchWorkbenchShortcut({ key: '\\', ctrlKey: true }), 'terminal')
 
@@ -63,13 +65,13 @@ test('exactly the three tool combinations open a tool, and nothing else does', (
 test('the hint on a tool button is the key that actually works', () => {
   // Written for this machine's keyboard, so a Mac reader is not told to press a
   // key their keyboard does not have.
-  assert.equal(shortcutLabelFor(tool('chat'), { platform: 'Win32' }), 'Ctrl+Alt+S')
+  assert.equal(shortcutLabelFor(tool('files'), { platform: 'Win32' }), 'Ctrl+Alt+F')
   assert.equal(shortcutLabelFor(tool('browser'), { platform: 'Win32' }), 'Ctrl+T')
   assert.equal(shortcutLabelFor(tool('terminal'), { platform: 'Win32' }), 'Ctrl+\\')
-  assert.equal(shortcutLabelFor(tool('chat'), { platform: 'MacIntel' }), '⌘⌥S')
+  assert.equal(shortcutLabelFor(tool('files'), { platform: 'MacIntel' }), '⌘⌥F')
   assert.equal(shortcutLabelFor(tool('browser'), { platform: 'MacIntel' }), '⌘T')
   // The narrow rail prints only the final key; the modifier lives in the tooltip.
-  assert.equal(shortcutKeyHint(tool('chat')), 'S')
+  assert.equal(shortcutKeyHint(tool('files')), 'F')
   assert.equal(shortcutKeyHint(tool('terminal')), '\\')
   assert.equal(shortcutLabelFor(undefined), '')
 })
@@ -111,4 +113,24 @@ test('an empty session still gets a card that says so rather than a blank box', 
   const { dom, root, rootElement } = await mount(<PlanCard onClose={() => {}} t={t} todos={[]} />)
   t2.after(async () => { await act(async () => root.unmount()); dom.window.close() })
   assert.match(rootElement.querySelector('[data-testid="plan-card"]').textContent, /还没有任务清单/)
+})
+
+test('the plan card clears the header row and Escape inside it closes it', async (t2) => {
+  const closed = []
+  const { dom, root, rootElement } = await mount(<PlanCard onClose={() => closed.push(true)} t={t} todos={[]} />)
+  t2.after(async () => { await act(async () => root.unmount()); dom.window.close() })
+  const card = rootElement.querySelector('[data-testid="plan-card"]')
+  // Anchored at top-3 the card sat on the 48px header and hid its toggle and the
+  // workbench's close button.
+  assert.match(card.className, /\btop-14\b/)
+  assert.doesNotMatch(card.className, /\btop-3\b/)
+  // Progress only: the files moved to the workbench's own tool.
+  assert.equal(rootElement.querySelector('[role="tablist"]'), null)
+  assert.equal(rootElement.querySelector('[data-testid="plan-card-tab-files"]'), null)
+  assert.equal(rootElement.querySelector('[data-testid="workbench-plan-output"]'), null)
+  await act(async () => {
+    rootElement.querySelector('[data-testid="plan-card-close"]')
+      .dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  })
+  assert.deepEqual(closed, [true])
 })

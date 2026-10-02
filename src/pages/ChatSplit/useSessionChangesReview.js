@@ -18,7 +18,19 @@ import { countRecordedEditLines, sessionFileChanges, sessionFileEditIndex } from
 export default function useSessionChangesReview({ messages, onOpen = null, onOpenDiff = null, workspacePath = '' }) {
   const [visible, setVisible] = useState(false)
   const scope = useMemo(() => ({ workspacePath }), [workspacePath])
-  const count = useMemo(() => sessionFileChanges(messages, scope).totals.files, [messages, scope])
+  // The header shows "+a −d" like Codex's diff stat. Each file contributes the
+  // executor's own counts when it reported them, otherwise the lines of the
+  // edits it recorded — the same numbers its row in the panel shows.
+  const summary = useMemo(() => {
+    const all = sessionFileChanges(messages, scope)
+    const index = all.files.some((file) => !file.reported) ? sessionFileEditIndex(messages, scope) : null
+    const lines = all.files.reduce((totals, file) => {
+      const counts = file.reported || countRecordedEditLines(index?.get(file.key) || [])
+      return { additions: totals.additions + counts.additions, deletions: totals.deletions + counts.deletions }
+    }, { additions: 0, deletions: 0 })
+    return { files: all.totals.files, ...lines }
+  }, [messages, scope])
+  const count = summary.files
   const changes = useMemo(
     () => (visible ? sessionFileChanges(messages, scope) : null),
     [visible, messages, scope],
@@ -58,5 +70,5 @@ export default function useSessionChangesReview({ messages, onOpen = null, onOpe
     })
   }, [onOpenDiff])
 
-  return { changes, close, count, editIndex, open, openDiff, toggle, visible }
+  return { changes, close, count, editIndex, open, openDiff, summary, toggle, visible }
 }

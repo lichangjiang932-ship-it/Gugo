@@ -180,7 +180,10 @@ test('chat send guards model readiness before clearing drafts or creating sessio
   assert.ok(sendMessage > executorGuard)
   assert.match(sendActions, /const handleWorkbenchSend = async \(content\) => \{[\s\S]*if \(!modelReadiness\.canSend\)[\s\S]*return false/)
   assert.match(page, /onWorkbenchSend=\{handleWorkbenchSend\}/)
-  assert.match(workbench, /const accepted = await onSendMessage\?\.\(content\)[\s\S]*if \(accepted === true\)/)
+  // The side chat was removed, so the workbench has no input of its own; the
+  // readiness-guarded send above is what plugin tabs still receive.
+  assert.doesNotMatch(workbench, /submitSideChat|sideInput/)
+  assert.match(workbench, /onSendMessage=\{onSendMessage\}/)
   assert.match(flow, /const modelMode = preflight\.selection\.modelMode/)
   assert.match(flow, /onTurnAccepted: commitClientTurn/)
   assert.match(flow, /if \(turnResult\?\.rejectedBeforeStart\)[\s\S]*return false/)

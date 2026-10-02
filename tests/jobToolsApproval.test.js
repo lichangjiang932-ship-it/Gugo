@@ -174,7 +174,7 @@ test('EDITED ARGS: 改写后的参数才是 executeTool 收到的参数', async 
   assert.equal(result.text, '改写后已执行。')
 })
 
-test('DENY: 拒绝保留工具结果并停止本轮，不调用模型收尾', async () => {
+test('DENY: 拒绝作为工具结果交还模型，模型换路继续，被拒命令绝不执行', async () => {
   const { userId } = issueNormalApprovalSession('approval-deny@example.com')
   const calls = []
   const fakeExecute = async ({ name, args }) => {
@@ -199,13 +199,14 @@ test('DENY: 拒绝保留工具结果并停止本轮，不调用模型收尾', as
   const result = await loop
 
   assert.equal(calls.length, 0, '被拒绝时 executeTool 一次都不能被调用')
-  assert.equal(result.code, 'approval_denied')
-  assert.equal(result.incomplete, true)
-  assert.match(result.text, /本轮已停止/)
+  assert.equal(result.text, '我换个方式来做。', '模型读到拒绝后自己收尾，而不是本轮直接终止')
+  assert.notEqual(result.code, 'approval_denied')
   assert.equal(result.paused, undefined, '拒绝不是 pause')
   assert.equal(result.budgetExceeded, undefined)
 
-  assert.equal(seenMessages.length, 1, '拒绝后不再请求模型')
+  assert.equal(seenMessages.length, 2, '拒绝后模型再得到一轮')
+  const deniedToolMessage = seenMessages[1].find((m) => m.role === 'tool' && m.name === 'bash_exec')
+  assert.match(String(deniedToolMessage?.content || ''), /不要原样重试/, '模型看到的是拒绝事实和换路提示')
   const toolMsg = checkpoint.messages.find((m) => m.role === 'tool' && m.name === 'bash_exec')
   assert.ok(toolMsg, '应当有一条 bash_exec 的 tool 结果消息')
   const payload = JSON.parse(toolMsg.content)

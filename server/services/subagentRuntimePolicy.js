@@ -183,7 +183,26 @@ const READONLY_TOOL_SPECS = [
   ...LSP_TOOL_SPECS,
   // ★ M3:反思 / 请求澄清(纯思维型,无副作用)
   ...AGENTIC_TOOL_SPECS,
+  // Skills are instructions, not permissions. A subagent loads one through the
+  // same activation the main loop uses (runtimeSkillActivation: the user's own
+  // visible skills, the same ownership/trust check), never a second path.
+  getBuiltinSpec('load_skill'),
 ]
+
+/**
+ * Tools a subagent may call but is not shown up front. They stay authorized —
+ * the same validator, approval gate, directory grant and side-effect ledger
+ * apply — and `search_tools` mounts them when the task needs one. A smaller
+ * opening schema is what keeps a local model's subagent on task (Claude Code
+ * defers rarely used tools the same way).
+ */
+export const SUBAGENT_DEFERRED_TOOL_NAMES = Object.freeze(new Set([
+  'lsp', 'find_symbol', 'list_imports', 'sleep_until', 'request_directory',
+  'git_log', 'git_blame', 'run_project_check', 'remember',
+]))
+
+/** The discovery tool, added only when this run has something deferred. */
+export const SUBAGENT_SEARCH_TOOL_SPEC = getBuiltinSpec('search_tools')
 
 /**
  * 完整工具规格 — 用于 general 类型（可读写）。

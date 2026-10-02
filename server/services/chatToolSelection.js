@@ -83,6 +83,33 @@ const GENERATOR_TOOL_NAMES = new Set([
   'generate_image', 'render_pdf_pages',
 ])
 const LOCAL_CONTEXT_REFERENCE = /(?:网页|网站|页面|幻灯片|演示文稿|文档|表格|工作簿|图片|图像|视频|音频|压缩包|文件|目录|文件夹|项目|代码|源码)|\b(?:website|webpage|html|css|javascript|typescript|react|vue|frontend|pptx?|powerpoint|slides?|docx?|xlsx?|spreadsheet|pdf|image|video|audio|archive|zip|file|folder|directory|project|repository|repo|workspace|codebase|source code)\b/i
+// Scripts the intent vocabulary does not read: kana, Hangul, Cyrillic, Greek,
+// Arabic, Hebrew, Thai, Devanagari, and Latin with diacritics (es/fr/de/pt…).
+// Escaped ranges: a literal Thai or Devanagari mark in a class reads as a
+// combining character to the linter (and to some editors).
+const UNCOVERED_LANGUAGE_SCRIPT = /[\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u0370-\u03ff\u0620-\u06ff\u05d0-\u05ea\u0e01-\u0e5b\u0904-\u097f\u00c0-\u024f]/u
+// Romance-language imperatives often carry no diacritic ("Arregla el error en
+// app.js"); these common work verbs cover that case without an English clash.
+const ROMANCE_WORK_VERB = /\b(?:arregla|corrige|corrija|repara|ejecuta|crea|cree|escribe|modifica|actualiza|elimina|borra|corrigez|r[ée]pare|ex[ée]cute|cr[ée]e|[ée]cris|modifie|supprime|correggi|esegui|scrivi|aggiorna|conserta|crie|escreva|atualize|remova)\b/iu
+const UNCOVERED_LANGUAGE_NO_CHANGE = /(?:変更|編集|修正|書き換え)(?:は)?しない|(?:変更|編集)しないで|読むだけ|수정하지\s*마|변경하지\s*마|읽기만|не\s+(?:изменяй|меняй|редактируй)|только\s+чита|nicht\s+(?:ändern|bearbeiten|verändern)|\bno\s+(?:modifiques|cambies|edites)\b|\bne\s+(?:modifie|change)\s+pas\b|\bnon\s+modificare\b|\bnão\s+(?:modifique|altere)\b|\bsolo\s+(?:lee|lectura)\b|\blecture\s+seule\b/iu
+const ANY_FILE_TARGET = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)?(?:[\p{L}\p{N}_@%+.,()[\]{} -]+[\\/])*[\p{L}\p{N}_@%+-]+\.[a-z0-9]{1,12}(?=$|[\s"'`),.;:!?，。；：！？぀-ヿ가-힯])/iu
+
+/**
+ * A request in a language the intent vocabulary cannot read, naming a concrete
+ * file. Its verbs are unknown, so whether it is a work order cannot be told from
+ * words — but naming a file is strong evidence of one. The edit tools are then
+ * offered, as Claude Code always offers them; only the offer changes. Execution
+ * still goes through the read-only, directory and approval gates, and the
+ * turn's completion policy is not touched.
+ */
+function uncoveredLanguageFileRequest(text) {
+  const prompt = String(text || '')
+  if (!ANY_FILE_TARGET.test(prompt)) return false
+  // "Read it, don't change it" in those languages keeps the read tier: the
+  // offer follows the reader's own boundary even where the vocabulary is thin.
+  if (UNCOVERED_LANGUAGE_NO_CHANGE.test(prompt)) return false
+  return UNCOVERED_LANGUAGE_SCRIPT.test(prompt) || ROMANCE_WORK_VERB.test(prompt)
+}
 const ARTIFACT_SOURCE_REFERENCE = /(?:当前|已有|先前|之前).{0,24}(?:产物|文档|文件)|\b(?:current|existing|previous|prior|generated)\b.{0,24}\b(?:artifact|document|file|output)\b/i
 const MCP_INTENT = /(?:模型上下文协议)|\bmcp\b/i
 const RUNTIME_PLUGIN_INTENT = /(?:运行时插件|插件工具)|\b(?:runtime plugin|plugin tool)s?\b/i
@@ -339,6 +366,7 @@ function compactSelectedToolNames({
     requiredNames !== null
     || (capabilityMode === 'execute' && !remoteIntent && !browserIntent && !webIntent)
     || (executionRequired && !remoteIntent)
+    || (!remoteIntent && uncoveredLanguageFileRequest(current))
   )
 
   if (localExecution) {

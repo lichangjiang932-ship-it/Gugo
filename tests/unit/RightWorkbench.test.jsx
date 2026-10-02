@@ -15,10 +15,9 @@ import { translateKey } from '../../src/i18n/translations.js'
 const t = (key, values = {}) => translateKey(key, 'zh').replace(/\{(\w+)\}/g, (_, name) => values[name])
 
 /**
- * The artifact list is no longer a workbench tab — the tool rail carries only
- * chat, browser and terminal — so these tests render the list itself. What they
- * assert (which artifacts are offered, dedup, thumbnails, verification state) is
- * unchanged; only the fact that a tab used to mount it is gone.
+ * The artifact list is the workbench's "workspace files" tool. These tests render
+ * the list itself so they can assert what it offers (which artifacts, dedup,
+ * thumbnails, verification state) without mounting the whole panel.
  */
 function ArtifactList({ attachments = [], messages = [], onOpenArtifact }) {
   return <WorkbenchFiles artifacts={collectArtifacts(messages, attachments)} onOpenArtifact={onOpenArtifact} t={t} />
@@ -54,39 +53,6 @@ function pointerEvent(dom, type, values) {
   return event
 }
 
-function deferred() {
-  let resolve
-  let reject
-  const promise = new Promise((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, reject, resolve }
-}
-
-async function enterSideChatMessage(dom, rootElement, value) {
-  const textarea = rootElement.querySelector('textarea')
-  assert.ok(textarea)
-  const reactPropsKey = Object.keys(textarea).find((key) => key.startsWith('__reactProps$'))
-  const onChange = reactPropsKey ? textarea[reactPropsKey]?.onChange : null
-  assert.equal(typeof onChange, 'function')
-  await act(async () => {
-    onChange({ target: { value } })
-    await Promise.resolve()
-  })
-  assert.equal(textarea.value, value)
-  return textarea
-}
-
-async function submitSideChat(dom, rootElement) {
-  const form = rootElement.querySelector('textarea')?.closest('form')
-  assert.ok(form)
-  await act(async () => {
-    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
-    await Promise.resolve()
-  })
-}
-
 test('the header toolbar offers exactly the three tools and the panel resizes', async () => {
   const dom = setupDom()
   // A stored width proves the panel keeps the reader's chosen size across mounts.
@@ -99,7 +65,7 @@ test('the header toolbar offers exactly the three tools and the panel resizes', 
     await act(async () => {
       root.render(
         <RightWorkbench
-          activeTab="chat"
+          activeTab="files"
           onTabChange={(tab) => selectedTabs.push(tab)}
           onClose={() => {}}
           onOpenArtifact={() => {}}
@@ -125,18 +91,19 @@ test('the header toolbar offers exactly the three tools and the panel resizes', 
     // Selection awaits the Preview runtime; preview controls stay quiet off the browser tab.
     assert.equal(toolbar.querySelector('[data-testid="workbench-tool-select"]').disabled, true)
     assert.equal(toolbar.querySelector('[data-testid="workbench-tool-refresh"]').disabled, true)
-    assert.equal(toolbar.querySelector('[data-testid="workbench-settings-tip"]').textContent, 'Preview settings')
+    // The tooltip speaks the reader's language like every other label on the bar.
+    assert.equal(toolbar.querySelector('[data-testid="workbench-settings-tip"]').textContent, '预览设置')
     // The bar itself only holds those icons, so switching tools lives in the
     // settings menu: all three, each with its own label and shortcut, none lost.
     const menu = toolbar.querySelector('[role="menu"]')
     assert.ok(menu)
     const tools = [...menu.querySelectorAll('[data-tool]')]
-    assert.deepEqual(tools.map((node) => node.getAttribute('data-tool')), ['chat', 'browser', 'terminal'])
+    assert.deepEqual(tools.map((node) => node.getAttribute('data-tool')), ['files', 'browser', 'terminal'])
     assert.ok(tools.every((node) => node.parentElement === menu), 'tools are menu entries, not a second bar')
     assert.equal(tools[0].getAttribute('aria-current'), 'page')
     // The label carries its own key, so a tooltip can never promise a shortcut
     // nobody bound.
-    assert.equal(tools[0].getAttribute('title'), '侧边聊天（Ctrl+Alt+S）')
+    assert.equal(tools[0].getAttribute('title'), '工作区文件（Ctrl+Alt+F）')
     assert.equal(tools[1].getAttribute('title'), '浏览器（Ctrl+T）')
     assert.equal(tools[2].getAttribute('title'), '终端（Ctrl+\\）')
     // With no workspace named there is nothing to copy, and the entry says so.
@@ -701,120 +668,6 @@ test('right workbench keeps only the latest receipt for the same normalized POSI
   }
 })
 
-test('right workbench keeps side chat input pending and clears it only after send acceptance', async () => {
-  const dom = setupDom()
-  const rootElement = dom.window.document.getElementById('root')
-  const root = createRoot(rootElement)
-  const send = deferred()
-  const sent = []
-
-  try {
-    await act(async () => root.render(
-      <RightWorkbench
-        messages={[]}
-        activeTab="chat"
-        onTabChange={() => {}}
-        onClose={() => {}}
-        onOpenArtifact={() => {}}
-        onSendMessage={(content) => {
-          sent.push(content)
-          return send.promise
-        }}
-        isGenerating={false}
-      />,
-    ))
-
-    const textarea = await enterSideChatMessage(dom, rootElement, 'keep until accepted')
-    await submitSideChat(dom, rootElement)
-    assert.deepEqual(sent, ['keep until accepted'])
-    assert.equal(textarea.value, 'keep until accepted')
-
-    await act(async () => {
-      send.resolve(true)
-      await send.promise
-    })
-    assert.equal(textarea.value, '')
-  } finally {
-    await act(async () => root.unmount())
-    dom.window.close()
-  }
-})
-
-test('right workbench preserves side chat input when send resolves false', async () => {
-  const dom = setupDom()
-  const rootElement = dom.window.document.getElementById('root')
-  const root = createRoot(rootElement)
-  const send = deferred()
-  const sent = []
-
-  try {
-    await act(async () => root.render(
-      <RightWorkbench
-        messages={[]}
-        activeTab="chat"
-        onTabChange={() => {}}
-        onClose={() => {}}
-        onOpenArtifact={() => {}}
-        onSendMessage={(content) => {
-          sent.push(content)
-          return send.promise
-        }}
-        isGenerating={false}
-      />,
-    ))
-
-    const textarea = await enterSideChatMessage(dom, rootElement, 'keep after rejection')
-    await submitSideChat(dom, rootElement)
-    assert.deepEqual(sent, ['keep after rejection'])
-    await act(async () => {
-      send.resolve(false)
-      await send.promise
-    })
-    assert.equal(textarea.value, 'keep after rejection')
-  } finally {
-    await act(async () => root.unmount())
-    dom.window.close()
-  }
-})
-
-test('right workbench preserves side chat input when send rejects', async () => {
-  const dom = setupDom()
-  const rootElement = dom.window.document.getElementById('root')
-  const root = createRoot(rootElement)
-  const send = deferred()
-  const sent = []
-  send.promise.catch(() => {})
-
-  try {
-    await act(async () => root.render(
-      <RightWorkbench
-        messages={[]}
-        activeTab="chat"
-        onTabChange={() => {}}
-        onClose={() => {}}
-        onOpenArtifact={() => {}}
-        onSendMessage={(content) => {
-          sent.push(content)
-          return send.promise
-        }}
-        isGenerating={false}
-      />,
-    ))
-
-    const textarea = await enterSideChatMessage(dom, rootElement, 'keep after error')
-    await submitSideChat(dom, rootElement)
-    assert.deepEqual(sent, ['keep after error'])
-    await act(async () => {
-      send.reject(new Error('send failed'))
-      try { await send.promise } catch { /* expected rejection */ }
-    })
-    assert.equal(textarea.value, 'keep after error')
-  } finally {
-    await act(async () => root.unmount())
-    dom.window.close()
-  }
-})
-
 test('the changes panel reads real git status and diff', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
@@ -882,7 +735,7 @@ test('the toolbar walks back to entry, forward to the tool, grows the panel and 
     await act(async () => {
       root.render(
         <RightWorkbench
-          activeTab="chat"
+          activeTab="files"
           onTabChange={(tab) => tabs.push(tab)}
           onClose={() => {}}
           onOpenArtifact={() => {}}
@@ -900,7 +753,7 @@ test('the toolbar walks back to entry, forward to the tool, grows the panel and 
     assert.deepEqual(tabs, ['entry'])
     // The step back is remembered: forward walks straight to the tool again.
     await act(async () => forward.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.deepEqual(tabs, ['entry', 'chat'])
+    assert.deepEqual(tabs, ['entry', 'files'])
     assert.equal(forward.disabled, true, 'history is consumed')
 
     const panel = rootElement.querySelector('[data-testid="right-workbench"]')

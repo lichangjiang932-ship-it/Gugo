@@ -156,8 +156,9 @@ test('the recorded edits are what the review shows, per tool', () => {
   assert.deepEqual(index.get(keyOf('src/other.js'))[0].added, ['other only'])
   assert.deepEqual(index.get(keyOf('docs/new.md'))[0].added, ['# title', 'body'])
 
-  // 2/2 (edit_file) + 2/2 (multi_edit) + 2/1 (the patch's own section of this file).
-  assert.deepEqual(countRecordedEditLines(appEdits), { additions: 6, deletions: 5 })
+  // 1/1 (edit_file: "one" is unchanged context, only "two"→"TWO" changed)
+  // + 2/2 (multi_edit) + 2/1 (the patch's own section of this file).
+  assert.deepEqual(countRecordedEditLines(appEdits), { additions: 5, deletions: 4 })
   // A file only a script touched has nothing recorded, and nothing is invented.
   assert.equal(index.size, 3, 'only files with a recorded edit are indexed')
   assert.deepEqual(countRecordedEditLines([]), { additions: 0, deletions: 0 })
@@ -227,4 +228,17 @@ test('a call ID reused in another turn remains a distinct edit', () => {
 
   assert.deepEqual(sessionFileChanges(messages).files.map((file) => file.displayPath), ['first.txt', 'second.txt'])
   assert.equal(sessionFileEditIndex(messages).size, 2)
+})
+
+test('an edit reads as a unified diff: unchanged lines are context, not a delete and an add', async () => {
+  const { interleaveEditLines } = await import('../../src/lib/sessionChanges.js')
+  const signs = (edit) => interleaveEditLines(edit).map(({ sign, line }) => `${sign}${line}`)
+  assert.deepEqual(signs({ removed: ['a', 'b', 'c', 'd'], added: ['a', 'B', 'c', 'd', 'e'] }),
+    [' a', '-b', '+B', ' c', ' d', '+e'])
+  // A pure write and a pure deletion stay as they are.
+  assert.deepEqual(signs({ removed: [], added: ['x', 'y'] }), ['+x', '+y'])
+  assert.deepEqual(signs({ removed: ['x'], added: [] }), ['-x'])
+  // A patch is drawn in its own order, with its own context lines.
+  assert.deepEqual(signs({ removed: ['old'], added: ['new'], lines: [{ sign: ' ', line: 'ctx' }, { sign: '-', line: 'old' }, { sign: '+', line: 'new' }] }),
+    [' ctx', '-old', '+new'])
 })

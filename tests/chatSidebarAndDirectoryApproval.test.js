@@ -128,11 +128,12 @@ test('right workbench exposes exactly the three tool buttons', () => {
 
   // Source of truth for the three tools and their keys, shared by the header
   // switch and the key handler so a shown shortcut cannot drift from a working one.
+  // Workspace files took the side chat's place by request.
   const shortcuts = read('../src/lib/workbenchShortcuts.js')
-  for (const id of ['chat', 'browser', 'terminal']) {
+  for (const id of ['files', 'browser', 'terminal']) {
     assert.match(shortcuts, new RegExp(`id: '${id}'`), `${id} is one of the three tools`)
   }
-  assert.doesNotMatch(shortcuts, /id: 'files'|id: 'git'|id: 'plan'/, 'the removed tabs are not tools')
+  assert.doesNotMatch(shortcuts, /id: 'chat'|id: 'git'|id: 'plan'/, 'the removed tabs are not tools')
   assert.match(workbench, /data-testid="workbench-tool-switch"/)
   assert.doesNotMatch(workbench, /WorkbenchToolRail/, 'the vertical edge strip is gone')
   assert.match(workbench, /data-testid="workbench-entry-row"/, 'tools are reachable from the entry page')
@@ -155,9 +156,10 @@ test('right workbench exposes exactly the three tool buttons', () => {
   const embeddedBrowser = read('../src/components/EmbeddedBrowser.jsx')
   assert.match(embeddedBrowser, /sandbox="allow-scripts allow-forms allow-popups"/)
   assert.match(embeddedBrowser, /data-testid="embedded-browser-backend"/)
-  // The three panels that left the strip must not come back as tabs: files and
-  // changes were removed by request, and the plan is a card of its own.
-  assert.doesNotMatch(workbench, /activeTab === 'files'|activeTab === 'git'|activeTab === 'plan'/)
+  // Workspace files are a tool again (they replaced the side chat, by request);
+  // changes stay a header review and the plan stays a card of its own.
+  assert.match(workbench, /activeTab === 'files' && <WorkbenchFiles/)
+  assert.doesNotMatch(workbench, /activeTab === 'chat'|activeTab === 'git'|activeTab === 'plan'/)
   assert.doesNotMatch(workbench, /workbench-navigation|workbench-file-count/)
   assert.doesNotMatch(workbench, /data-testid="workbench-tab-/)
   assert.match(workbench, /data-testid="workbench-resize-handle"/)

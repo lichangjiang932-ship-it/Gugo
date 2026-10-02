@@ -182,7 +182,8 @@ test('keyboard use of other page controls does not decide the tool approval', as
 test('approval action buttons keep their native Enter activation instead of globally approving', async (context) => {
   const { dom, decisions } = await renderKeyboardApproval(context)
   const buttons = [...dom.window.document.querySelector('[data-testid="tool-approval-actions"]').querySelectorAll('button')]
-  const expected = [{ approved: true }, { approved: true, remember: true }, { approved: false }]
+  // Primary action last, at the right edge, as in Claude Code and platform dialogs.
+  const expected = [{ approved: false }, { approved: true, remember: true }, { approved: true }]
   for (const [index, button] of buttons.entries()) {
     const event = await pressApprovalKey(dom, button, { key: 'Enter' })
     assert.equal(event.defaultPrevented, false, 'native button activation stays available')
@@ -604,4 +605,18 @@ test('different chat approvals wait in order and never deny the active request',
     recorder.restore()
     dom.window.close()
   }
+})
+
+test('the note box keeps Enter to itself and an empty note sends nothing', async (context) => {
+  const { dom, decisions } = await renderKeyboardApproval(context)
+  const doc = dom.window.document
+  // The card names the tool in words; the raw name stays as a secondary label.
+  assert.match(doc.querySelector('[data-testid="tool-approval-card"]').textContent, /写入文件/)
+  await act(async () => { doc.querySelector('[data-testid="tool-approval-suggest"]').click() })
+  const box = doc.querySelector('[data-testid="tool-approval-feedback"] textarea')
+  assert.ok(box)
+  const enter = await pressApprovalKey(dom, box, { key: 'Enter' })
+  assert.equal(enter.defaultPrevented, true)
+  assert.deepEqual(decisions, [], 'Enter in an empty note neither approves nor denies')
+  assert.equal(doc.querySelector('[data-testid="tool-approval-feedback"] button[type="submit"]').disabled, true)
 })

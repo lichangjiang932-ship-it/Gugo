@@ -1,6 +1,6 @@
 import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
-import { finishToolStop } from './runtimeToolStop.js'
+import { absorbRefusedToolStop, finishToolStop } from './runtimeToolStop.js'
 
 const HAN_TEXT = /[\u3400-\u9fff]/u
 
@@ -295,7 +295,11 @@ async function finishNoProgress(s) {
 
 export async function completeIteration(s) {
   const i = s.iteration
+  // A refused round is not a stop: the refusal is already in the transcript as
+  // each call's tool result, and the model reads it on the next round.
+  const refusedRound = absorbRefusedToolStop(s)
   if (i.toolStop) return finishToolStop(s)
+  if (!refusedRound && i.toolCalls?.length > 0) s.consecutiveRefusedRounds = 0
   if (i.goalPlanBlocked && !i.batchSupersededBySteering) {
     s.checkpointCalls = null
     const result = i.goalPlanBlocked

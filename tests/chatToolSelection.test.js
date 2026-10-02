@@ -923,3 +923,31 @@ test('duplicate tool names resolve to one canonical schema independent of load o
   assert.deepEqual(forward, reversed)
   assert.equal(forward.find((item) => item.function.name === 'write_file')?.function.description, 'schema-A')
 })
+
+test('a file request in a language the intent vocabulary cannot read is offered the edit tools', async () => {
+  const { SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+  const names = (prompt) => selectChatToolSpecs({ userPrompt: prompt, specs: SERVER_TOOL_SPECS })
+    .map((spec) => spec.function?.name)
+  // Compound work orders in ja/ko/ru/de/es/fr/it/pt used to land on the read
+  // tier, so the model had to discover edit_file before it could do anything.
+  for (const prompt of [
+    'src/app.js のバグを修正してテストを実行して',
+    'src/app.js 버그를 고치고 테스트를 실행해줘',
+    'Исправь ошибку в src/app.js и запусти тесты',
+    'Behebe den Fehler in src/app.js und führe die Tests aus',
+    'Arregla el error en src/app.js y ejecuta las pruebas',
+    'Corrige le bug dans src/app.js',
+    'Scrivi un test per parse.js',
+    'Crie um arquivo README.md com instruções de instalação',
+  ]) assert.ok(names(prompt).includes('edit_file'), prompt)
+  // English and Chinese keep their own, finer classification: a question about
+  // a file is still a question.
+  for (const prompt of ['What does src/app.js do?', 'Summarize README.md', '解释一下 src/app.js']) {
+    assert.equal(names(prompt).includes('edit_file'), false, prompt)
+  }
+  // An explicit read-only boundary still wins over the offer, in either vocabulary.
+  assert.equal(names('src/app.js を読んで。read-only, do not modify any files.').includes('edit_file'), false)
+  for (const prompt of ['src/app.js を読むだけで、変更しないで', 'src/app.js 읽기만 하고 수정하지 마', 'Lies src/app.js, aber nicht ändern', 'Lee src/app.js pero no modifiques nada']) {
+    assert.equal(names(prompt).includes('edit_file'), false, prompt)
+  }
+})

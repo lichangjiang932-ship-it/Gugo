@@ -11,6 +11,7 @@ import { checkBashCommandDanger } from './bashGuard.js'
 import { createHash } from 'node:crypto'
 import { CONNECTOR_WRITE_TOOL_SET } from '../../shared/connectorWriteTools.js'
 import { findMatchingTaskGrant } from './taskGrants.js'
+import { isReadOnlySubagentRequest } from './subagentTaskPolicy.js'
 
 export const APPROVAL_MODES = Object.freeze(['off', 'unattended', 'all'])
 export const DEFAULT_APPROVAL_MODE = 'unattended'
@@ -153,9 +154,11 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
 
 const NEVER = new Set(NEVER_APPROVE_TOOLS)
 
-// Plan mode exposes only local, side-effect-free inspection tools to the
-// model. Network/connector/dynamic tools fail closed even when they describe
-// themselves as read-only. The same allowlist is also enforced at execution.
+// Plan mode exposes only side-effect-free inspection tools to the model. As in
+// Claude Code's plan mode that includes research — web search, a read-only
+// fetch, and read-only (explore/plan) subagents — but never a write, a command,
+// a non-GET request or a dynamic/connector tool, even one that describes itself
+// as read-only. The same allowlist is also enforced at execution.
 const PLAN_LOCAL_READ_TOOLS = new Set([
   'load_skill',
   'search_tools',
@@ -183,7 +186,23 @@ const PLAN_LOCAL_READ_TOOLS = new Set([
   'archive_list',
   'file_hash_manifest',
   'process_list',
+  'web_search',
 ])
+
+/**
+ * Plan-mode tools whose read-only-ness depends on the call: visible to the
+ * model, but each call is judged by its arguments at execution.
+ */
+const PLAN_CONDITIONAL_READ_TOOLS = new Set(['fetch_url', 'Agent'])
+
+function isPlanReadOnlyCall(name, args = {}) {
+  if (PLAN_LOCAL_READ_TOOLS.has(name)) return true
+  if (name === 'fetch_url') {
+    return SAFE_HTTP_METHODS.has(str(args?.method).toUpperCase() || 'GET')
+  }
+  if (name === 'Agent') return isReadOnlySubagentRequest(args)
+  return false
+}
 
 export function isToolVisibleInPermissionMode(toolName, permissionMode = DEFAULT_PERMISSION_MODE) {
   const name = str(toolName).trim()
@@ -191,7 +210,7 @@ export function isToolVisibleInPermissionMode(toolName, permissionMode = DEFAULT
   const mode = PERMISSION_MODES.includes(permissionMode)
     ? permissionMode
     : DEFAULT_PERMISSION_MODE
-  return mode !== 'plan' || PLAN_LOCAL_READ_TOOLS.has(name)
+  return mode !== 'plan' || PLAN_LOCAL_READ_TOOLS.has(name) || PLAN_CONDITIONAL_READ_TOOLS.has(name)
 }
 
 /** 动态工具(MCP / 插件)里带这些词的按写操作处理。 */
@@ -435,7 +454,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     // capability must not inherit plan privileges merely by reusing a builtin
     // read-only name such as read_file. The no-metadata case remains supported
     // for the small pure-policy API used by legacy callers and unit tests.
-    if (PLAN_LOCAL_READ_TOOLS.has(name)
+    if (isPlanReadOnlyCall(name, safeArgs)
       && (!metadata || metadata.origin === 'builtin')) {
       return { needsApproval: false, risk: 'low', reason: null }
     }
@@ -443,7 +462,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       needsApproval: false,
       denied: true,
       risk: APPROVAL_REQUIRED_TOOLS[name] || 'medium',
-      reason: '当前是计划模式（仅限工作区只读）。该工具仍已加载，但写入、命令、网络和外部工具被策略禁止执行。请切换到自动接受编辑模式或正常模式后继续。',
+      reason: '当前是计划模式（只读调研）。该工具仍已加载，但写入、命令、非 GET 请求、可写子代理和外部工具被策略禁止执行。请继续只读调研，把要做的改动写进计划交给用户批准；用户切换到自动接受编辑模式或正常模式后才会执行。',
     }
   }
   if (NEVER.has(name)) return { needsApproval: false, risk: 'low', reason: null }

@@ -87,7 +87,10 @@ export function appendTerminalEntry(transcript, entry, limits = TERMINAL_LIMITS)
   const appended = {
     id: nextId,
     stream: entry?.stream || TERMINAL_STREAM.STDOUT,
-    text: String(entry?.text ?? ''),
+    // Windows commands answer in CRLF; a bare CR left in a <pre> shows as a stray
+    // glyph or a blank line in some fonts, and the trailing newline adds a gap
+    // under every command, so line endings are normalized and the tail trimmed.
+    text: String(entry?.text ?? '').replace(/\r\n?/g, '\n').replace(/\n+$/, ''),
   }
   const trimmed = trimTerminalEntries([...entries, appended], limits)
   return {

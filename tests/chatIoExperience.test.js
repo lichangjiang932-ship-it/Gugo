@@ -310,3 +310,36 @@ test('model setup failures use one durable in-message card without a duplicate t
   assert.match(messageRowSource, /testId="model-setup-error-card"/)
   assert.match(messageRowSource, /onClick=\{onManageModels\}/)
 })
+
+test('git, browser and goal tools read as words in the trace, in both languages', async () => {
+  const { translateKey } = await import('../src/i18n/translations.js')
+  // These used to print the raw tool name (`git_log`, `git_blame`) next to
+  // translated rows such as 读取, because the label table did not know them.
+  const names = ['git_log', 'git_blame', 'git_commit', 'git_push', 'git_write', 'git_rollback', 'search_tools',
+    'browser_open_url', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_snapshot',
+    'browser_console', 'browser_state', 'browser_wait', 'goal_plan_status', 'goal_plan_rewrite', 'goal_step_update']
+  for (const lang of ['zh', 'en']) {
+    const t = (key) => translateKey(key, lang)
+    for (const name of names) {
+      const label = toolCallLabel(name, t)
+      assert.notEqual(label, name, `${lang}: ${name} has a label`)
+      assert.doesNotMatch(label, /^(?:chatMessages|toolActivity)\./, `${lang}: ${name} label resolves`)
+    }
+  }
+  assert.equal(toolCallLabel('git_log', (key) => translateKey(key, 'zh')), 'Git 历史')
+  assert.equal(toolCallLabel('git_blame', (key) => translateKey(key, 'en')), 'Git blame')
+})
+
+test('a rejected-arguments failure tells the reader what happened, not the model what to do', async () => {
+  const { translateKey } = await import('../src/i18n/translations.js')
+  const t = (key) => translateKey(key, 'zh')
+  const call = {
+    status: 'error',
+    result: { ok: false, code: 'tool_arguments_validation_failed', error: '工具参数校验失败：path 必须是字符串', hint: '请按工具参数定义修正后重新调用。' },
+  }
+  const summary = toolFailureSummary(call, t)
+  assert.doesNotMatch(summary, /请按工具参数定义修正后重新调用/)
+  assert.match(summary, /没有执行/)
+  // Other failures keep their own reason.
+  assert.match(toolFailureSummary({ status: 'error', result: { ok: false, error: 'ENOENT: no such file' } }, t), /ENOENT/)
+})

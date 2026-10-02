@@ -95,10 +95,56 @@ export function sessionFileChanges(messages = [], { workspacePath = '' } = {}) {
 
 /** Lines an edit will draw, for files whose executor reported no counts. */
 export function countRecordedEditLines(edits = []) {
-  return (Array.isArray(edits) ? edits : []).reduce((totals, edit) => ({
-    additions: totals.additions + (Array.isArray(edit?.added) ? edit.added.length : 0),
-    deletions: totals.deletions + (Array.isArray(edit?.removed) ? edit.removed.length : 0),
-  }), { additions: 0, deletions: 0 })
+  return (Array.isArray(edits) ? edits : []).reduce((totals, edit) => {
+    const lines = interleaveEditLines(edit)
+    return {
+      additions: totals.additions + lines.filter((line) => line.sign === '+').length,
+      deletions: totals.deletions + lines.filter((line) => line.sign === '-').length,
+    }
+  }, { additions: 0, deletions: 0 })
+}
+
+/** Above this many lines on either side the table would be too large; fall back. */
+const MAX_DIFF_CELLS = 250_000
+
+/**
+ * One edit as a reader expects to see it: a replacement of twenty lines in which
+ * one changed is one `-` and one `+` between unchanged context, not twenty of
+ * each. Longest-common-subsequence over lines; a pathological size falls back
+ * to "all removed, then all added", which is still correct, only less compact.
+ */
+export function interleaveEditLines(edit) {
+  if (Array.isArray(edit?.lines) && edit.lines.length > 0) return edit.lines
+  const removed = Array.isArray(edit?.removed) ? edit.removed : []
+  const added = Array.isArray(edit?.added) ? edit.added : []
+  if (removed.length === 0 || added.length === 0
+    || (removed.length + 1) * (added.length + 1) > MAX_DIFF_CELLS) {
+    return [
+      ...removed.map((line) => ({ sign: '-', line })),
+      ...added.map((line) => ({ sign: '+', line })),
+    ]
+  }
+  const rows = removed.length + 1
+  const cols = added.length + 1
+  const table = new Uint32Array(rows * cols)
+  for (let i = removed.length - 1; i >= 0; i -= 1) {
+    for (let j = added.length - 1; j >= 0; j -= 1) {
+      table[i * cols + j] = removed[i] === added[j]
+        ? table[(i + 1) * cols + j + 1] + 1
+        : Math.max(table[(i + 1) * cols + j], table[i * cols + j + 1])
+    }
+  }
+  const lines = []
+  let i = 0
+  let j = 0
+  while (i < removed.length && j < added.length) {
+    if (removed[i] === added[j]) { lines.push({ sign: ' ', line: removed[i] }); i += 1; j += 1 }
+    else if (table[(i + 1) * cols + j] >= table[i * cols + j + 1]) { lines.push({ sign: '-', line: removed[i] }); i += 1 }
+    else { lines.push({ sign: '+', line: added[j] }); j += 1 }
+  }
+  while (i < removed.length) { lines.push({ sign: '-', line: removed[i] }); i += 1 }
+  while (j < added.length) { lines.push({ sign: '+', line: added[j] }); j += 1 }
+  return lines
 }
 
 const MAX_RECORDED_LINES = 400
@@ -127,6 +173,11 @@ function patchSections(patch) {
     path: section.path,
     removed: section.lines.filter((line) => line.startsWith('-')).map((line) => line.slice(1)),
     added: section.lines.filter((line) => line.startsWith('+')).map((line) => line.slice(1)),
+    // The patch's own order, with its context lines: already the diff a reader
+    // wants, so it is drawn as written rather than recomputed.
+    lines: section.lines
+      .filter((line) => /^[ +-]/.test(line))
+      .map((line) => ({ sign: line[0], line: line.slice(1) })),
   }))
 }
 
@@ -166,7 +217,7 @@ export function sessionFileEditIndex(messages = [], { workspacePath = '' } = {})
       const sections = patchSections(args.patch)
       for (const section of sections) {
         const pathKey = resolvePath(section.path)?.key
-        if (pathKey) push(pathKey, { toolName: name, kind: 'patch', removed: section.removed, added: section.added })
+        if (pathKey) push(pathKey, { toolName: name, kind: 'patch', removed: section.removed, added: section.added, lines: section.lines })
       }
       continue
     }

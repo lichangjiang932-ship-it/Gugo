@@ -21,7 +21,7 @@ import useDirectoryApproval from './useDirectoryApproval.js'
 import useVoiceRecognition from './useVoiceRecognition.js'
 import useChatSessionLifecycle from './useChatSessionLifecycle.js'
 import useChatSendFlow from './useChatSendFlow.js'
-import useTurnSteering from './useTurnSteering.js'
+import useTurnSteering, { createRefusalWithFeedback } from './useTurnSteering.js'
 import useSlashCommandExecution from './useSlashCommandExecution.js'
 import { readSessionDraft } from '../../lib/chatDrafts.js'
 import { getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
@@ -153,7 +153,7 @@ export default function ChatSplit() {
     modelConfigRevision: modelReadiness.configRevision,
     modelProviderId: effectiveSelectedModelProviderId, modelReadiness, navigate, onModelUnavailable: showModelUnavailable,
     setDesktopPetVisible, setInput,
-    setSlashInlinePanel, setWorkbenchMessage, setWorkbenchOpen, setWorkbenchTab, slashRegistry, stateRef, triggerSendFlow,
+    setSlashInlinePanel, setWorkbenchMessage, slashRegistry, stateRef, triggerSendFlow,
   })
   const slashQuery = input.match(/^\/([^\s/]*)$/i)?.[1]
   const slashCommands = slashQuery === undefined ? [] : slashRegistry.listCommands({ query: slashQuery })
@@ -237,8 +237,8 @@ export default function ChatSplit() {
     { activeSessionId, dispatch, isGenerating, navigate, stateRef, t, toast },
   )
   const {
-    onOpenPlan, planArtifacts, planCardVisible, planSignature, setDismissedPlanSignature, setPlanVisible,
-  } = usePlanCardState({ activeSession, attachments, messages })
+    onOpenPlan, planCardVisible, planSignature, setDismissedPlanSignature, setPlanVisible,
+  } = usePlanCardState({ activeSession })
 
   const { openPreview, sessionChangesReview } = useChatOverlays({
     dispatch, isGenerating, messages, sessionId: activeSessionId || '', setPlanVisible,
@@ -250,7 +250,7 @@ export default function ChatSplit() {
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       contextWindowAuthoritative={selectedContextWindowAuthoritative}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
-      sessionChangesReview={sessionChangesReview} planVisible={planCardVisible} planArtifacts={planArtifacts} onOpenPlan={() => { sessionChangesReview.close(); onOpenPlan() }}
+      sessionChangesReview={sessionChangesReview} planVisible={planCardVisible} onOpenPlan={() => { sessionChangesReview.close(); onOpenPlan() }}
       onClosePlan={() => { setPlanVisible(false); setDismissedPlanSignature(planSignature) }}
       modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onPause={handlePause} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
@@ -279,7 +279,7 @@ export default function ChatSplit() {
       onResume={handleResume}
       onSend={handleSend} onSlashCommandSelect={executeSlashEntry}
       onSubmitFeedback={(value) => recordChatFeedback(value, stateRef.current.activeSessionId)}
-      onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={handleWorkbenchSend}
+      onToolApproval={createRefusalWithFeedback({ resolveToolApproval: approvals.resolveToolApproval, steerActiveTurn })} onVoiceClick={handleVoice} onWorkbenchSend={handleWorkbenchSend}
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
       resumeAvailable={resumeAvailable} continueSameTaskAvailable={continueSameTaskAvailable}

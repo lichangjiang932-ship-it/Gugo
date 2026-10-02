@@ -439,7 +439,7 @@ test('disabled tools remain model-visible but each explicit turn stops at the un
     runModel: async ({ tools }) => {
       modelCalls += 1
       turnModelCalls += 1
-      assert.equal(turnModelCalls, 1, 'disabled capabilities must not trigger model wrap-up')
+      assert.ok(turnModelCalls <= 2, 'a second refused round ends the turn')
       for (const name of disabledNames) {
         assert.ok(tools.some((item) => item?.function?.name === name), name)
       }
@@ -454,8 +454,10 @@ test('disabled tools remain model-visible but each explicit turn stops at the un
     assert.equal(result.incomplete, true)
   }
   assert.equal(executions, 0)
-  assert.equal(modelCalls, disabledNames.length)
-  assert.deepEqual(completed.map((entry) => entry.name).sort(), [...disabledNames].sort())
+  // Each turn: the refusal goes back to the model once, then the repeated
+  // proposal is refused again and the turn stops on the configuration.
+  assert.equal(modelCalls, disabledNames.length * 2)
+  assert.deepEqual([...new Set(completed.map((entry) => entry.name))].sort(), [...disabledNames].sort())
   assert.equal(completed.every((entry) => entry.result?.code === 'tool_disabled_by_config'), true)
 })
 
@@ -2139,7 +2141,9 @@ test('a capability challenge after an explicit read-only turn sees write tools b
           }],
         }
       }
-      assert.fail('a read-only policy refusal cannot request model wrap-up')
+      // Claude Code behaviour: the refusal is a tool result the model reads; it
+      // answers instead of writing. The refused call itself never runs.
+      return { content: '只读检查完成，未修改任何文件。', toolCalls: [] }
     },
     onToolCompleted: async ({ result }) => {
       assert.equal(result.code, 'explicit_read_only_constraint')
@@ -2151,10 +2155,9 @@ test('a capability challenge after an explicit read-only turn sees write tools b
     },
   })
 
-  assert.equal(result.code, 'explicit_read_only_constraint')
-  assert.equal(result.incomplete, true)
   assert.deepEqual(executed, [])
-  assert.equal(modelCalls, 1)
+  assert.equal(modelCalls, 2)
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('a current-turn explicit read-only constraint blocks mutating calls before execution', async () => {
@@ -2196,7 +2199,8 @@ test('a current-turn explicit read-only constraint blocks mutating calls before 
           }],
         }
       }
-      assert.fail('a read-only policy refusal cannot request model wrap-up')
+      // The refusal goes back to the model, which answers without writing.
+      return { content: '只读检查完成，未修改任何文件。', toolCalls: [] }
     },
     onToolCompleted: async ({ result }) => {
       assert.equal(result.code, 'explicit_read_only_constraint')
@@ -2208,10 +2212,9 @@ test('a current-turn explicit read-only constraint blocks mutating calls before 
     },
   })
 
-  assert.equal(result.code, 'explicit_read_only_constraint')
-  assert.equal(result.incomplete, true)
   assert.deepEqual(executed, [])
-  assert.equal(modelCalls, 1)
+  assert.equal(modelCalls, 2)
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('an explicit read-only constraint revalidates approval-edited arguments', async () => {
@@ -2256,7 +2259,9 @@ test('an explicit read-only constraint revalidates approval-edited arguments', a
           }],
         }
       }
-      assert.fail('approval editing cannot reopen model execution after a read-only refusal')
+      // The approval-edited mutating command is refused and never runs; the
+      // model reads that and answers.
+      return { content: '只读检查完成，未修改任何文件。', toolCalls: [] }
     },
     onToolCompleted: async ({ result }) => {
       assert.equal(result.code, 'explicit_read_only_constraint')
@@ -2267,11 +2272,10 @@ test('an explicit read-only constraint revalidates approval-edited arguments', a
     },
   })
 
-  assert.equal(result.code, 'explicit_read_only_constraint')
-  assert.equal(result.incomplete, true)
-  assert.equal(modelCalls, 1)
+  assert.equal(modelCalls, 2)
   assert.equal(approvalCalls, 1)
-  assert.equal(executeCalls, 0)
+  assert.equal(executeCalls, 0, 'the approval-edited mutating command never ran')
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('an executing checkpoint cannot resume with mutating args under a current read-only constraint', async () => {
@@ -2324,9 +2328,9 @@ test('an executing checkpoint cannot resume with mutating args under a current r
       checkpoint = structuredClone(state)
       return true
     },
-    runModel: async () => {
-      assert.fail('a refused checkpoint cannot request model wrap-up')
-    },
+    // The resumed mutating args are refused, never replayed; the model then
+    // reads the refusal and answers.
+    runModel: async () => ({ content: '只读检查完成，未修改任何文件。', toolCalls: [] }),
     onToolCompleted: async ({ result }) => {
       assert.equal(result.code, 'explicit_read_only_constraint')
     },
@@ -2336,9 +2340,8 @@ test('an executing checkpoint cannot resume with mutating args under a current r
     },
   })
 
-  assert.equal(result.code, 'explicit_read_only_constraint')
-  assert.equal(result.incomplete, true)
   assert.equal(executeCalls, 0)
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('bypass recovery never remounts a tool excluded from the current turn enabled catalog', async () => {

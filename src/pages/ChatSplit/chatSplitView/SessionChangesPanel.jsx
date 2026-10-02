@@ -1,30 +1,10 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, FileDiff, X } from 'lucide-react'
+import DiffLines from '../../../components/DiffLines.jsx'
 import { countRecordedEditLines } from '../../../lib/sessionChanges.js'
 
-const LINE_CLASS = Object.freeze({
-  removed: 'text-danger',
-  added: 'text-success',
-})
-
-function EditBlock({ edit }) {
-  const lines = [
-    ...edit.removed.map((line) => ({ sign: '-', line })),
-    ...edit.added.map((line) => ({ sign: '+', line })),
-  ]
-  return (
-    <div className="max-h-64 overflow-auto rounded-control border border-ink/10 bg-paper-2/40 p-1.5" data-testid="session-change-edit">
-      {lines.map((entry, index) => (
-        <pre
-          key={`${entry.sign}:${index}`}
-          data-sign={entry.sign}
-          className={`whitespace-pre-wrap break-all font-mono text-xs leading-5 ${LINE_CLASS[entry.sign === '-' ? 'removed' : 'added']}`}
-        >
-          {`${entry.sign}${entry.line}` || ' '}
-        </pre>
-      ))}
-    </div>
-  )
+function EditBlock({ edit, t }) {
+  return <DiffLines edit={edit} t={t} wrap className="max-h-72" />
 }
 
 function countsFor(file, edits) {
@@ -57,7 +37,14 @@ export default function SessionChangesPanel({ review, t }) {
     <section
       aria-label={t('chat.changes.title')}
       data-testid="session-changes-panel"
-      className="pointer-events-auto absolute top-3 right-3 z-20 flex max-h-[calc(100%-1.5rem)] w-[min(420px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card overlay-float"
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || event.defaultPrevented) return
+        event.preventDefault()
+        close?.()
+      }}
+      // top-14 clears the 48px chat and workbench headers so the toggle that
+      // closes this panel is never underneath it.
+      className="pointer-events-auto absolute top-14 right-3 z-20 flex max-h-[calc(100%-4.25rem)] w-[min(420px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card overlay-float"
     >
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-ink/10 pl-2.5 pr-1">
         <FileDiff className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" />
@@ -68,7 +55,7 @@ export default function SessionChangesPanel({ review, t }) {
             {totals.reportedFiles > 0 && (
               <>
                 {' · '}
-                <span className="font-mono text-accent">+{totals.additions}</span>
+                <span className="font-mono text-success">+{totals.additions}</span>
                 {' '}
                 <span className="font-mono text-danger">-{totals.deletions}</span>
               </>
@@ -126,7 +113,7 @@ export default function SessionChangesPanel({ review, t }) {
                   className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-3 text-left"
                 >
                   <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink" title={file.path}>{file.displayPath}</span>
-                  <span className="shrink-0 font-mono text-xs text-accent">+{counts.additions}</span>
+                  <span className="shrink-0 font-mono text-xs text-success">+{counts.additions}</span>
                   <span className="shrink-0 font-mono text-xs text-danger">−{counts.deletions}</span>
                 </button>
               </div>
@@ -134,7 +121,7 @@ export default function SessionChangesPanel({ review, t }) {
                 <div className="pl-6 pr-1 pb-1.5">
                   {edits.length === 0
                     ? <p className="text-xs leading-5 text-ink-fade">{t('chat.changes.scriptOnly')}</p>
-                    : edits.map((edit, index) => <EditBlock key={`${edit.toolName}:${index}`} edit={edit} />)}
+                    : edits.map((edit, index) => <EditBlock key={`${edit.toolName}:${index}`} edit={edit} t={t} />)}
                 </div>
               )}
             </div>

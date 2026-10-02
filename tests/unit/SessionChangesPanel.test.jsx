@@ -214,7 +214,7 @@ test('an untouched conversation says so instead of showing an empty list', async
   assert.match(container.textContent, /has not changed any files/)
 })
 
-test('closing is one press, and the header shows the file count', async () => {
+test('closing is one press, and the header shows the diff stat', async () => {
   setupDom()
   const { container, closedCount } = await render()
   await act(async () => {
@@ -228,11 +228,43 @@ test('closing is one press, and the header shows the file count', async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  await act(async () => { root.render(<SessionChangesReview review={{ count: 3, toggle: () => {}, visible: false }} t={t} />) })
-  // The count is visible; the sentence is only for readers who need it spoken.
-  assert.equal(host.querySelector('span.tabular-nums').textContent, '3')
+  await act(async () => {
+    root.render(<SessionChangesReview review={{ count: 3, summary: { files: 3, additions: 12, deletions: 4 }, toggle: () => {}, visible: false }} t={t} />)
+  })
+  // Codex's "+12 −4": the size of the change, in diff colours. The file count is
+  // still spoken for readers who need it, and is on the tooltip.
+  assert.equal(host.querySelector('[data-testid="session-changes-stat"]').textContent, '+12−4')
   assert.match(host.querySelector('.sr-only').textContent, /changed 3 files/)
+  assert.match(host.querySelector('button').getAttribute('title'), /3 files/)
   await act(async () => { root.render(<SessionChangesReview review={{ count: 0, toggle: () => {}, visible: false }} t={t} />) })
   // Nothing changed: the indicator stays an icon rather than claiming a zero.
   assert.equal(host.querySelector('button').textContent, '')
+})
+
+test('the panel opens below the header and Escape closes it from the panel or its toggle', async () => {
+  setupDom()
+  const { container, closedCount } = await render()
+  const panel = container.querySelector('[data-testid="session-changes-panel"]')
+  // top-3 put the panel over the header row, covering the very toggle that
+  // closes it; it now clears the 48px header.
+  assert.match(panel.className, /\btop-14\b/)
+  assert.doesNotMatch(panel.className, /\btop-3\b/)
+
+  const escape = () => new globalThis.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+  await act(async () => { container.querySelector('[data-testid="session-change-file-toggle"]').dispatchEvent(escape()) })
+  assert.equal(closedCount(), 1, 'Escape inside the panel closes it')
+
+  const { createRoot } = await import('react-dom/client')
+  const SessionChangesReview = (await import('../../src/pages/ChatSplit/chatSplitView/SessionChangesReview.jsx')).default
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  let reviewClosed = 0
+  const review = (visible) => ({ count: 1, close: () => { reviewClosed += 1 }, toggle: () => {}, visible })
+  await act(async () => { root.render(<SessionChangesReview review={review(true)} t={t} />) })
+  await act(async () => { host.querySelector('button').dispatchEvent(escape()) })
+  assert.equal(reviewClosed, 1, 'focus stays on the toggle after a click, so Escape there closes too')
+  await act(async () => { root.render(<SessionChangesReview review={review(false)} t={t} />) })
+  await act(async () => { host.querySelector('button').dispatchEvent(escape()) })
+  assert.equal(reviewClosed, 1, 'a closed panel leaves Escape alone')
 })

@@ -297,8 +297,13 @@ const TASKS = Object.freeze([
       id: 'SAFE-03',
       prompt: '尝试执行命令，但尊重审批结果。',
       toolSpecs: [RUN_COMMAND],
-      model: async ({ modelCall }) => {
-        assert.equal(modelCall, 1, 'a user refusal must not start a model wrap-up')
+      model: async ({ request, modelCall }) => {
+        if (modelCall > 1) {
+          // The refusal is a tool result the model reads (Claude Code behaviour).
+          assert.equal(lastToolResult(request.messages)?.code, 'tool_execution_skipped')
+          assert.ok(toolResults(request.messages).some((result) => result.code === 'approval_denied'))
+          return modelResponse('命令被拒绝，未执行；需要你决定是否换一种方式。')
+        }
         return modelResponse('', [
           toolCall('safe-03-command', 'run_command', { command: 'echo blocked' }),
           toolCall('safe-03-after-denial', 'run_command', { command: 'echo must-not-run' }),
@@ -310,9 +315,9 @@ const TASKS = Object.freeze([
         deniedByUser: true,
       }),
     })
-    assert.equal(state.approvals.length, 1)
+    assert.equal(state.approvals.length, 1, 'calls planned before the answer are not put to the user again')
     assert.equal(state.executions.length, 0)
-    assert.equal(state.modelCalls, 1)
+    assert.equal(state.modelCalls, 2)
     assert.equal(state.completed.length, 2)
     const denied = state.completed[0].result
     assert.equal(denied.ok, false)
@@ -320,11 +325,7 @@ const TASKS = Object.freeze([
     assert.equal(denied.code, 'approval_denied')
     assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
     assert.equal(state.completed[1].result.executed, false)
-    assert.equal(state.result.code, 'approval_denied')
-    assert.equal(state.result.reason, 'approval_denied')
-    assert.equal(state.result.incomplete, true)
-    assert.equal(state.result.retryable, false)
-    assert.match(state.result.text, /你已拒绝本次操作.*本轮已停止/)
+    assert.equal(state.result.text, '命令被拒绝，未执行；需要你决定是否换一种方式。')
     assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
       call.id === 'safe-03-command' && call.checkpointResult?.deniedByUser === true)))
   }),
@@ -395,8 +396,11 @@ const TASKS = Object.freeze([
       prompt,
       toolSpecs: [READ_FILE],
       approvalMode: 'bypass',
-      model: async ({ modelCall }) => {
-        assert.equal(modelCall, 1, 'a read-only refusal must not start a model wrap-up')
+      model: async ({ request, modelCall }) => {
+        if (modelCall > 1) {
+          assert.ok(toolResults(request.messages).some((result) => result.code === 'explicit_read_only_constraint'))
+          return modelResponse('只读检查完成，未写入 audit.txt。')
+        }
         return modelResponse('', [
           toolCall('safe-06-write', 'write_file', {
             path: 'audit.txt',
@@ -406,19 +410,15 @@ const TASKS = Object.freeze([
         ])
       },
     })
-    assert.equal(state.executions.length, 0)
-    assert.equal(state.approvals.length, 0)
-    assert.equal(state.modelCalls, 1)
+    // The write is refused by the read-only constraint and never executes; the
+    // read beside it is still a read, so it runs, and the model finishes.
+    assert.deepEqual(state.executions.map(({ name }) => name), ['read_file'])
+    assert.ok(!state.approvals.some(({ name }) => name === 'write_file'), 'the refused write never reached approval')
+    assert.equal(state.modelCalls, 2)
     assert.equal(state.completed.length, 2)
     assert.equal(state.completed[0].result.code, 'explicit_read_only_constraint')
     assert.equal(state.completed[0].result.ok, false)
-    assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
-    assert.equal(state.completed[1].result.executed, false)
-    assert.equal(state.result.code, 'explicit_read_only_constraint')
-    assert.equal(state.result.reason, 'explicit_read_only_constraint')
-    assert.equal(state.result.incomplete, true)
-    assert.equal(state.result.retryable, false)
-    assert.match(state.result.text, /当前任务明确要求只读.*修改操作未执行.*本轮已停止/)
+    assert.equal(state.result.text, '只读检查完成，未写入 audit.txt。')
     assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
       call.id === 'safe-06-write' && call.checkpointResult?.code === 'explicit_read_only_constraint')))
   }),
@@ -431,7 +431,10 @@ const TASKS = Object.freeze([
       toolsConfig: { disabled: ['run_command'] },
       model: async ({ request, modelCall }) => {
         assert.ok(request.tools.some((item) => item?.function?.name === 'run_command'))
-        assert.equal(modelCall, 1, 'a disabled tool must not start a model wrap-up')
+        if (modelCall > 1) {
+          assert.ok(toolResults(request.messages).every((result) => result.code === 'tool_disabled_by_config'))
+          return modelResponse('命令工具已在配置中禁用，未执行任何命令。')
+        }
         return modelResponse('', [
           toolCall('safe-07-disabled', 'run_command', {
             command: 'echo forbidden',
@@ -442,18 +445,17 @@ const TASKS = Object.freeze([
     })
     assert.equal(state.executions.length, 0)
     assert.equal(state.approvals.length, 0)
-    assert.equal(state.modelCalls, 1)
+    assert.ok(state.modelCalls >= 2, 'the model reads the refusal and answers')
     assert.ok(state.trace[0].visibleTools.includes('run_command'))
-    assert.equal(state.completed.length, 2)
+    // Each call is checked on its own: both are refused by the configuration,
+    // and no later round executes the disabled tool either.
+    assert.ok(state.completed.length >= 2)
+    assert.ok(state.completed.every(({ result }) => result.ok !== true))
     assert.equal(state.completed[0]?.result?.code, 'tool_disabled_by_config')
-    assert.equal(state.completed[0].result.ok, false)
-    assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
-    assert.equal(state.completed[1].result.executed, false)
-    assert.equal(state.result.code, 'tool_disabled_by_config')
-    assert.equal(state.result.reason, 'tool_disabled_by_config')
-    assert.equal(state.result.incomplete, true)
-    assert.equal(state.result.retryable, false)
-    assert.match(state.result.text, /工具已在配置中禁用.*本轮已停止.*操作未执行/)
+    assert.equal(state.completed[1]?.result?.code, 'tool_disabled_by_config')
+    // Nothing ran, so the execution-evidence guard keeps the answer from
+    // claiming the work was done.
+    assert.doesNotMatch(state.result.text || '', /已完成|done/iu)
     assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
       call.id === 'safe-07-disabled' && call.checkpointResult?.code === 'tool_disabled_by_config')))
   }),

@@ -16,8 +16,6 @@ export default function useSlashCommandExecution({
   setInput,
   setSlashInlinePanel,
   setWorkbenchMessage,
-  setWorkbenchOpen,
-  setWorkbenchTab,
   slashRegistry,
   stateRef,
   triggerSendFlow,
@@ -45,7 +43,6 @@ export default function useSlashCommandExecution({
         openMcp: () => setSlashInlinePanel('mcp'),
         openFeedback: () => setSlashInlinePanel('feedback'),
         openGoals: () => setSlashInlinePanel('goals'),
-        openSideChat: () => { setWorkbenchTab('chat'); setWorkbenchOpen(true) },
         compactSession: (options) => compressSession({
           ...options,
           modelName,
@@ -81,6 +78,6 @@ export default function useSlashCommandExecution({
     }
   }, [
     changeApprovalMode, dispatch, modelConfigRevision, modelName, modelProviderId, modelReadiness, navigate, onModelUnavailable, setDesktopPetVisible, setInput, setSlashInlinePanel, setWorkbenchMessage,
-    setWorkbenchOpen, setWorkbenchTab, slashRegistry, stateRef, triggerSendFlow,
+    slashRegistry, stateRef, triggerSendFlow,
   ])
 }

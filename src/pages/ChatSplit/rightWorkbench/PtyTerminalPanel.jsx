@@ -196,7 +196,7 @@ export default function PtyTerminalPanel({
   return (
     <section
       ref={sectionRef}
-      className={`min-h-0 flex-1 flex-col bg-ink text-paper ${active ? 'flex' : 'hidden'}`}
+      className={`workbench-terminal-surface min-h-0 flex-1 flex-col bg-ink text-paper ${active ? 'flex' : 'hidden'}`}
       data-testid="workbench-pty-panel"
       data-phase={status.phase}
     >

@@ -23,6 +23,7 @@ import {
   withSubagentExecutionPolicyCheckpoint,
 } from './subagentExecutionPolicy.js'
 import { getToolMetadata } from '../utils/toolSchemaCatalog.js'
+import { SUBAGENT_DEFERRED_TOOL_NAMES, SUBAGENT_SEARCH_TOOL_SPEC } from './subagentRuntimePolicy.js'
 import {
   SUBAGENT_BUDGET,
   SUBAGENT_MAX_ITERS,
@@ -175,15 +176,27 @@ async function prepareSubagentLoopPolicy({ loadCheckpoint, approvalContext, user
   const inheritedPolicy = getSubagentExecutionPolicy(effectiveApprovalContext, { userId })
   // The caller has already filtered this run's tools. Do not consult the
   // broader type catalog or let an injected loop executor widen this snapshot.
-  const effectiveToolSpecs = (Array.isArray(tools) ? tools : [])
+  const allowedToolSpecs = (Array.isArray(tools) ? tools : [])
     .filter((spec) => !inheritedPolicy?.readOnly
       || getToolMetadata(spec?.function?.name, { userId }).isReadOnly === true)
-  const authorizedToolSpecs = structuredClone(effectiveToolSpecs)
-  return { loadedCheckpoint, effectiveApprovalContext, effectiveToolSpecs, authorizedToolSpecs }
+  // Shown up front vs. found through search_tools. The deferred ones are still
+  // in the authorized snapshot below, so a mounted tool passes the very same
+  // validator, approval gate and ledger as a shown one — search never widens it.
+  const deferred = allowedToolSpecs.filter((spec) => SUBAGENT_DEFERRED_TOOL_NAMES.has(spec?.function?.name))
+  const withSearch = deferred.length > 0
+    && !allowedToolSpecs.some((spec) => spec?.function?.name === 'search_tools')
+    && SUBAGENT_SEARCH_TOOL_SPEC
+  const effectiveToolSpecs = [
+    ...allowedToolSpecs.filter((spec) => !SUBAGENT_DEFERRED_TOOL_NAMES.has(spec?.function?.name)),
+    ...(withSearch ? [SUBAGENT_SEARCH_TOOL_SPEC] : []),
+  ]
+  const fallbackToolSpecs = [...allowedToolSpecs, ...(withSearch ? [SUBAGENT_SEARCH_TOOL_SPEC] : [])]
+  const authorizedToolSpecs = structuredClone(fallbackToolSpecs)
+  return { loadedCheckpoint, effectiveApprovalContext, effectiveToolSpecs, fallbackToolSpecs, authorizedToolSpecs }
 }
 
 export async function runSubagentToolLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, locale = 'zh', callModel = callBackgroundModelWithTools, executeTool = undefined, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = undefined, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
-  const { loadedCheckpoint, effectiveApprovalContext, effectiveToolSpecs, authorizedToolSpecs } = await prepareSubagentLoopPolicy({
+  const { loadedCheckpoint, effectiveApprovalContext, effectiveToolSpecs, fallbackToolSpecs, authorizedToolSpecs } = await prepareSubagentLoopPolicy({
     loadCheckpoint, approvalContext, userId, tools,
   })
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
@@ -247,6 +260,7 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     // Preserve registry WeakMap identities on the shown schemas; admission
     // still uses the detached private snapshot above.
     toolSpecs: effectiveToolSpecs,
+    fallbackToolSpecs,
     signal,
     maxIters,
     contextWindow,

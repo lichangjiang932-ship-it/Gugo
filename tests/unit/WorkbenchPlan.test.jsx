@@ -43,7 +43,7 @@ async function renderPlan(props) {
   return { root, rootElement }
 }
 
-test('the plan panel shows the task list, the plan and the output', async () => {
+test('the plan panel shows the task list and the plan — progress, not files', async () => {
   const originalFetch = globalThis.fetch
   const dom = setupDom()
   globalThis.fetch = stubGoals({
@@ -57,7 +57,6 @@ test('the plan panel shows the task list, the plan and the output', async () => 
       ],
     },
   })
-  const opened = []
   try {
     const { root, rootElement } = await renderPlan({
       sessionId: 'session-1',
@@ -66,14 +65,13 @@ test('the plan panel shows the task list, the plan and the output', async () => 
         { id: 'todo-2', activeForm: '写报告', status: 'in_progress' },
         { id: 'todo-3', content: '收尾' },
       ],
-      artifacts: [{ id: 'artifact-1', filename: 'out.xlsx', type: 'file' }],
-      onOpenArtifact: (artifact) => opened.push(artifact.id),
     })
 
-    // Three parts, each with its own count.
+    // Two parts, each with its own count. The session's files are the
+    // workbench's "workspace files" tool, not part of progress.
     assert.ok(rootElement.querySelector('[data-testid="workbench-plan-tasks"]'))
     assert.ok(rootElement.querySelector('[data-testid="workbench-plan-plan"]'))
-    assert.ok(rootElement.querySelector('[data-testid="workbench-plan-output"]'))
+    assert.equal(rootElement.querySelector('[data-testid="workbench-plan-output"]'), null)
     assert.deepEqual(
       [...rootElement.querySelectorAll('[data-testid="workbench-plan-task"]')].map((node) => node.getAttribute('data-status')),
       ['completed', 'in_progress', 'pending'],
@@ -84,12 +82,6 @@ test('the plan panel shows the task list, the plan and the output', async () => 
       [...rootElement.querySelectorAll('[data-testid="workbench-plan-step"]')].map((node) => node.getAttribute('data-status')),
       ['done', 'pending'],
     )
-    const artifacts = [...rootElement.querySelectorAll('[data-testid="workbench-plan-artifact"]')]
-    assert.equal(artifacts.length, 1)
-    assert.match(artifacts[0].textContent, /out\.xlsx/u)
-
-    await act(async () => artifacts[0].click())
-    assert.deepEqual(opened, ['artifact-1'])
     await act(async () => root.unmount())
   } finally {
     dom.window.close()
@@ -102,10 +94,9 @@ test('each part says it is empty rather than showing nothing', async () => {
   const dom = setupDom()
   globalThis.fetch = stubGoals({ plans: [], plan: null })
   try {
-    const { root, rootElement } = await renderPlan({ sessionId: 'session-2', todos: [], artifacts: [] })
+    const { root, rootElement } = await renderPlan({ sessionId: 'session-2', todos: [] })
     assert.ok(rootElement.querySelector('[data-testid="workbench-plan-tasks-empty"]'))
     assert.ok(rootElement.querySelector('[data-testid="workbench-plan-empty"]'))
-    assert.ok(rootElement.querySelector('[data-testid="workbench-plan-output-empty"]'))
     await act(async () => root.unmount())
   } finally {
     dom.window.close()
@@ -113,7 +104,7 @@ test('each part says it is empty rather than showing nothing', async () => {
   }
 })
 
-test('a plan that cannot be read says so without losing the other two parts', async () => {
+test('a plan that cannot be read says so without losing the task list', async () => {
   const originalFetch = globalThis.fetch
   const dom = setupDom()
   globalThis.fetch = async () => new Response(JSON.stringify({ ok: false, error: 'plan store offline' }), {
@@ -124,15 +115,13 @@ test('a plan that cannot be read says so without losing the other two parts', as
     const { root, rootElement } = await renderPlan({
       sessionId: 'session-3',
       todos: [{ id: 'todo-1', content: '读文件', status: 'completed' }],
-      artifacts: [{ id: 'artifact-1', filename: 'out.xlsx' }],
     })
 
     const error = rootElement.querySelector('[data-testid="workbench-plan-error"]')
     assert.ok(error, 'the failure is reported where the plan would be')
     assert.match(error.textContent, /plan store offline/u)
-    // The task list and the output are independent of the plan.
+    // The task list is independent of the plan.
     assert.equal(rootElement.querySelectorAll('[data-testid="workbench-plan-task"]').length, 1)
-    assert.equal(rootElement.querySelectorAll('[data-testid="workbench-plan-artifact"]').length, 1)
     await act(async () => root.unmount())
   } finally {
     dom.window.close()

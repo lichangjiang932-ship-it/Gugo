@@ -4,7 +4,7 @@
  * label. Tints live here so the two surfaces can never drift apart.
  */
 const TINT = Object.freeze({
-  chat: 'bg-accent/10 text-accent-ink',
+  files: 'bg-accent/10 text-accent-ink',
   browser: 'bg-running/10 text-running',
   terminal: 'bg-ink/[0.07] text-ink-soft',
   fallback: 'bg-paper-2 text-ink-fade',

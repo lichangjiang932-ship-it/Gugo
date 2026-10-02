@@ -38,7 +38,10 @@ export default function GlobalShortcuts() {
       switch (action) {
         case 'new-session':
           e.preventDefault()
-          dispatch({ type: 'NEW_SESSION' })
+          // The same draft the sidebar's "new chat" opens: nothing is saved, and
+          // no empty, timestamp-titled conversation is left behind, until the
+          // first message is sent.
+          dispatch({ type: 'START_NEW_DRAFT' })
           navigate('/chat')
           break
         case 'clear-session':

@@ -24,10 +24,7 @@ const baseProps = {
   runCommand: () => {},
   setCommand: () => {},
   setCwd: () => {},
-  setSideInput: () => {},
   setTerminalTranscript: () => {},
-  sideInput: '',
-  submitSideChat: () => {},
   t,
   terminalBusy: false,
   terminalTranscript: { dropped: 0, entries: [] },
@@ -104,7 +101,7 @@ test('the desktop build gets the shell panel instead', async () => {
 
 test('the shell panel is mounted only while the workbench is open, and hidden on other tabs', async () => {
   setupDom()
-  const { container, render } = await renderWorkbench({ activeTab: 'chat', bridge: refusingBridge() })
+  const { container, render } = await renderWorkbench({ activeTab: 'files', bridge: refusingBridge() })
   const panel = container.querySelector('[data-testid="workbench-pty-panel"]')
   assert.ok(panel, 'the panel exists so a running shell survives a tab switch')
   assert.equal(panel.className.includes('hidden'), true, 'but it is not shown on another tab')

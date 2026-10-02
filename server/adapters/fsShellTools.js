@@ -29,6 +29,17 @@ export {
   FS_SHELL_TOOL_SPECS,
 }
 
+// The HTTP face carries what a person in the app actually uses: listing and
+// reading (local-path probing) and the web terminal's shell. Writing and
+// editing files are model tools, executed in-process behind the approval
+// gate — they have no HTTP route. Paths match exactly, so no longer path
+// that merely starts with one of these reaches a handler.
+const HTTP_ROUTES = new Map([
+  ['/api/tools/fs/list', listDirectoryTool],
+  ['/api/tools/fs/read', readFileTool],
+  ['/api/tools/shell/exec', bashExecTool],
+])
+
 export async function handleFsShellRequest(req, res) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { ok: false, error: '仅支持 POST' })
@@ -38,17 +49,14 @@ export async function handleFsShellRequest(req, res) {
     sendJson(res, 401, { ok: false, error: '请先登录' })
     return
   }
-  const url = req.url || ''
+  const route = HTTP_ROUTES.get(String(req.url || '').split('?')[0])
+  if (!route) {
+    sendJson(res, 404, { ok: false, error: '未知端点' })
+    return
+  }
   try {
     const body = await readJson(req)
-    const bodyWithUser = { ...body, userId: req.userId }
-    let result
-    if (url.startsWith('/api/tools/fs/list')) result = await listDirectoryTool(bodyWithUser)
-    else if (url.startsWith('/api/tools/fs/read')) result = await readFileTool(bodyWithUser)
-    else if (url.startsWith('/api/tools/fs/write')) result = await writeFileTool(bodyWithUser)
-    else if (url.startsWith('/api/tools/fs/edit')) result = await editFileTool(bodyWithUser)
-    else if (url.startsWith('/api/tools/shell/exec')) result = await bashExecTool(bodyWithUser)
-    else { sendJson(res, 404, { ok: false, error: '未知端点' }); return }
+    const result = await route({ ...body, userId: req.userId })
     sendJson(res, 200, result)
   } catch (error) {
     const status = error?.statusCode || 500

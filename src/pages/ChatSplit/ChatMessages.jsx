@@ -96,6 +96,7 @@ export default function ChatMessages({
         ) : (
           <NewConversationWelcome
             onPromptSelect={onPromptSelect}
+            workspacePath={workspacePath}
           />
         )}
         </div>

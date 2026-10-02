@@ -1,5 +1,5 @@
 import { isValidElement, useState } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { Check, ChevronDown, Copy } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { copyTextToClipboard } from '../../lib/clipboard.js'
 import { nodeText, selectedTextIntersects } from './markdownUtils.js'
@@ -63,13 +63,22 @@ export function SelectableFileLink({
   )
 }
 
+/** Lines a finished block shows before it folds behind "show all". */
+const CODE_FOLD_LINES = 24
+
 export function CodeBlock({ children, streaming = false }) {
   const { t } = useT()
   const [copyState, setCopyState] = useState('idle')
+  const [expanded, setExpanded] = useState(false)
   const child = Array.isArray(children) ? children[0] : children
   const className = isValidElement(child) ? child.props.className || '' : ''
   const language = className.match(/language-([\w-]+)/)?.[1] || 'text'
   const source = nodeText(child).replace(/\n$/, '')
+  const lineCount = source ? source.split('\n').length : 0
+  // A 300-line stylesheet pushed the actual answer a screen away. Finished
+  // blocks fold; a streaming one never does, so nothing is hidden mid-write.
+  const foldable = !streaming && lineCount > CODE_FOLD_LINES + 4
+  const folded = foldable && !expanded
 
   const copy = async () => {
     try {
@@ -90,7 +99,10 @@ export function CodeBlock({ children, streaming = false }) {
   return (
     <div className="chat-code-block not-prose my-3 overflow-hidden rounded-card border border-ink/10 bg-paper-2/70 shadow-sm">
       <div className="chat-code-block-header flex h-7 items-center justify-between border-b border-ink/10 bg-paper/45 px-2.5">
-        <span className="font-mono text-xs uppercase tracking-[0.16em] text-ink-fade">{language}</span>
+        <span className="font-mono text-xs uppercase tracking-[0.16em] text-ink-fade">
+          {language}
+          {foldable && <span className="ml-2 normal-case tracking-normal">{t('codeBlock.lines', { count: lineCount })}</span>}
+        </span>
         {!streaming && (
           <button
             type="button"
@@ -104,7 +116,26 @@ export function CodeBlock({ children, streaming = false }) {
           </button>
         )}
       </div>
-      <pre className="chat-code-scroll m-0 overflow-x-auto p-3 text-[12px] leading-5">{children}</pre>
+      <div className={folded ? 'chat-code-folded relative' : 'relative'} data-folded={folded || undefined}>
+        <pre
+          className="chat-code-scroll m-0 overflow-x-auto p-3 text-[12px] leading-5"
+          style={folded ? { maxHeight: `calc(${CODE_FOLD_LINES} * 1.25rem + 1.5rem)`, overflowY: 'hidden' } : undefined}
+        >
+          {children}
+        </pre>
+        {foldable && (
+          <button
+            type="button"
+            data-testid="code-block-fold"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+            className="chat-code-fold-toggle flex w-full items-center justify-center gap-1 border-t border-ink/10 py-1.5 text-xs text-ink-fade transition-colors hover:bg-ink/[0.04] hover:text-ink"
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+            {expanded ? t('codeBlock.collapse') : t('codeBlock.expand', { count: lineCount })}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

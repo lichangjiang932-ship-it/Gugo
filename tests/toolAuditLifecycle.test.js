@@ -382,7 +382,8 @@ test('run_code approval cannot bypass execution trust revoked before dispatch', 
     })
 
     assert.equal(approvals, 1)
-    assert.equal(modelCalls, 1, 'revoked execution trust must not cause a model wrap-up')
+    // The refusal is reported back to the model, which says so; nothing ran.
+    assert.ok(modelCalls >= 2, 'the model reads the revoked-trust refusal')
     assert.equal(observedToolResult?.ok, false)
     assert.equal(observedToolResult?.code, 'CODE_MODE_DISABLED')
     assert.equal(observedToolResult?.denied, true)

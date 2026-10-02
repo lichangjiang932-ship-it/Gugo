@@ -2,8 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { buildArtifactPreview } from '../src/lib/artifactPreview.js'
-import { buildToolSpecs, executeToolCall, listToolNames } from '../src/lib/tools/index.js'
-import { listBuiltinSpecs } from '../server/services/toolRegistry.js'
+import { getBuiltinSpec, listBuiltinNames } from '../server/services/toolRegistry.js'
 import { buildCompaction, validateToolCallChain } from '../server/services/compactionService.js'
 import { hasVisionContent, supportsVisionModel } from '../server/adapters/modelProxy.js'
 import { replaceUnsupportedVisionContent } from '../server/adapters/visionAssist.js'
@@ -39,35 +38,14 @@ test('advanced artifact previews render mermaid, chart, svg, and multi-file html
 })
 
 test('tool registry exposes executable server artifact tools and retires preview-only schemas', () => {
-  const catalog = listBuiltinSpecs()
-  const names = listToolNames(catalog)
+  const names = listBuiltinNames()
   for (const name of ['create_html_app', 'Agent']) {
     assert.ok(names.includes(name), `${name} should be registered`)
+    assert.equal(getBuiltinSpec(name)?.function?.name, name, `${name} should resolve to its server spec`)
   }
   for (const name of ['create_mermaid', 'create_chart', 'create_svg']) {
     assert.equal(names.includes(name), false, `${name} is a client preview, not a server tool`)
   }
-  const specs = buildToolSpecs(['create_html_app', 'Agent'], catalog)
-  assert.deepEqual(specs.map((spec) => spec.function.name), ['Agent', 'create_html_app'])
-})
-
-test('artifact tools return collapsed preview artifacts and reject unsafe html apps', async () => {
-  const svg = await executeToolCall({
-    name: 'create_svg',
-    arguments: JSON.stringify({ title: 'Icon', svg: '<svg viewBox="0 0 10 10"><path d="M0 0h10v10z"/></svg>' }),
-  }, { maxRetries: 0 })
-  assert.equal(svg.ok, true)
-  assert.equal(svg.artifact.type, 'svg')
-
-  const unsafe = await executeToolCall({
-    name: 'create_html_app',
-    arguments: JSON.stringify({
-      title: 'Unsafe',
-      files: { 'index.html': '<script src="https://example.com/app.js"></script>' },
-    }),
-  }, { maxRetries: 0, allowedArtifactTools: new Set(['create_html_app']) })
-  assert.equal(unsafe.ok, false)
-  assert.match(unsafe.content, /external scripts/)
 })
 
 test('compaction preserves tool_call chain when a retained tool message depends on archived assistant call', () => {

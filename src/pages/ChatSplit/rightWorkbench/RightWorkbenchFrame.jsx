@@ -33,7 +33,7 @@ export default function RightWorkbenchFrame({
       />
 
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-ink/10 px-3">
-        <div className="min-w-0 flex-1">
+        <div className="workbench-header-title min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="truncate text-xs font-semibold text-ink">{t('workbench.title')}</h2>
             <span className={`h-1.5 w-1.5 shrink-0 rounded-pill ${isGenerating ? 'animate-pulse bg-running' : 'bg-success'}`} aria-hidden="true" />

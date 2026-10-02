@@ -51,6 +51,7 @@ test('maintenance topics, negations and quoted examples are not affirmative impl
 })
 
 test('the real loop reaches normal approval for scoped code work and still cannot execute a refused edit', async () => {
+  // The refusal goes back to the model, which answers instead of editing.
   let approvals = 0
   let executions = 0
   let modelCalls = 0
@@ -60,6 +61,7 @@ test('the real loop reaches normal approval for scoped code work and still canno
     toolSpecs: specs, maxIters: 2, approvalMode: 'normal', enableToolHooks: false,
     runModel: async () => {
       modelCalls += 1
+      if (modelCalls > 1) return { content: 'The edit was declined; here is the change as a patch instead.', toolCalls: [] }
       return { content: '', toolCalls: [{ id: 'contract-edit', type: 'function', function: { name: 'write_file',
         arguments: JSON.stringify({ path: 'src/config.js', content: 'export function mergeConfig() {}' }) } }] }
     },
@@ -69,8 +71,7 @@ test('the real loop reaches normal approval for scoped code work and still canno
   })
   assert.equal(approvals, 1, 'a scoped contract should reach, not bypass or replace, the approval gate')
   assert.equal(executions, 0)
-  assert.equal(modelCalls, 1)
-  assert.equal(result.incomplete, true)
-  assert.equal(result.code, 'approval_denied')
+  assert.equal(modelCalls, 2, 'the model reads the refusal and gets a round to respond')
   assert.equal(completed[0].result.deniedByUser, true)
+  assert.notEqual(result.code, 'approval_denied')
 })

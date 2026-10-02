@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getDesktopBrowserHost } from '../lib/desktopBrowserClient.js'
-import { isLocalWorkbenchPath, normalizeBrowserUrl } from '../lib/browserUrlPolicy.js'
+import { isLocalWorkbenchPath, resolveBrowserInput } from '../lib/browserUrlPolicy.js'
 
 const EMPTY_STATUS = Object.freeze({
   canGoBack: false,
@@ -8,6 +8,29 @@ const EMPTY_STATUS = Object.freeze({
   loading: false,
   title: '',
 })
+
+const RECENT_KEY = 'yma:workbench-browser-recent'
+const RECENT_LIMIT = 6
+
+function readRecent() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(RECENT_KEY) || '[]')
+    return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string').slice(0, RECENT_LIMIT) : []
+  } catch {
+    return []
+  }
+}
+
+function rememberRecent(list, url) {
+  // Searches are not places worth returning to; addresses are.
+  if (!url || url.startsWith('https://www.bing.com/search')) return list
+  const next = [url, ...list.filter((entry) => entry !== url)].slice(0, RECENT_LIMIT)
+  try { window.localStorage.setItem(RECENT_KEY, JSON.stringify(next)) } catch { /* storage is optional */ }
+  return next
+}
+
+/** Fired by the preview server bar when a dev server becomes ready. */
+export const BROWSER_OPEN_EVENT = 'workbench-browser:open'
 
 /**
  * Drives whichever browser backend this build has.
@@ -24,11 +47,12 @@ export default function useEmbeddedBrowser({ containerRef, active = true } = {})
   // rather than on every render.
   const [host] = useState(getDesktopBrowserHost)
 
-  const [input, setInput] = useState('https://')
+  const [input, setInput] = useState('')
   const [url, setUrl] = useState('')
   const [error, setError] = useState('')
   const [status, setStatus] = useState(EMPTY_STATUS)
   const [reloadKey, setReloadKey] = useState(0)
+  const [recent, setRecent] = useState(readRecent)
 
   const applyStatus = useCallback((next) => {
     if (!next || typeof next !== 'object') return
@@ -106,17 +130,32 @@ export default function useEmbeddedBrowser({ containerRef, active = true } = {})
   useEffect(() => () => { host?.hide?.() }, [host])
 
   const navigate = useCallback((rawValue) => {
-    const nextUrl = normalizeBrowserUrl(rawValue)
-    if (!nextUrl) {
-      setError(isLocalWorkbenchPath(rawValue) ? 'local' : 'invalid')
+    const resolved = resolveBrowserInput(rawValue)
+    if (resolved.kind === 'empty') return false
+    if (!resolved.url) {
+      setError(resolved.kind === 'refused' && isLocalWorkbenchPath(rawValue) ? 'local' : 'invalid')
       return false
     }
+    const nextUrl = resolved.url
     setError('')
     setInput(nextUrl)
     setUrl(nextUrl)
+    setRecent((list) => rememberRecent(list, nextUrl))
     host?.navigate?.(nextUrl)
     return true
   }, [host])
+
+  // A dev server that just became ready is opened here — unless the reader is
+  // already looking at a page, which is theirs and is not replaced.
+  useEffect(() => {
+    const onOpen = (event) => {
+      const target = String(event?.detail?.url || '')
+      if (!target || (url && !event?.detail?.force)) return
+      navigate(target)
+    }
+    window.addEventListener(BROWSER_OPEN_EVENT, onOpen)
+    return () => window.removeEventListener(BROWSER_OPEN_EVENT, onOpen)
+  }, [navigate, url])
 
   const submit = useCallback((event) => {
     event?.preventDefault?.()
@@ -139,6 +178,7 @@ export default function useEmbeddedBrowser({ containerRef, active = true } = {})
     goForward,
     input,
     navigate,
+    recent,
     reload,
     reloadKey,
     setInput,

@@ -138,7 +138,7 @@ test('shell execution is refused when local code execution is switched off', asy
   }
 })
 
-test('a granted user can run a command and round-trip a file through the endpoints', async () => {
+test('a granted user can run a command and read its file back through the endpoints', async () => {
   const session = grantedUser('fs-shell-http-granted@example.com')
 
   const shell = await post('/api/tools/shell/exec', {
@@ -150,17 +150,54 @@ test('a granted user can run a command and round-trip a file through the endpoin
   assert.equal(shellBody.exitCode, 0)
   assert.match(shellBody.stdout, /endpoint-ok/u)
 
-  const target = path.join(grantedDir, 'written-by-endpoint.txt')
-  const write = await post('/api/tools/fs/write', {
-    path: target,
-    content: 'written through the tool endpoint\n',
+  const target = path.join(grantedDir, 'written-by-shell.txt')
+  const write = await post('/api/tools/shell/exec', {
+    command: 'node -e "require(\'fs\').writeFileSync(\'written-by-shell.txt\', \'written through the terminal\\n\')"',
+    cwd: grantedDir,
   }, session.token)
   assert.equal(write.status, 200)
-  assert.equal((await write.json()).ok, true)
+  assert.equal((await write.json()).exitCode, 0)
 
   const read = await post('/api/tools/fs/read', { path: target }, session.token)
   assert.equal(read.status, 200)
-  assert.equal((await read.json()).content, 'written through the tool endpoint\n')
+  assert.equal((await read.json()).content, 'written through the terminal\n')
+
+  const listed = await post('/api/tools/fs/list', { path: grantedDir }, session.token)
+  assert.equal(listed.status, 200)
+  assert.match(JSON.stringify(await listed.json()), /written-by-shell\.txt/u)
+})
+
+test('writing and editing files have no HTTP route, even for a granted user', async () => {
+  const session = grantedUser('fs-shell-http-no-write@example.com')
+  const target = path.join(grantedDir, 'must-not-exist.txt')
+  fs.writeFileSync(path.join(grantedDir, 'keep.txt'), 'original\n')
+
+  for (const endpoint of [
+    '/api/tools/fs/write',
+    '/api/tools/fs/edit',
+    '/api/tools/fs/write_file',
+    '/api/tools/fs/readx',
+    '/api/tools/shell/exec/extra',
+  ]) {
+    const response = await post(endpoint, {
+      path: target,
+      content: 'must not be written\n',
+      command: 'node --version',
+      cwd: grantedDir,
+    }, session.token)
+    assert.equal(response.status, 404, endpoint)
+  }
+  const edit = await post('/api/tools/fs/edit', {
+    path: path.join(grantedDir, 'keep.txt'),
+    old_string: 'original',
+    new_string: 'changed',
+  }, session.token)
+  assert.equal(edit.status, 404)
+  assert.equal(fs.existsSync(target), false)
+  assert.equal(fs.readFileSync(path.join(grantedDir, 'keep.txt'), 'utf8'), 'original\n')
+
+  const withQuery = await post('/api/tools/fs/read?x=1', { path: path.join(grantedDir, 'keep.txt') }, session.token)
+  assert.equal(withQuery.status, 200)
 })
 
 test('the endpoint keeps the per-user tool switch and the grant boundary', async () => {
@@ -175,10 +212,17 @@ test('the endpoint keeps the per-user tool switch and the grant boundary', async
   assert.equal((await disabled.json()).code, 'TOOL_DISABLED')
 
   setUserToolPermission({ userId: session.userId, toolName: 'bash_exec', enabled: true })
-  const outsideWrite = await post('/api/tools/fs/write', {
-    path: path.join(outsideDir, 'escape.txt'),
-    content: 'must not be written\n',
+  fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'outside the grant\n')
+  const outsideRead = await post('/api/tools/fs/read', {
+    path: path.join(outsideDir, 'secret.txt'),
   }, session.token)
-  assert.equal(outsideWrite.ok, false)
-  assert.equal(fs.existsSync(path.join(outsideDir, 'escape.txt')), false)
+  assert.equal(outsideRead.ok, false)
+  assert.doesNotMatch(await outsideRead.text(), /outside the grant/u)
+
+  const outsideShell = await post('/api/tools/shell/exec', {
+    command: 'node --version',
+    cwd: outsideDir,
+  }, session.token)
+  assert.equal(outsideShell.status, 403)
+  assert.equal((await outsideShell.json()).code, 'PATH_NOT_AUTHORIZED')
 })

@@ -217,3 +217,4 @@ test('running composer sends text or attachments and pauses only an empty draft'
     dom.window.close()
   }
 })
+

@@ -5,8 +5,6 @@ import { listRegisteredBrowserToolSpecs, registerBrowserTools } from '../server/
 import { listAllSpecs, unregisterByOrigin } from '../server/services/toolRegistry.js'
 import { resolveTurnToolSpecs } from '../server/services/turnToolSpecs.js'
 import { _browserInternals } from '../server/adapters/browserAutomation.js'
-import { executeToolCall } from '../src/lib/tools/index.js'
-import { TOKEN_KEY } from '../src/lib/accountClient.js'
 import { buildServerToolCatalogFallback, selectEnabledServerToolSpecs } from '../src/lib/serverToolCatalog.js'
 
 test.afterEach(() => unregisterByOrigin('browser'))
@@ -76,54 +74,6 @@ test('frontend fallback catalog keeps browser interaction tools available', () =
   assert.ok(expected.every((name) => fallbackNames.has(name)), 'fallback catalog dropped browser tools')
   assert.ok(expected.every((name) => liveNames.has(name)), 'live catalog dropped browser tools')
   assert.ok(fallback.every((spec) => !Object.hasOwn(spec.function, 'parameters')))
-})
-
-test('standalone compatibility client routes standard browser actions to their HTTP endpoints', async () => {
-  const oldWindow = globalThis.window
-  const oldFetch = globalThis.fetch
-  globalThis.window = {
-    localStorage: {
-      getItem: (key) => key === TOKEN_KEY ? 'token-browser' : null,
-      setItem: () => {},
-      removeItem: () => {},
-    },
-  }
-  const calls = []
-  globalThis.fetch = async (url, init) => {
-    calls.push({ url, init })
-    return new Response(JSON.stringify({ ok: true, result: { connected: true } }), { status: 200 })
-  }
-  try {
-    for (const [name, args] of [
-      ['browser_navigate', { url: 'https://example.com' }],
-      ['browser_tabs', {}],
-      ['browser_switch_tab', { targetId: 'target-popup' }],
-      ['browser_frames', {}],
-      ['browser_switch_frame', { frameId: 'frame-cross-origin' }],
-      ['browser_upload_file', { target: 'e4', path: 'D:\\fixture.txt' }],
-      ['browser_download', { target: 'e5', path: 'D:\\download.bin' }],
-      ['browser_select', { target: 'e2', value: 'Two' }],
-      ['browser_press', { target: 'e1', key: 'Enter' }],
-    ]) {
-      const result = await executeToolCall({ name, arguments: JSON.stringify(args) })
-      assert.equal(result.ok, true, name)
-    }
-    assert.deepEqual(calls.map((call) => call.url), [
-      '/api/browser/navigate',
-      '/api/browser/tabs',
-      '/api/browser/switch-tab',
-      '/api/browser/frames',
-      '/api/browser/switch-frame',
-      '/api/browser/upload-file',
-      '/api/browser/download',
-      '/api/browser/select',
-      '/api/browser/press',
-    ])
-    assert.ok(calls.every((call) => call.init.headers.Authorization === 'Bearer token-browser'))
-  } finally {
-    globalThis.fetch = oldFetch
-    globalThis.window = oldWindow
-  }
 })
 
 test('browser tab switching enables the new target before retiring the previous client', async () => {
