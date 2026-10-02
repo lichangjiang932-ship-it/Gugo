@@ -6,10 +6,18 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Preparing 0.11.67. It carries the preview panel and its verification loop (unreleased since
+Preparing 0.11.68. It carries the preview panel and its verification loop (unreleased since
 0.11.66) and a pass over the agent's behaviour and the interface to bring both closer to Claude Code
 and Codex. The Windows build remains explicitly unsigned through the version-bound
 `scripts/release/policy.json`; verification of checksums and build provenance stays required.
+
+`v0.11.67` (main commit `f48c948`) stopped at the required-gates stage: the production dependency
+audit found advisories published after 0.11.66 shipped — `undici` 7.29.0, `fast-uri` 3.1.6 and `ajv`
+8.17.1. 0.11.68 pins the patched releases within the same majors (`undici` 7.30.0, `fast-uri` 3.1.8,
+`ajv` 8.20.0). The same run's Linux test job failed one session-search test that ran a real 100 ms
+scan budget over 2012 rows on a loaded runner; that test is about owner and session scope, and now
+runs its scan on a frozen clock. No Release or release assets were published for `v0.11.67`, and
+the tag is not moved or reused.
 
 ### Added
 
@@ -38,6 +46,10 @@ and Codex. The Windows build remains explicitly unsigned through the version-bou
 ### Removed
 
 - The unused standalone tool client under `src/lib/tools/` (its executors, spec builder and approval wrapper) and the tests that only exercised it. Model tool calls never went through it.
+
+### Security
+
+- Production dependencies move to patched releases within their majors: `undici` 7.30.0 (denial-of-service, response-splitting, cookie-disclosure and TLS-option advisories), `fast-uri` 3.1.8 (authority and host-confusion advisories) and `ajv` 8.20.0 (`$data` ReDoS). The two `image-size` advisories under `pptxgenjs` stay on their version-locked, expiring exceptions.
 
 ## [0.11.66] - 2026-09-28
 
