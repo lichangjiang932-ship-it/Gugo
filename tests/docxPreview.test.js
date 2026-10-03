@@ -43,3 +43,16 @@ test('preview options keep page boundaries and inline images', () => {
   assert.equal(DOCX_PREVIEW_OPTIONS.renderFooters, true)
   assert.ok(Object.isFrozen(DOCX_PREVIEW_OPTIONS))
 })
+
+test('the document flows into the pane instead of keeping its own page box', () => {
+  // The library otherwise writes the document's page width onto every section as
+  // an inline pixel width, which overflows a side panel narrower than A4, and a
+  // minimum height that pads short documents with a tall empty block.
+  assert.equal(DOCX_PREVIEW_OPTIONS.ignoreWidth, true)
+  assert.equal(DOCX_PREVIEW_OPTIONS.ignoreHeight, true)
+  // Page boundaries must survive the reflow: this is the visible page break.
+  assert.equal(DOCX_PREVIEW_OPTIONS.breakPages, true)
+  const srcdoc = buildDocxSrcdoc({ bodyHtml: '<section class="docx"></section>' })
+  assert.match(srcdoc, /section\.docx\{width:100%/u)
+  assert.match(srcdoc, /\.docx img,\.docx svg\{max-width:100%/u)
+})

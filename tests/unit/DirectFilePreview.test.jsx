@@ -740,7 +740,7 @@ test('verified local HTML revokes a preview ticket that arrives after the sideba
   }
 })
 
-test('direct-file toolbar always keeps the independent download fallback', async () => {
+test('direct-file toolbar names the file and offers no download action of its own', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
@@ -754,9 +754,8 @@ test('direct-file toolbar always keeps the independent download fallback', async
         t={(key) => key}
       />,
     ))
-    const link = rootElement.querySelector('a[download="季度报告.docx"]')
-    assert.ok(link)
-    assert.match(link.href, /\/api\/artifacts\/report\.docx$/)
+    assert.equal(rootElement.querySelector('a[download]'), null)
+    assert.equal(rootElement.querySelector('.chat-preview-file-identity').textContent, '季度报告.docx')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -20,15 +20,23 @@ export const DOCX_PREVIEW_CSP = [
   "media-src data:",
 ].join('; ')
 
-/** Page/section options. Wrapper off: the iframe already provides the frame. */
+/**
+ * Page/section options. Wrapper off: the iframe already provides the frame.
+ *
+ * `ignoreWidth`/`ignoreHeight` are on so the document flows to the pane it is
+ * shown in. The library otherwise writes the document's own page size onto each
+ * section as an inline pixel width and an inline minimum height, which overflows
+ * a side panel that is narrower than A4 and leaves a tall empty block under short
+ * documents. The page breaks a reader relies on still come from `breakPages`.
+ */
 export const DOCX_PREVIEW_OPTIONS = Object.freeze({
   inWrapper: false,
   breakPages: true,
   renderHeaders: true,
   renderFooters: true,
   useBase64URL: true,
-  ignoreWidth: false,
-  ignoreHeight: false,
+  ignoreWidth: true,
+  ignoreHeight: true,
   ignoreFonts: false,
   ignoreLastRenderedPageBreak: false,
   className: 'docx',
@@ -41,6 +49,11 @@ const BASE_CSS = [
   // the sections transparent keeps light/dark theming correct and avoids
   // inventing a colour that only matches one theme.
   '.docx{margin:0 auto 12px}',
+  // The pane can be resized narrower than the page, so the document is bound to
+  // the frame instead of keeping its own page width and scrolling sideways.
+  '.docx,section.docx{width:100%;max-width:100%;box-sizing:border-box}',
+  '.docx img,.docx svg{max-width:100%;height:auto}',
+  '.docx table{max-width:100%}',
 ].join('')
 
 /**

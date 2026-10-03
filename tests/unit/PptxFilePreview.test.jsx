@@ -97,7 +97,7 @@ test('PPTX original-file preview displays parsed drawing, never the Markdown HTM
   } finally { await h.close() }
 })
 
-test('unsupported binary slides are explicitly text-only and preserve the independent original download', async () => {
+test('unsupported binary slides are explicitly text-only and carry no download action of their own', async () => {
   const original = await bytes({ unsupported: true })
   const h = harness()
   globalThis.fetch = async () => new Response(original)
@@ -110,11 +110,12 @@ test('unsupported binary slides are explicitly text-only and preserve the indepe
     assert.equal(h.container.querySelector('[data-testid="pptx-original-layout"]'), null)
     assert.ok(h.container.querySelector('[data-testid="pptx-text-outline"]'))
     assert.ok(h.container.querySelector('[data-testid="pptx-layout-unavailable"]'))
-    assert.equal(h.container.querySelector('details').open, false, 'an outline does not masquerade as the rendered slide')
+    // The first disclosure is the file menu; the slide outline below it starts closed.
+    assert.equal(h.container.querySelector('details').open, false, 'neither list starts expanded')
     assert.match(h.container.textContent, /chatPreview\.pptxOutlineNotice/)
     assert.match(h.container.textContent, /Same content/)
     assert.equal(h.container.querySelector('iframe'), null)
-    assert.equal(h.container.querySelector('a[download="deck.pptx"]').getAttribute('href'), '/api/artifacts/deck.pptx')
+    assert.equal(h.container.querySelector('a[download="deck.pptx"]'), null)
   } finally { await h.close() }
 })
 

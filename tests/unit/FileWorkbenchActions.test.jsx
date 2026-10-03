@@ -39,7 +39,18 @@ function findButton(element, key) {
   return [...element.querySelectorAll('button')].find((button) => button.textContent.includes(key))
 }
 
-test('direct files open in reading view with a path, source toggle and secondary Save as', async () => {
+// "Open with" is a nested list: its entries only exist while it is open, which is
+// also what keeps them out of the menu until a reader asks for them.
+function openFileMenu(element) {
+  element.querySelector('[data-testid="preview-open-menu"]').closest('details').open = true
+}
+
+function openOpenMethodSubmenu(element) {
+  openFileMenu(element)
+  element.querySelector('[data-testid="preview-open-method"]').closest('details').open = true
+}
+
+test('direct files open in reading view with a path, a source toggle and an "Open with" list only when it can work', async () => {
   const { dom, element, root } = setup()
   const oldFetch = globalThis.fetch
   globalThis.fetch = async () => new Response('# Readable report\n\nContent')
@@ -58,7 +69,11 @@ test('direct files open in reading view with a path, source toggle and secondary
     assert.equal(menuTitle.getAttribute('title'), 'report.md')
     assert.match(menuTitle.textContent, /report\.md/)
     assert.doesNotMatch(open.textContent, /download|saveAs/)
-    assert.equal(element.querySelector('a[download="report.md"]').textContent, 'chatPreview.saveAs')
+    assert.equal(element.querySelector('a[download="report.md"]'), null, 'the menu no longer carries its own download action')
+    // A browser tab cannot start a program, so the menu explains instead of
+    // offering an "Open with" list whose entries could never work.
+    assert.equal(element.querySelector('[data-testid="preview-open-method"]'), null)
+    assert.match(open.closest('details').textContent, /chatPreview.nativeOpenHint/)
     assert.equal(findButton(element, 'chatPreview.openDefaultApp'), undefined)
     await act(async () => findButton(element, 'chatPreview.source').click())
     assert.equal(element.querySelector('h1'), null)
@@ -130,12 +145,14 @@ test('desktop menu sends only a server reference, preserves denied state and hid
   const file = { filename: 'report.pdf', type: 'pdf', path: 'C:\\untrusted-ui-path\\report.pdf', url: '/api/local-files/verified/receipt?turnId=turn' }
   try {
     await act(async () => root.render(<DirectFileToolbar file={file} filename={file.filename} type="pdf" url={file.url} t={t} />))
+    openOpenMethodSubmenu(element)
     await act(async () => findButton(element, 'chatPreview.openDefaultApp').click())
     assert.deepEqual(calls, [{ action: 'open', reference: { kind: 'verified', fileId: 'receipt', turnId: 'turn' }, authToken: 'synthetic-token' }])
     assert.match(element.querySelector('[role="alert"]').textContent, /chatPreview.fileActionDenied/)
     assert.doesNotMatch(element.textContent, /VS Code|Cursor|Terminal/)
     const other = { ...file, url: 'https://outside.invalid/report.pdf' }
     await act(async () => root.render(<DirectFileToolbar file={other} filename={other.filename} type="pdf" url={other.url} t={t} />))
+    assert.equal(element.querySelector('[data-testid="preview-open-method"]'), null, 'an unreferenced file gets no "Open with" list')
     assert.equal(findButton(element, 'chatPreview.openDefaultApp'), undefined)
     assert.equal(element.querySelector('[role="alert"]'), null)
   } finally {
@@ -157,8 +174,10 @@ test('desktop file menu distinguishes canceled Open from an actual Reveal reques
   document.addEventListener('keydown', onKey)
   try {
     await act(async () => root.render(<DirectFileToolbar file={file} filename={file.filename} type="pdf" url={file.url} t={t} />))
+    openOpenMethodSubmenu(element)
     await act(async () => findButton(element, 'chatPreview.openDefaultApp').click())
     assert.equal(element.querySelector('[role="status"]'), null, 'cancel must not claim the file was opened')
+    openOpenMethodSubmenu(element)
     await act(async () => findButton(element, 'chatPreview.revealFile').click())
     assert.match(element.querySelector('[role="status"]').textContent, /chatPreview.fileRevealRequested/)
     assert.deepEqual(actions, ['open', 'reveal'])

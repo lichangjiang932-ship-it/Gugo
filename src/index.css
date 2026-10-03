@@ -2343,6 +2343,28 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   flex-wrap: nowrap;
 }
 
+/* "Open with" is a nested list inside the file menu. It opens beside the menu
+   normally; when the pane is a narrow overlay there is no room to the right, so
+   it is flipped back inside instead of hanging off the panel edge. */
+.preview-pane-open-method-panel-flipped {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 0.25rem;
+}
+
+@container chat-preview (max-width: 30rem) {
+  .preview-pane-open-method-panel {
+    width: 11.5rem;
+  }
+
+  /* The command row reflows rather than forcing the pane into a horizontal
+     scroll once it is narrower than the controls in it. */
+  .chat-direct-file-toolbar {
+    flex-wrap: wrap;
+  }
+}
+
 @container chat-preview (max-width: 680px) {
   .chat-preview-action-label {
     display: none;

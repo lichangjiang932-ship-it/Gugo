@@ -142,7 +142,7 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
   )
 }
 
-export function DirectFileToolbar({ filename, type, file = {}, url, view = 'preview', setView, t }) {
+export function DirectFileToolbar({ filename, type, file = {}, view = 'preview', setView, submenuFlipped = false, t }) {
   const preview = { ...file, filename, label: type.toUpperCase() }
   return (
     <div data-testid="preview-command-bar" className="chat-preview-toolbar chat-direct-file-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
@@ -151,7 +151,7 @@ export function DirectFileToolbar({ filename, type, file = {}, url, view = 'prev
         <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
         <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
       </div>}
-      <FileActions key={`${file.url || url}:${file.path || ''}:${file.previewRevision || ''}`} file={{ ...preview, url: file.url || url }} url={url} setView={setView} t={t} />
+      <FileActions key={`${file.url || ''}:${file.path || ''}:${file.previewRevision || ''}`} file={preview} setView={setView} submenuFlipped={submenuFlipped} t={t} />
     </div>
   )
 }

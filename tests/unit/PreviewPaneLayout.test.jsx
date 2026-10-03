@@ -203,20 +203,19 @@ test('closing the final focused tab restores chat focus without also dispatching
   } finally { await h.cleanup() }
 })
 
-test('download control is compact while its accessible label and destination keep the complete filename', async () => {
+test('the file menu states the complete filename and hides "Open with" without a local reference', async () => {
   const h = harness()
   const filename = 'Very long original name with spaces and a literal ` character.pptx'
   const url = '/api/local-files/verified/exact-receipt?turnId=original-turn'
-  const t = (key, values = {}) => key === 'chatPreview.download' ? `Download ${values.filename}` : 'Download'
+  const t = (key, values = {}) => key === 'chatPreview.filePath' ? `File path: ${values.path}` : key
   try {
     await h.render(<DirectFileToolbar filename={filename} type="pptx" url={url} t={t} />)
-    const download = h.rootEl.querySelector('a[download]')
-    assert.equal(download.textContent, 'Download')
-    assert.equal(download.getAttribute('aria-label'), `Download ${filename}`)
-    assert.equal(download.getAttribute('title'), `Download ${filename}`)
-    assert.equal(download.getAttribute('download'), filename)
-    assert.equal(download.getAttribute('href'), url)
-    assert.equal(h.rootEl.querySelector('.chat-preview-file-identity [title]').getAttribute('title'), filename)
+    const identity = h.rootEl.querySelector('.chat-preview-file-identity [title]')
+    assert.equal(identity.getAttribute('title'), filename)
+    // No desktop bridge in this harness, so the two local actions cannot work and
+    // the menu explains that instead of listing them.
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-open-method"]'), null)
+    assert.match(h.rootEl.querySelector('[data-testid="preview-open-menu"]').closest('details').textContent, /chatPreview.nativeOpenHint/)
   } finally { await h.cleanup() }
 })
 
