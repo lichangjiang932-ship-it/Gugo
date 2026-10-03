@@ -36,7 +36,7 @@ export default function ModelPickerPanel({
       id={panelId}
       role="dialog"
       aria-label={t('chat.modelPicker.title')}
-      className="fixed bottom-24 right-3 z-40 flex max-h-[min(52dvh,21rem)] w-[min(19rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[14px] border border-ink-fade/20 bg-paper shadow-xl lg:absolute lg:bottom-[calc(100%+0.5rem)] lg:left-auto lg:right-0 lg:max-h-[min(48dvh,21rem)] lg:w-[min(19rem,calc(100vw-8rem))]"
+      className="fixed bottom-24 right-3 z-40 flex max-h-[min(52dvh,21rem)] w-[min(19rem,calc(100vw-1.5rem))] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-[14px] border border-ink-fade/20 bg-paper shadow-xl lg:absolute lg:bottom-[calc(100%+0.5rem)] lg:left-auto lg:right-0 lg:max-h-[min(48dvh,21rem)] lg:w-[min(19rem,calc(100vw-8rem))] lg:max-w-none"
       data-testid="model-picker-panel"
       data-model-picker-view={panelView}
     >

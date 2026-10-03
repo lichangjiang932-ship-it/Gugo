@@ -189,7 +189,7 @@ export default function useChatSendFlow({
     const localPathAccess = await ensureLocalPathAccess(content)
     if (!localPathAccess.proceed) return false
     const effectiveAgentMode = planExecutionConfirmation?.agentMode || state.agentMode
-    const intentMode = intentModeForAgentMode(effectiveAgentMode)
+    const intentMode = planExecutionConfirmation?.intentMode || intentModeForAgentMode(effectiveAgentMode)
     const taskId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     let clientCommitted = false
     const commitClientTurn = () => {

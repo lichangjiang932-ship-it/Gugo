@@ -1,14 +1,17 @@
+import { normalizeModelPhaseProgress } from '../../shared/modelPhaseProgress.js'
 import { prepareToolLoopVision } from './modelToolLoopVision.js'
 import { logWarn } from '../utils/logger.js'
 import { withRetry } from '../utils/modelRetry.js'
 import { buildUserModelEnv } from '../services/modelProviderStore.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { fetchWithEnvProxy } from './proxyFetch.js'
-import { getEffectiveModelProviderProvenance } from './nativeModelProviders.js'
+import { getEffectiveModelProviderProvenance, isNativeProviderKind } from './nativeModelProviders.js'
 import {
   parseModelProviderResponse,
+  modelHttpResponseError,
   stripEmbeddedReasoning,
 } from './modelProviderResponse.js'
+import { isParsedContextOverflow } from './modelContextOverflow.js'
 import { createEmptyModelResponseError } from './sseLifecycle.js'
 import { createTextToolCallDeltaFilter, extractTextToolCalls } from '../utils/textToolCalls.js'
 import { calculateModelCostUsd, recordUsage } from './modelUsage.js'
@@ -39,12 +42,40 @@ import {
   pickAllowedModel,
 } from './modelRuntimeCatalog.js'
 import { canonicalStreamToolCalls } from './modelStreamToolCalls.js'
+import { getModelWireDiagnostics } from './modelWireDiagnostics.js'
+
+function withOutputTokenLimit(config, requestedLimit) {
+  const requested = Math.floor(Number(requestedLimit))
+  if (!Number.isFinite(requested) || requested <= 0) return config
+  const configured = Math.floor(Number(config.maxTokens))
+  return { ...config, maxTokens: configured > 0 ? Math.min(configured, requested) : requested }
+}
+
+function parseInvocationResponse(data, profile, { providerRequest, modelRequestId, signal }) {
+  try { return parseModelProviderResponse(data, profile, { providerRequest }) }
+  catch (error) {
+    if (!isParsedContextOverflow(error)) throw error
+    throw modelRequestOutcomeUnknown(error, { modelRequestId, phase: 'response', responseReceived: true,
+      externalAborted: signal?.aborted === true })
+  }
+}
+
+function providerAttemptNotSent(error) {
+  try { error.unsafeToReplay = true; error.retryable = false; error.modelRequestOutcome = 'not_sent' } catch { /* immutable error */ }
+  if (error?.name === 'AbortError' || (error?.unsafeToReplay === true && error?.retryable === false
+    && error?.modelRequestOutcome === 'not_sent')) return error
+  // A frozen persistence error must not regain retryability merely because
+  // host observers cannot annotate it. Preserve cancellation identity above.
+  const failure = new Error('Provider attempt observation could not be persisted before send.', { cause: error })
+  failure.code = /^[A-Z0-9_]{1,96}$/u.test(String(error?.code || '')) ? error.code : 'MODEL_PROVIDER_ATTEMPT_OBSERVER_FAILED'
+  return Object.assign(failure, { unsafeToReplay: true, retryable: false, modelRequestOutcome: 'not_sent' })
+}
 
 function createProviderAttemptTracker(candidates, onProviderAttempt) {
   if (typeof onProviderAttempt !== 'function') return null
   const providerAttempts = new Map()
   let physicalAttempt = 0
-  return async ({ config, profile, requestUrl }) => {
+  return async ({ config, profile, requestUrl, wireDiagnostics }) => {
     physicalAttempt += 1
     const providerAttempt = (providerAttempts.get(config) || 0) + 1
     providerAttempts.set(config, providerAttempt)
@@ -59,18 +90,18 @@ function createProviderAttemptTracker(candidates, onProviderAttempt) {
       failoverIndex,
     })
     try {
-      await onProviderAttempt(attempt)
+      await onProviderAttempt(wireDiagnostics ? { ...attempt, wireDiagnostics } : attempt)
     } catch (error) {
       // The host checkpoint is the write-ahead record for this network side
       // effect. If it cannot be persisted, no retry/failover may bypass it.
-      try { error.unsafeToReplay = true } catch { /* immutable error */ }
-      throw error
+      throw providerAttemptNotSent(error)
     }
   }
 }
 
 export async function callBackgroundModel({
   messages,
+  maxTokens,
   modelName,
   modelProviderId = '',
   userId,
@@ -93,7 +124,7 @@ export async function callBackgroundModel({
     modelName: selectedModel,
     providerId: modelProviderId,
     env: runtimeEnv,
-  })
+  }).map((candidate) => withOutputTokenLimit(candidate, maxTokens))
   const trackProviderAttempt = createProviderAttemptTracker(candidates, onProviderAttempt)
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
@@ -104,11 +135,13 @@ export async function callBackgroundModel({
       env: runtimeEnv,
       profile,
       modelRequestId,
+      cacheOwnerId: usageOwnerId,
     })
     const { url, init } = providerRequest
     return withRetry(() => withRedactedModelErrors(candidate, async () => {
       throwIfModelRequestAbortedBeforeSend(signal)
-      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url })
+      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
+      throwIfModelRequestAbortedBeforeSend(signal)
       // ★ 原来这里完全没有超时 —— 一个挂死的本地端点会让 job 永远卡在
       // running,不发事件、不发通知,只能重启进程。
       let response
@@ -144,17 +177,15 @@ export async function callBackgroundModel({
         data = { raw: text }
       }
       if (!response.ok) {
-        const error = new Error(data?.error?.message || data?.message || response.statusText)
-        error.status = response.status
-        error.fromUpstream = true
-        error.retryAfter = response.headers?.get?.('retry-after') ?? null
+        const error = modelHttpResponseError(data, response)
         throw modelRequestOutcomeUnknown(error, {
           modelRequestId,
           phase: 'response',
           responseReceived: true,
+          externalAborted: signal?.aborted === true,
         })
       }
-      const parsed = parseModelProviderResponse(data, profile, { providerRequest })
+      const parsed = parseInvocationResponse(data, profile, { providerRequest, modelRequestId, signal })
       recordUsage(candidate.modelName, parsed.usage, { ownerId: usageOwnerId })
       if (!parsed.content) throw createEmptyModelResponseError(parsed.finishReason)
       return parsed.content
@@ -205,6 +236,7 @@ export function createBoundBackgroundModelCaller({
  */
 export async function callBackgroundModelWithTools({
   messages,
+  maxTokens,
   tools,
   toolChoice,
   modelName,
@@ -229,7 +261,7 @@ export async function callBackgroundModelWithTools({
     modelName: selectedModel,
     providerId: modelProviderId,
     env: runtimeEnv,
-  })
+  }).map((candidate) => withOutputTokenLimit(candidate, maxTokens))
   const trackProviderAttempt = createProviderAttemptTracker(candidates, onProviderAttempt)
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
@@ -242,11 +274,13 @@ export async function callBackgroundModelWithTools({
       env: runtimeEnv,
       profile,
       modelRequestId,
+      cacheOwnerId: usageOwnerId,
     })
     const { url, init } = providerRequest
     return withRetry(() => withRedactedModelErrors(candidate, async () => {
       throwIfModelRequestAbortedBeforeSend(signal)
-      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url })
+      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
+      throwIfModelRequestAbortedBeforeSend(signal)
       let response
       let text
       let requestStarted = false
@@ -280,20 +314,16 @@ export async function callBackgroundModelWithTools({
         data = { raw: text }
       }
       if (!response.ok) {
-        const error = new Error(data?.error?.message || data?.message || response.statusText)
-        error.status = response.status
-        error.code = data?.error?.code || data?.code || ''
-        error.type = data?.error?.type || data?.type || ''
-        error.fromUpstream = true
-        error.retryAfter = response.headers?.get?.('retry-after') ?? null
+        const error = modelHttpResponseError(data, response)
         throw modelRequestOutcomeUnknown(error, {
           modelRequestId,
           phase: 'response',
           responseReceived: true,
+          externalAborted: signal?.aborted === true,
         })
       }
-      const parsed = parseModelProviderResponse(data, profile, { providerRequest })
-      const compatibilityCall = parsed.toolCalls?.length ? null : extractTextToolCalls(parsed.content)
+      const parsed = parseInvocationResponse(data, profile, { providerRequest, modelRequestId, signal })
+      const compatibilityCall = parsed.nativeContent || parsed.toolCalls?.length ? null : extractTextToolCalls(parsed.content)
       const usage = parsed.usage
       const costUsd = calculateModelCostUsd({
         providerId: candidate.providerId,
@@ -308,6 +338,8 @@ export async function callBackgroundModelWithTools({
         toolCalls: compatibilityCall?.toolCalls?.length ? compatibilityCall.toolCalls : parsed.toolCalls,
         usage,
         finishReason: parsed.finishReason,
+        ...(parsed.providerReplay ? { providerReplay: parsed.providerReplay } : {}),
+        ...(parsed.nativeContent ? { nativeContent: true } : {}),
         modelName: candidate.modelName,
         providerId: candidate.providerId,
         ...(costUsd !== null ? { costUsd } : {}),
@@ -321,16 +353,37 @@ export async function callBackgroundModelWithTools({
   }, { signal })
 }
 
-/**
- * Chat tool-loop model call with the same stable result shape as
- * callBackgroundModelWithTools, but backed by the provider streaming adapter.
- *
- * Text and reasoning are delivered while the provider is still generating;
- * the canonical tool_calls batch is retained until the stream finishes so the
- * durable tool-loop checkpoint remains identical to the non-streaming path.
- */
+/** Publish advisory activity without dispatching an unfinished tool batch. */
+async function publishStreamingToolActivity(event, config, { onToolCallReady, onToolCallProgress }) {
+  if (event?.type === 'tool_call_progress' && typeof onToolCallProgress === 'function') {
+    await onToolCallProgress(normalizeModelPhaseProgress(event))
+  } else if (event?.type === 'tool_call_ready' && typeof onToolCallReady === 'function') {
+    // Activity is advisory. Execution waits for the complete canonical batch.
+    const readyCall = canonicalStreamToolCalls([event.toolCall])[0]
+    if (readyCall?.function?.name) {
+      await onToolCallReady(readyCall, { index: event.index, modelName: config.modelName })
+    }
+  }
+}
+
+function retainInterruptedGeneration(error, { nativeContent, content, usage, config, fallbackConfig, signal }) {
+  if (error?.code !== 'MODEL_REQUEST_OUTCOME_UNKNOWN' || signal?.aborted) return
+  // Diagnostic text is not a confirmed response or permission to replay a call.
+  const partialText = nativeContent ? content : stripEmbeddedReasoning(content)
+  const partialCall = nativeContent ? null : extractTextToolCalls(partialText)
+  error.partialGeneration = {
+    content: partialCall?.detected ? partialCall.content : partialText,
+    usage,
+    modelName: config?.modelName || fallbackConfig.modelName,
+    providerId: config?.providerId || fallbackConfig.providerId,
+    streamed: true,
+  }
+}
+
+/** Stream progress while retaining complete tool batches for the durable loop. */
 export async function callStreamingModelWithTools({
   messages,
+  maxTokens,
   tools,
   toolChoice,
   modelName,
@@ -343,6 +396,7 @@ export async function callStreamingModelWithTools({
   onTextDelta,
   onReasoningDelta,
   onToolCallReady,
+  onToolCallProgress,
   onFailover,
   onRetry,
   modelRequestId,
@@ -362,78 +416,83 @@ export async function callStreamingModelWithTools({
       modelName: selectedModel,
       providerId: modelProviderId,
       env: runtimeEnv,
-    }),
+    }).map((candidate) => withOutputTokenLimit(candidate, maxTokens)),
     requiresVision: hasVisionContent(messages),
     supportsVision: (candidate) => profileForConfig(candidate, runtimeEnv).supportsVision,
     userId, env: runtimeEnv, fetchImpl, modelName: selectedModel,
     onAssistError: (error) => logWarn('vision.assist.tool_loop', error, { userId, modelName: selectedModel }),
   })
   let activeConfig = candidates[0] || null
+  let nativeContent = isNativeProviderKind(profileForConfig(activeConfig || config, runtimeEnv).kind)
   let content = ''
   let reasoningText = ''
   let reasoningChars = 0
   let toolCalls = []
   let usage = null
   let finishReason = null
+  let providerReplay = null
   const textToolCallFilter = createTextToolCallDeltaFilter()
   const trackProviderAttempt = createProviderAttemptTracker(candidates, onProviderAttempt)
 
-  for await (const streamed of streamWithProviderFailover(
-    candidates,
-    (candidate) => streamOpenAICompatible({
-      config: candidate,
-      messages: preparedMessages,
-      fetchImpl,
-      tools,
-      toolChoice,
-      externalSignal: signal,
-      env: runtimeEnv,
-      modelRequestId,
-      onProviderAttempt: trackProviderAttempt,
-    }),
-    { signal, onFailover, onRetry },
-  )) {
-    activeConfig = streamed.config
-    const event = streamed.event
-    if (event?.usage) usage = event.usage
-    if (event?.finishReason) finishReason = event.finishReason
+  try {
+    for await (const streamed of streamWithProviderFailover(
+      candidates,
+      (candidate) => streamOpenAICompatible({
+        config: candidate,
+        messages: preparedMessages,
+        fetchImpl,
+        tools,
+        toolChoice,
+        externalSignal: signal,
+        env: runtimeEnv,
+        modelRequestId,
+        cacheOwnerId: usageOwnerId,
+        onProviderAttempt: trackProviderAttempt,
+      }),
+      { signal, onFailover, onRetry },
+    )) {
+      if (activeConfig !== streamed.config) {
+        activeConfig = streamed.config
+        nativeContent = isNativeProviderKind(profileForConfig(activeConfig, runtimeEnv).kind)
+      }
+      const event = streamed.event
+      if (event?.usage) usage = event.usage
+      if (event?.finishReason) finishReason = event.finishReason
+      if (event?.providerReplay) providerReplay = event.providerReplay
 
-    if (event?.type === 'text' && event.delta) {
-      const delta = String(event.delta)
-      content += delta
-      if (typeof onTextDelta === 'function') {
-        const visibleDelta = textToolCallFilter.push(delta)
-        if (visibleDelta) await onTextDelta(visibleDelta, { modelName: activeConfig.modelName })
+      if (event?.type === 'text' && event.delta) {
+        const delta = String(event.delta)
+        content += delta
+        if (typeof onTextDelta === 'function') {
+          const visibleDelta = nativeContent ? delta : textToolCallFilter.push(delta)
+          if (visibleDelta) await onTextDelta(visibleDelta, { modelName: activeConfig.modelName })
+        }
+      } else if (event?.type === 'reasoning' && event.delta) {
+        const delta = String(event.delta)
+        reasoningText += delta
+        reasoningChars += delta.length
+        if (typeof onReasoningDelta === 'function') {
+          await onReasoningDelta(delta, { modelName: activeConfig.modelName })
+        }
+      } else if (event?.type === 'tool_calls') {
+        toolCalls = canonicalStreamToolCalls(event.toolCalls)
+      } else if (event?.type === 'tool_call_progress' || event?.type === 'tool_call_ready') {
+        await publishStreamingToolActivity(event, activeConfig, { onToolCallReady, onToolCallProgress })
       }
-    } else if (event?.type === 'reasoning' && event.delta) {
-      const delta = String(event.delta)
-      reasoningText += delta
-      reasoningChars += delta.length
-      if (typeof onReasoningDelta === 'function') {
-        await onReasoningDelta(delta, { modelName: activeConfig.modelName })
-      }
-    } else if (event?.type === 'tool_call_ready') {
-      // This is activity evidence only. The canonical tool_calls batch remains
-      // buffered until the provider finishes, so checkpointing and execution
-      // still happen exactly once through the normal tool-loop path.
-      const readyCall = canonicalStreamToolCalls([event.toolCall])[0]
-      if (readyCall?.function?.name && typeof onToolCallReady === 'function') {
-        await onToolCallReady(readyCall, {
-          index: event.index,
-          modelName: activeConfig.modelName,
-        })
-      }
-    } else if (event?.type === 'tool_calls') {
-      toolCalls = canonicalStreamToolCalls(event.toolCalls)
     }
+  } catch (error) {
+    retainInterruptedGeneration(error, {
+      nativeContent, content, usage, config: activeConfig, fallbackConfig: config, signal,
+    })
+    throw error
   }
 
   const resolvedConfig = activeConfig || config
-  const cleanedContent = stripEmbeddedReasoning(content)
-  const compatibilityCall = toolCalls.length ? null : extractTextToolCalls(cleanedContent)
+  const cleanedContent = providerReplay ? content : stripEmbeddedReasoning(content)
+  const compatibilityCall = nativeContent || toolCalls.length ? null : extractTextToolCalls(cleanedContent)
   const filteredContent = compatibilityCall?.detected ? compatibilityCall.content : cleanedContent
   const filteredToolCalls = compatibilityCall?.toolCalls?.length ? compatibilityCall.toolCalls : toolCalls
-  if (typeof onTextDelta === 'function') {
+  if (!nativeContent && typeof onTextDelta === 'function') {
     const tail = textToolCallFilter.finish({ discardProtocol: Boolean(compatibilityCall?.detected) })
     if (tail) await onTextDelta(tail, { modelName: resolvedConfig.modelName })
   }
@@ -450,6 +509,8 @@ export async function callStreamingModelWithTools({
     toolCalls: filteredToolCalls,
     usage,
     finishReason,
+    ...(providerReplay ? { providerReplay } : {}),
+    ...(nativeContent ? { nativeContent: true } : {}),
     modelName: resolvedConfig.modelName,
     providerId: resolvedConfig.providerId,
     ...(costUsd !== null ? { costUsd } : {}),
@@ -458,6 +519,8 @@ export async function callStreamingModelWithTools({
     // Retained chain-of-thought for the current turn. This is delivered to the
     // client for inline display; outbound replay is governed by
     // retainReasoningForEnv ( default-on for OpenAI-compatible ).
-    ...(reasoningText ? { reasoning: reasoningText } : {}),
+    // Native thought is displayed through the callback, but can only be
+    // replayed via its provider-bound opaque parts, never an unbound field.
+    ...(reasoningText && !nativeContent ? { reasoning: reasoningText } : {}),
   }
 }

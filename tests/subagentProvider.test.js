@@ -19,6 +19,7 @@ import {
   getSubagentRun,
   runSubagent,
 } from '../server/services/subagentRuntime.js'
+import { bindSubagentExecutionPolicy } from '../server/services/subagentExecutionPolicy.js'
 
 const { userId } = issueTestSession({ email: 'subagent-provider-test@example.com' })
 const persistencePort = createSqliteSubagentRunPersistenceAdapter({ getDb })
@@ -65,6 +66,28 @@ async function installProvider(t, id, callback) {
   })
   t.after(async () => { await unregisterPlugin(id) })
 }
+
+test('opaque providers cannot receive work constrained by a host read-only or goal binding', async (t) => {
+  let providerCalls = 0
+  let builtinCalls = 0
+  await installProvider(t, 'subagent-provider-policy-boundary', () => {
+    providerCalls += 1
+    return { decision: 'handled', status: 'completed', text: 'must not execute' }
+  })
+  for (const constraint of [
+    { readOnly: true, sessionId: null, goalPlanBinding: { version: 1, planId: null, revision: null } },
+    { readOnly: false, sessionId: 'private-parent', goalPlanBinding: { version: 1, planId: 'private-goal', revision: 1 } },
+    { readOnly: false, sessionId: null, goalPlanBinding: { version: 1, planId: null, revision: null, unknown: true } },
+  ]) {
+    const approvalContext = bindSubagentExecutionPolicy(null, { userId, ...constraint })
+    await assert.rejects(run({ id: `provider-policy-${constraint.goalPlanBinding.planId || constraint.readOnly}`,
+      userId, type: 'general', prompt: 'Perform the isolated policy task.', approvalContext,
+      callModel: async () => { builtinCalls += 1; return { content: 'must not switch providers', toolCalls: [] } },
+    }), { code: 'SUBAGENT_PROVIDER_POLICY_UNSUPPORTED' })
+  }
+  assert.equal(providerCalls, 0)
+  assert.equal(builtinCalls, 0, 'a configured provider must not be silently replaced by the builtin model')
+})
 
 test('provider deadlines preserve long local-task budgets instead of clamping at one minute', () => {
   const sixHours = 6 * 60 * 60 * 1_000

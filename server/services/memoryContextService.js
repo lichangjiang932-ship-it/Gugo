@@ -1,9 +1,11 @@
 import {
   buildMemorySystemBlock,
   classifyMemoryFreshness,
+  memoryInjectionTokenCap,
   selectActiveMemoriesForInjection,
   touchMemoryUsage,
 } from './memoryStore.js'
+import { fitMemorySystemBlock } from './memoryPromptRendering.js'
 import { traverseMemoryGraph } from './knowledgeGraph.js'
 import { logWarn } from '../utils/logger.js'
 
@@ -20,22 +22,6 @@ export function memoryContradictsVerifiedFilesystem(memory, query = '') {
   return FILESYSTEM_STATE_MEMORY.test(text) && NEGATIVE_AVAILABILITY.test(text)
 }
 
-function memoryBlockChars(memory) {
-  return `### ${memory?.type || 'reference'}: ${memory?.title || ''}\n${memory?.body || ''}\n`.length
-}
-
-function fitMemories(memories, tokenCap) {
-  const charsCap = Math.max(200, (Number(tokenCap) || DEFAULT_TOKEN_CAP) * 4)
-  const fitted = []
-  let totalChars = 0
-  for (const memory of memories) {
-    const chars = memoryBlockChars(memory)
-    if (totalChars + chars > charsCap) continue
-    fitted.push(memory)
-    totalChars += chars
-  }
-  return { memories: fitted, totalChars }
-}
 
 function emptyContext({ query = '', error = null } = {}) {
   return {
@@ -53,6 +39,7 @@ function emptyContext({ query = '', error = null } = {}) {
       linkTruncated: false,
       touched: false,
       touchFailed: false,
+      retrieval: null,
     },
   }
 }
@@ -80,8 +67,13 @@ export function prepareMemoryInjectionContext({
   linkDepth = DEFAULT_LINK_DEPTH,
   maxLinkedNodes = DEFAULT_LINK_NODES,
   touch = true,
+  queryVector = null,
+  querySpace = null,
+  signal = null,
+  semanticLimits = {},
 } = {}, dependencies = {}) {
   if (!userId) return emptyContext({ query })
+  if (signal?.aborted) return emptyContext({ query })
   const selectMemories = dependencies.selectActiveMemoriesForInjection || selectActiveMemoriesForInjection
   const traverseLinks = dependencies.traverseMemoryGraph || traverseMemoryGraph
   const buildBlock = dependencies.buildMemorySystemBlock || buildMemorySystemBlock
@@ -90,10 +82,16 @@ export function prepareMemoryInjectionContext({
 
   let picked
   try {
-    picked = selectMemories({ userId, agentId, query, tokenCap })
+    picked = selectMemories({ userId, agentId, query, tokenCap, queryVector, querySpace, signal, semanticLimits, now, deferFitting: true })
   } catch (error) {
     safeWarn(warn, error?.message || error, { userId, agentId })
     return emptyContext({ query, error })
+  }
+  if (picked?.diagnostics?.semantic?.truncated) {
+    const { code, scanned, coverage } = picked.diagnostics.semantic
+    safeWarn(warn, 'Semantic memory recall is partial; lexical recall remains available', {
+      userId, agentId, code, scanned, coverage,
+    })
   }
 
   const seeds = Array.isArray(picked?.memories) ? picked.memories : []
@@ -130,7 +128,13 @@ export function prepareMemoryInjectionContext({
   // successful grant + probe from the current turn.
   const suppressedMemories = deduped.filter((memory) => memoryContradictsVerifiedFilesystem(memory, query))
   const candidates = deduped.filter((memory) => !memoryContradictsVerifiedFilesystem(memory, query))
-  const fitted = fitMemories(candidates, tokenCap)
+  let fitted
+  try {
+    fitted = fitMemorySystemBlock(candidates, { tokenCap: memoryInjectionTokenCap(tokenCap), query, buildBlock, now })
+  } catch (error) {
+    safeWarn(warn, error?.message || error, { userId, agentId, phase: 'render' })
+    return emptyContext({ query, error })
+  }
   const freshness = fitted.memories.map((memory) => ({
     id: memory.id,
     ...classifyMemoryFreshness(memory.updatedAt, { now }),
@@ -140,14 +144,6 @@ export function prepareMemoryInjectionContext({
     ...memory,
     freshness: freshnessById.get(memory.id),
   }))
-
-  let text
-  try {
-    text = buildBlock(memories, { now }) || ''
-  } catch (error) {
-    safeWarn(warn, error?.message || error, { userId, agentId, phase: 'render' })
-    return emptyContext({ query, error })
-  }
 
   const memoryIds = memories.map((memory) => memory.id)
   let touched = false
@@ -166,7 +162,7 @@ export function prepareMemoryInjectionContext({
     memories,
     memoryIds,
     freshness,
-    text,
+    text: fitted.text,
     totalChars: fitted.totalChars,
     diagnostics: {
       failed: false,
@@ -177,6 +173,8 @@ export function prepareMemoryInjectionContext({
       linkTruncated,
       touched,
       touchFailed,
+      retrieval: picked?.diagnostics || null,
+      tokenTruncated: fitted.tokenTruncated || !!picked?.diagnostics?.tokenTruncated,
     },
   }
 }

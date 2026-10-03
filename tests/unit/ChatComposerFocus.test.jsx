@@ -164,3 +164,57 @@ test('composer places compact project selection outside the input upper-left and
     dom.window.close()
   }
 })
+
+test('running composer sends text or attachments and pauses only an empty draft', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  let sent = 0
+  let paused = 0
+  const render = async ({ input = '', attachments = [] } = {}) => act(async () => root.render(
+    <ChatComposer
+      input={input} attachments={attachments} setInput={() => {}} setAttachments={() => {}}
+      onSend={() => { sent += 1 }} onAbort={() => { paused += 1 }}
+      isGenerating modelPickerOpen={false} modelOptions={[]} selectedModel="local-model"
+      onFileChange={() => {}} onOpenModelPicker={() => {}} onCloseModelPicker={() => {}}
+      onModelChange={() => {}} onManageModels={() => {}}
+      approvalMode="normal" onApprovalModeChange={() => {}} handleKeyDown={() => {}}
+    />,
+  ))
+  try {
+    await render({ attachments: [{ id: 'owned-file', name: 'brief.txt', kind: 'text', uploadStatus: 'ready' }] })
+    let primary = element.querySelector('[data-testid="composer-primary-action"]')
+    assert.ok(primary.querySelector('.lucide-send'), 'a ready attachment alone is a send, never pause')
+    await act(async () => primary.click())
+    assert.equal(sent, 1)
+    assert.equal(paused, 0)
+
+    for (const uploadStatus of ['uploading', 'error']) {
+      await render({ attachments: [{ id: 'pending-file', name: 'brief.txt', kind: 'file', uploadStatus }] })
+      primary = element.querySelector('[data-testid="composer-primary-action"]')
+      assert.ok(primary.querySelector('.lucide-send'), 'a pending attachment must not turn send into pause')
+      assert.equal(primary.disabled, true, 'unavailable attachments cannot be sent as steering')
+      await act(async () => primary.click())
+    }
+    assert.equal(sent, 1)
+    assert.equal(paused, 0)
+
+    await render({ input: 'Correct the current task' })
+    primary = element.querySelector('[data-testid="composer-primary-action"]')
+    assert.ok(primary.querySelector('.lucide-send'))
+    await act(async () => primary.click())
+    assert.equal(sent, 2)
+
+    await render({ input: '  ' })
+    primary = element.querySelector('[data-testid="composer-primary-action"]')
+    assert.ok(primary.querySelector('.lucide-pause'))
+    assert.match(primary.getAttribute('aria-label'), /暂停|Pause/u)
+    await act(async () => primary.click())
+    assert.equal(paused, 1)
+    assert.equal(sent, 2)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+

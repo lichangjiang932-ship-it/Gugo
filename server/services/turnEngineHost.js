@@ -16,6 +16,8 @@ import { runToolLoop } from './loop/index.js'
 import { SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import { prepareTurnPromptContext } from './turnPromptContext.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
+import { prepareMemoryQueryVector } from './memoryEmbeddingService.js'
+import { indexMemoryEmbeddings } from './memoryEmbeddingIndexer.js'
 import {
   resolveAgentModelRuntimeBinding,
   resolveChatModelRuntimeBinding,
@@ -104,6 +106,8 @@ export function getTurnEngine() {
           ...options,
           compactionArchivePort: compactionArchiveLease.port,
         }),
+        prepareMemoryQueryVector,
+        indexMemoryEmbeddings,
         prepareInlineSkills: prepareInlineSkillsForPrompt,
         attachmentRuntime: managedAttachmentLease?.port || null,
         resolveModelBinding: (options = {}) => (

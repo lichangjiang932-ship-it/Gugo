@@ -19,6 +19,7 @@ const {
   buildRememberedGrant,
   isSafeCommandPrefix,
   matchesRememberedGrant,
+  isToolVisibleInPermissionMode,
 } = await import('../server/utils/approvalPolicy.js')
 const { CONNECTOR_WRITE_TOOL_NAMES } = await import('../shared/connectorWriteTools.js')
 
@@ -425,6 +426,8 @@ test('plan mode keeps tools loaded but executes only local read operations', () 
     'write_file', 'apply_patch', 'bash_exec', 'run_project_check', 'create_docx',
     'web_search', 'fetch_url', 'browser_snapshot', 'connected_app_list', 'jira_query',
   ]) {
+    // A dynamic (MCP) registration never inherits plan privileges, even for a
+    // name plan mode allows as a builtin.
     const verdict = classifyToolRisk(name, {}, {
       ...JOB,
       permissionMode: 'plan',
@@ -434,6 +437,35 @@ test('plan mode keeps tools loaded but executes only local read operations', () 
     assert.equal(verdict.denied, true, name)
     assert.match(verdict.reason, /工具仍已加载/, name)
     assert.match(verdict.reason, /自动接受编辑模式或正常模式/, name)
+  }
+})
+
+test('plan mode allows research like Claude Code: web search, GET fetches and read-only subagents', () => {
+  const allowed = [
+    ['web_search', { query: 'node test runner' }],
+    ['fetch_url', { url: 'https://example.com' }],
+    ['fetch_url', { url: 'https://example.com', method: 'HEAD' }],
+    ['Agent', { subagent_type: 'explore', prompt: 'find the router' }],
+    ['Agent', { tasks: [{ subagent_type: 'explore' }, { subagent_type: 'plan' }] }],
+  ]
+  for (const [name, args] of allowed) {
+    assert.deepEqual(
+      classifyToolRisk(name, args, { ...JOB, permissionMode: 'plan', metadata: { origin: 'builtin', riskClass: 'read' } }),
+      { needsApproval: false, risk: 'low', reason: null },
+      `${name} ${JSON.stringify(args)}`,
+    )
+    assert.equal(isToolVisibleInPermissionMode(name, 'plan'), true, name)
+  }
+  const refused = [
+    ['fetch_url', { url: 'https://example.com', method: 'POST' }],
+    ['Agent', { subagent_type: 'general', prompt: 'edit the router' }],
+    ['Agent', { tasks: [{ subagent_type: 'explore' }, { subagent_type: 'general' }] }],
+    ['Agent', { prompt: 'no type means general' }],
+  ]
+  for (const [name, args] of refused) {
+    const verdict = classifyToolRisk(name, args, { ...JOB, permissionMode: 'plan', metadata: { origin: 'builtin' } })
+    assert.equal(verdict.denied, true, `${name} ${JSON.stringify(args)}`)
+    assert.equal(verdict.needsApproval, false)
   }
 })
 
@@ -563,11 +595,11 @@ test('plan cannot be bypassed by read metadata on a known mutating tool', () => 
   }
 })
 
-test('plan rejects write-tool previews and network reads while keeping schemas loaded', () => {
+test('plan rejects write-tool previews and non-GET requests while keeping schemas loaded', () => {
   for (const mode of ['off', 'unattended', 'all']) {
     for (const [name, args] of [
       ['apply_patch', { dry_run: true }],
-      ['fetch_url', { method: 'GET' }],
+      ['fetch_url', { method: 'POST' }],
     ]) {
       const verdict = classifyToolRisk(name, args, { mode, permissionMode: 'plan' })
       assert.equal(verdict.needsApproval, false, `${name}/${mode}`)
@@ -733,6 +765,29 @@ test('acceptEdits still confirms destructive PDF text/form operations by argumen
     assert.equal(verdict.risk, 'medium', operation)
     assert.match(verdict.reason, /PDF|覆盖/)
   }
+})
+
+test('the preview asks once about an address that leaves this machine', () => {
+  // The project's own preview opens without ceremony: that is what the preview is.
+  for (const url of ['http://localhost:3000/', 'http://127.0.0.1:5173/app', 'http://[::1]:8080/']) {
+    const verdict = classifyToolRisk('preview_navigate', { url }, { origin: 'chat', mode: 'unattended', permissionMode: 'acceptEdits' })
+    assert.notEqual(verdict.needsApproval, true, url)
+  }
+  // Anywhere else is the reader's call, whatever the permission mode would
+  // otherwise allow, and the reason names the address so the card can too.
+  const external = classifyToolRisk('preview_navigate', { url: 'https://example.com/docs' }, {
+    origin: 'chat',
+    mode: 'unattended',
+    permissionMode: 'acceptEdits',
+    metadata: { riskClass: 'external', requiresApproval: false },
+  })
+  assert.equal(external.needsApproval, true)
+  assert.match(external.reason, /example\.com/)
+  // A scheme that is not a page is not a decision to delegate either.
+  const notAPage = classifyToolRisk('preview_navigate', { url: 'file:///etc/passwd' }, {
+    origin: 'chat', mode: 'unattended', permissionMode: 'acceptEdits',
+  })
+  assert.notEqual(notAPage.needsApproval, true)
 })
 
 test('acceptEdits allows reversible PDF transforms and local archive edits', () => {

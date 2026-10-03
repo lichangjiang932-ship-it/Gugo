@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { sanitizeChildEnv } from './sensitiveEnv.js'
+import { createWindowsWorkerStartupDiagnostics } from './windowsTreeKillStartup.js'
 import {
   windowsPowerShellPath,
   windowsTreeKillWorkerArgs,
@@ -74,6 +75,7 @@ function refreshWorkerReference(worker) {
 
 function failWorker(runtime, worker, error, { terminate = true } = {}) {
   if (!worker || worker.failed) return
+  if (!worker.ready) worker.startup.annotate(error)
   worker.failed = true
   if (worker.startupTimer) clearTimeout(worker.startupTimer)
   worker.startupTimer = null
@@ -154,6 +156,7 @@ function acceptWorkerLine(runtime, worker, rawLine) {
       return
     }
     worker.ready = true
+    worker.startup.ready()
     if (worker.startupTimer) clearTimeout(worker.startupTimer)
     worker.startupTimer = null
     for (const waiter of worker.readyWaiters) {
@@ -191,6 +194,11 @@ function acceptWorkerLine(runtime, worker, rawLine) {
 
 function attachWorkerProtocol(runtime, worker) {
   const { child } = worker
+  child.stderr?.setEncoding?.('utf8')
+  child.stderr?.on('data', (chunk) => {
+    if (!worker.failed && !worker.ready) worker.startup.accept(chunk)
+  })
+  child.stderr?.on('error', () => { /* Optional diagnostics do not grant or deny execution. */ })
   child.stdout?.setEncoding?.('utf8')
   child.stdout?.on('data', (chunk) => {
     if (worker.failed) return
@@ -223,12 +231,13 @@ function attachWorkerProtocol(runtime, worker) {
 }
 
 function spawnWorker(runtime) {
+  const startup = createWindowsWorkerStartupDiagnostics()
   let child
   try {
     child = runtime.spawnProcess(runtime.workerPath, runtime.workerArgs, {
       env: sanitizeChildEnv(),
       windowsHide: true,
-      stdio: ['pipe', 'pipe', 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     })
   } catch (error) {
     throw workerError(
@@ -238,6 +247,7 @@ function spawnWorker(runtime) {
   }
   const worker = {
     child,
+    startup,
     generation: ++runtime.state.generation,
     ready: false,
     failed: false,
@@ -248,6 +258,7 @@ function spawnWorker(runtime) {
     startupTimer: null,
   }
   runtime.state.activeWorker = worker
+  runtime.state.lastStartup = startup
   runtime.state.spawnCount += 1
   refreshWorkerReference(worker)
   attachWorkerProtocol(runtime, worker)
@@ -411,7 +422,7 @@ export function createWindowsTreeKillWorkerManager({
 } = {}) {
   const runtime = {
     spawnProcess, workerPath, workerArgs, workerPayload, startupTimeoutMs, requestTimeoutMs,
-    state: { activeWorker: null, generation: 0, nextRequestId: 0, nextLeaseId: 0, spawnCount: 0 },
+    state: { activeWorker: null, lastStartup: null, generation: 0, nextRequestId: 0, nextLeaseId: 0, spawnCount: 0 },
   }
   return {
     bind: (pid, options) => bindWorkerLease(runtime, pid, options),
@@ -420,6 +431,7 @@ export function createWindowsTreeKillWorkerManager({
       try { ensureWorker(runtime); return true } catch { return false }
     },
     ready: (options) => waitForWorkerReady(runtime, options),
+    startupDiagnostics: () => runtime.state.lastStartup?.snapshot() || null,
     release: (lease) => operateWorkerLease(runtime, 'RELEASE', lease),
     async request(pid, options) {
       const lease = await bindWorkerLease(runtime, pid, options)

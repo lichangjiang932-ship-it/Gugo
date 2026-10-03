@@ -20,11 +20,13 @@ import { handleAgentRequest } from '../routes/agentRoutes.js'
 import { handleAgentTemplateRequest } from '../routes/agentTemplateRoutes.js'
 import { handleToolSpecsRequest } from '../services/toolRegistry.js'
 import { handleMemoryRequest } from '../routes/memoryRoutes.js'
+import { handleGoalRequest } from '../routes/goalRoutes.js'
 import { handleHooksRequest } from '../routes/hooksRoutes.js'
 import { handleMcpRequest } from '../routes/mcpRoutes.js'
 import { handleSubagentRequest } from '../routes/subagentRoutes.js'
 import { handleCompactionRequest } from '../routes/compactionRoutes.js'
 import { handleKnowledgeGraphRequest } from '../routes/knowledgeGraphRoutes.js'
+import { handleUsageRequest } from '../routes/usageRoutes.js'
 import { handleReasonixRequest } from '../routes/reasonixRoutes.js'
 import { handleNotificationRequest } from '../routes/notificationRoutes.js'
 import { handleApprovalRequest } from '../routes/approvalRoutes.js'
@@ -37,6 +39,7 @@ import { handleMobileRequest } from '../routes/mobileRoutes.js'
 import { handleToolPermissionsRequest } from '../routes/toolPermissionRoutes.js'
 import { handleModelProviderRequest } from '../routes/modelProviderRoutes.js'
 import { handleBrowserRequest } from '../routes/browserRoutes.js'
+import { handlePreviewRequest } from '../routes/previewRoutes.js'
 import { handleConnectorRequest } from '../routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from '../routes/localFileAccessRoutes.js'
 import { handleFileSnapshotRequest } from '../routes/fileSnapshotRoutes.js'
@@ -84,6 +87,7 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.system.diagnostics', 9_500, ['/api/system/diagnostics']),
   descriptor('builtin.model.proxy', 9_400, ['/api/model/test', '/api/model/chat']),
   descriptor('builtin.browser', 9_300, ['/api/browser']),
+  descriptor('builtin.preview', 9_250, ['/api/preview']),
   descriptor('builtin.connectors', 9_200, ['/api/connectors']),
   descriptor('builtin.local-files', 9_100, ['/api/local-files']),
   descriptor('builtin.snapshots', 9_000, ['/api/snapshots']),
@@ -116,6 +120,7 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.agent-templates', 6_600, ['/api/agent-templates']),
   descriptor('builtin.agents', 6_500, ['/api/agents']),
   descriptor('builtin.memory', 6_400, ['/api/memory']),
+  descriptor('builtin.goals', 6_350, ['/api/goals']),
   descriptor('builtin.hooks', 6_300, ['/api/hooks']),
   descriptor('builtin.subagent', 6_100, ['/api/subagent']),
   descriptor('builtin.compaction', 6_000, ['/api/compaction']),
@@ -124,6 +129,7 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.turns', 5_700, ['/api/turns']),
   descriptor('builtin.side-effects', 5_650, ['/api/side-effects']),
   descriptor('builtin.audit', 5_600, ['/api/audit']),
+  descriptor('builtin.usage', 5_550, ['/api/usage/']),
   descriptor('builtin.evolution', 5_500, ['/api/evolution']),
 ])
 
@@ -217,6 +223,11 @@ export function createBuiltinHttpCapabilities({
       (req, res) => handleRuntimeConfigRequest(req, res, { cwd, env: getEnv() }),
     ),
     capability(
+      'builtin.usage',
+      (req) => req.url?.startsWith('/api/usage/'),
+      (req, res) => handleUsageRequest(req, res),
+    ),
+    capability(
       'builtin.system.diagnostics',
       (req) => req.url?.startsWith('/api/system/diagnostics'),
       (req, res) => handleSystemDiagnosticsRequest(req, res, { readRuntimeDiagnostics }),
@@ -232,6 +243,11 @@ export function createBuiltinHttpCapabilities({
       'builtin.browser',
       (req) => req.url?.startsWith('/api/browser/'),
       (req, res) => handleBrowserRequest(req, res),
+    ),
+    capability(
+      'builtin.preview',
+      (req) => req.url?.startsWith('/api/preview/'),
+      (req, res) => handlePreviewRequest(req, res),
     ),
     capability(
       'builtin.connectors',
@@ -251,7 +267,7 @@ export function createBuiltinHttpCapabilities({
     capability(
       'builtin.media',
       (req) => req.url?.startsWith('/api/media/'),
-      (req, res) => handleMediaRequest(req, res),
+      (req, res) => handleMediaRequest(req, res, { env: getEnv() }),
     ),
     capability(
       'builtin.attachments',
@@ -387,6 +403,11 @@ export function createBuiltinHttpCapabilities({
       'builtin.memory',
       (req) => req.url?.startsWith('/api/memory/'),
       (req, res) => handleMemoryRequest(req, res),
+    ),
+    capability(
+      'builtin.goals',
+      (req) => req.url?.startsWith('/api/goals/'),
+      (req, res) => handleGoalRequest(req, res),
     ),
     capability(
       'builtin.hooks',

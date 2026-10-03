@@ -59,7 +59,24 @@ const translations = {
     "historyNoteLabel": "审计备注",
     "historyNoNote": "未填写备注。",
     "continueOriginalTask": "继续原任务",
-    "openOriginalTask": "打开原任务"
+    "openOriginalTask": "打开原任务",
+    "inlineTitle": "上次操作的结果需要确认",
+    "inlineWarning": "未知不等于失败，系统已停止重复执行。请先核实目标文件、应用或外部服务中的真实结果，再选择一次结论；确认会留下安全记录，并仅继续当前任务。",
+    "inlineIdentity": "查看本次操作标识（无需输入或抄写）",
+    "inlineLoading": "正在读取当前任务的操作…",
+    "inlineConfirmFailed": "已核实未发生，继续",
+    "inlineConfirmCommitted": "已核实完成，不重复",
+    "inlineDefer": "暂不处理",
+    "inlineDeferred": "暂不处理；操作仍未确认，系统不会自动重做或继续。",
+    "inlineReview": "重新核对",
+    "inlineRefresh": "刷新状态",
+    "inlineUnavailable": "当前操作已变化、已被处理或缺少完整任务信息。请刷新状态；系统不会据此判定成功或自动继续。",
+    "inlineLoadFailed": "无法读取当前操作，请刷新状态后再核对。",
+    "inlineStale": "这项确认已失效。请刷新状态并重新核对，原选择未被自动重试。",
+    "inlineResolveFailed": "未取得确认结果。为避免重复提交，请先刷新状态，核对后再作决定。",
+    "inlineResumePending": "确认已保存，但尚未启动恢复。可在当前任务可用时继续；不会再次提交确认。",
+    "inlineCommitted": "已记录为完成；恢复时会跳过这次操作，不会重复执行。",
+    "inlineFailed": "已记录为未发生；可从原任务的检查点继续。"
   },
   "en": {
     "navTitle": "Operation recovery",
@@ -121,7 +138,24 @@ const translations = {
     "historyNoteLabel": "Audit note",
     "historyNoNote": "No note was recorded.",
     "continueOriginalTask": "Continue original task",
-    "openOriginalTask": "Open original task"
+    "openOriginalTask": "Open original task",
+    "inlineTitle": "Confirm the outcome of the previous operation",
+    "inlineWarning": "Unknown does not mean failed; automatic replay has stopped. Verify the target file, app or external service before choosing one outcome. Confirmation creates a safety record and continues only this task.",
+    "inlineIdentity": "View this operation’s identity (no typing or copying required)",
+    "inlineLoading": "Loading the operation for this task…",
+    "inlineConfirmFailed": "Verified it did not happen; continue",
+    "inlineConfirmCommitted": "Verified it completed; do not repeat",
+    "inlineDefer": "Not now",
+    "inlineDeferred": "Deferred. The operation remains unconfirmed; nothing will automatically rerun or resume.",
+    "inlineReview": "Review again",
+    "inlineRefresh": "Refresh status",
+    "inlineUnavailable": "This operation changed, was already handled, or lacks complete task information. Refresh its status; this does not prove success or authorize automatic continuation.",
+    "inlineLoadFailed": "Could not load this operation. Refresh its status before reviewing it.",
+    "inlineStale": "This confirmation is stale. Refresh and review again; the previous decision was not retried.",
+    "inlineResolveFailed": "The confirmation result was not received. Refresh and verify the current status before deciding again.",
+    "inlineResumePending": "Confirmation was saved, but recovery has not started. Continue when this task is available; confirmation will not be submitted again.",
+    "inlineCommitted": "Recorded as completed. Recovery will skip this operation instead of repeating it.",
+    "inlineFailed": "Recorded as not performed. The original task can continue from its checkpoint."
   }
 }
 

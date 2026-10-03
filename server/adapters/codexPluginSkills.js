@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { parseCodexSkillMarkdown } from './codexSkillMarkdown.js'
 import { MANIFEST_SCAN_SKIP, MAX_MANIFEST_BYTES, MAX_MANIFEST_DEPTH, MAX_MANIFESTS, MAX_SCAN_DIRECTORIES, MAX_SKILL_BYTES, MAX_SKILL_DEPTH, MAX_SKILL_METADATA_BYTES, MAX_SKILLS, RECOMMENDED_CODEX_PLUGINS, RUNTIME_MARKER_SET, SKILL_RESOURCE_REFERENCE_RE, SKILL_SCAN_SKIP } from './codexPluginSkillConfig.js'
 import { cloneCodexPlugin, cloneCodexPluginSkill } from './codexPluginSkillProjection.js'
+import { readCurrentCodexPluginSkillSource } from './codexPluginSkillSource.js'
 
 export { parseCodexSkillMarkdown }
 export { CODEX_SKILL_COMPATIBILITY, RECOMMENDED_CODEX_PLUGINS } from './codexPluginSkillConfig.js'
@@ -428,6 +429,7 @@ function adaptSkill({ manifest, pluginRoot, skillPath, sourceRoot, seenIds, erro
     value: Object.freeze({
       pluginRoot,
       skillPath: fs.realpathSync(skillPath),
+      manifestPath: path.join(pluginRoot, '.codex-plugin', 'plugin.json'),
     }),
   })
   return skill
@@ -528,42 +530,36 @@ export function listCodexPluginSkills({ runnableOnly = false } = {}) {
     .map(cloneCodexPluginSkill)
 }
 
-function loadCurrentSkillPrompt(id) {
-  const source = CURRENT_SKILL_SOURCES.get(id)
-  if (!source) return null
-  try {
-    const stat = fs.lstatSync(source.skillPath)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SKILL_BYTES) return null
-    const realPath = fs.realpathSync(source.skillPath)
-    if (!isInside(source.pluginRoot, realPath)
-      || normalizedPathKey(realPath) !== normalizedPathKey(source.skillPath)) return null
-    const cacheKey = `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`
-    const cached = PROMPT_CACHE.get(id)
-    if (cached?.key === cacheKey) return cached.prompt
-    const { body } = parseCodexSkillMarkdown(readBoundedText(realPath, MAX_SKILL_BYTES))
-    const prompt = String(body || '').trim()
-    if (!prompt) return null
-    PROMPT_CACHE.set(id, { key: cacheKey, prompt })
-    return prompt
-  } catch {
-    return null
-  }
-}
-
 export function getCodexPluginSkill(id, { runnableOnly = false, loadPrompt = false } = {}) {
-  const skill = CURRENT_SKILLS.find((candidate) => candidate.id === id)
-  if (!skill || (runnableOnly && !skill.runnable)) return null
-  const cloned = cloneCodexPluginSkill(skill)
-  if (!loadPrompt || !skill.runnable) return cloned
-  const systemPrompt = loadCurrentSkillPrompt(skill.id)
-  return systemPrompt ? { ...cloned, systemPrompt } : null
+  const index = CURRENT_SKILLS.findIndex((candidate) => candidate.id === id)
+  const skill = CURRENT_SKILLS[index]
+  if (!skill) return null
+  if (!loadPrompt) return runnableOnly && !skill.runnable ? null : cloneCodexPluginSkill(skill)
+  const source = CURRENT_SKILL_SOURCES.get(id)
+  const current = readCurrentCodexPluginSkillSource(source, PROMPT_CACHE)
+  if (!current) return null
+  const classification = classifyCodexSkill({
+    manifest: current.manifest,
+    pluginRoot: source.pluginRoot,
+    skillDir: path.dirname(source.skillPath),
+    skillText: current.skillText,
+  })
+  const refreshed = {
+    ...skill, ...classification,
+    runnable: classification.compatibility === 'ready',
+    status: classification.compatibility,
+  }
+  CURRENT_SKILLS[index] = refreshed
+  if (runnableOnly && !refreshed.runnable) return null
+  const cloned = cloneCodexPluginSkill(refreshed)
+  return refreshed.runnable ? { ...cloned, systemPrompt: current.prompt } : cloned
 }
 
 export function getCodexPluginDiscovery() {
   return {
     roots: [...LAST_DISCOVERY.roots],
     plugins: LAST_DISCOVERY.plugins.map(cloneCodexPlugin),
-    skills: LAST_DISCOVERY.skills.map(cloneCodexPluginSkill),
+    skills: CURRENT_SKILLS.map(cloneCodexPluginSkill),
     errors: LAST_DISCOVERY.errors.map((error) => ({ ...error })),
   }
 }

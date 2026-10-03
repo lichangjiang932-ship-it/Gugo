@@ -7,11 +7,17 @@ import { dispatchCodeSearchTool } from '../../../utils/codeSearch.js'
 import { dispatchCodingAgentTool } from '../../../adapters/codingAgentTools.js'
 import { dispatchFsShellTool } from '../../../adapters/fsShellTools.js'
 import { dispatchGitTool } from '../../../adapters/gitWorkbench.js'
+import { dispatchGitHistoryTool, isGitHistoryTool } from '../../../adapters/gitHistoryTools.js'
 import { dispatchImageTool } from '../../../adapters/imageTools.js'
 import { dispatchMediaTool } from '../../../adapters/mediaTools.js'
 import { dispatchMemoryTool } from '../../../utils/memoryTools.js'
+import { dispatchExperienceTool, EXPERIENCE_TOOL_NAMES } from '../../../utils/experienceTools.js'
+import { GOAL_TOOL_NAMES, dispatchGoalTool } from '../../../utils/goalTools.js'
+import { dispatchSkillResourceTool, SKILL_RESOURCE_TOOL_NAME } from '../../../utils/skillResourceTools.js'
 import { dispatchPdfTool } from '../../../adapters/pdfTools.js'
 import { executeBrowserTool } from '../../browserToolExecutor.js'
+import { executePreviewTool } from '../../previewTools.js'
+import { getProjectDirectory } from '../../localFileAccessService.js'
 import { executeSubagentBatch } from '../../subagentBatchBridge.js'
 import { fetchAndExtract } from '../../../adapters/toolProxy.js'
 import { getTurnArtifactById } from '../../turnArtifactStore.js'
@@ -311,7 +317,29 @@ function normalizedTodos(args) {
 async function executeAgentOrExternalTool(context, registeredTool) {
   const { name, args, job, step, signal, budget, skillId,
     approvalContext, toolCallId, idempotencyKey, dynamicToolRegistrationId } = context
-  if (name === 'remember') return dispatchMemoryTool(name, args || {}, { userId: job?.userId || null })
+  if (name === 'search_tools') {
+    return { ok: true, query: String(args?.query || '').trim(), requestedLimit: args?.limit }
+  }
+  if (name === 'load_skill') {
+    return { ok: true, requestedSkillId: String(args?.skill_id || '').trim() }
+  }
+  if (name === 'remember') return dispatchMemoryTool(name, args || {}, {
+    userId: job?.userId || null,
+    agentId: job?.agentId || null,
+    sessionId: job?.sessionId || null,
+  })
+  if (EXPERIENCE_TOOL_NAMES.includes(name)) return dispatchExperienceTool(name, args || {}, {
+    userId: job?.userId || null,
+    sessionId: job?.sessionId || null,
+    // Left empty on purpose: the recorder resolves the turn's project directory
+    // from the ambient turn context, which is the same directory the other file
+    // tools were authorized against.
+  })
+  if (GOAL_TOOL_NAMES.includes(name)) return dispatchGoalTool(name, args || {}, {
+    userId: job?.userId || null,
+    sessionId: job?.sessionId || null,
+    turnId: job?.id || null,
+  })
   if (['reflect', 'request_clarification', 'request_directory', 'sleep_until'].includes(name)) {
     try {
       const result = await dispatchAgenticTool(name, args || {}, { userId: job?.userId || null })
@@ -333,6 +361,13 @@ async function executeAgentOrExternalTool(context, registeredTool) {
         signal,
         budget,
         approvalContext,
+      })
+    } catch (error) { return { ok: false, error: error?.message || String(error) } }
+  }
+  if (isGitHistoryTool(name)) {
+    try {
+      return await dispatchGitHistoryTool(name, args || {}, {
+        userId: job?.userId || null, cwd: args?.cwd,
       })
     } catch (error) { return { ok: false, error: error?.message || String(error) } }
   }
@@ -366,6 +401,25 @@ async function executeAgentOrExternalTool(context, registeredTool) {
       return {
         ok: false,
         code: error?.code || (error?.name === 'AbortError' ? 'browser_cancelled' : 'browser_tool_failed'),
+        cancelled: error?.name === 'AbortError',
+        error: error?.message || String(error),
+        retryable: error?.name !== 'AbortError',
+      }
+    }
+  }
+  if (name.startsWith('preview_')) {
+    try {
+      // The project the reader picked is the workspace the preview belongs to;
+      // without one there is no launch.json to honour and no panel to ask.
+      return await executePreviewTool(name, args || {}, {
+        userId: job?.userId || null,
+        workspaceRoot: getProjectDirectory({ userId: job?.userId || null }) || '',
+        signal,
+      })
+    } catch (error) {
+      return {
+        ok: false,
+        code: error?.code || (error?.name === 'AbortError' ? 'preview_cancelled' : 'preview_tool_failed'),
         cancelled: error?.name === 'AbortError',
         error: error?.message || String(error),
         retryable: error?.name !== 'AbortError',
@@ -415,7 +469,7 @@ export async function executeServerTool(context) {
   }
   if (isGeneratedArtifactTool(name)) {
     return executeGeneratedArtifactTool({
-      name, args, job, step, signal, requiresLocalArtifactDelivery,
+      name, args, job, step, signal, requiresLocalArtifactDelivery, toolCallId: context.toolCallId,
     })
   }
   const boundTool = getBoundRuntimeTool(name)
@@ -429,6 +483,7 @@ export async function executeServerTool(context) {
     }
     return executeBoundTool(context, boundTool)
   }
+  if (name === SKILL_RESOURCE_TOOL_NAME) return dispatchSkillResourceTool(args || {}, context)
   for (const execute of [executeProcessOrSourceTool, executeFileOrMediaTool]) {
     const result = await execute(context)
     if (result !== UNHANDLED) return result

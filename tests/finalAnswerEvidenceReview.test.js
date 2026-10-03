@@ -98,6 +98,25 @@ test('persistent final-answer evidence keeps media metadata but never raw payloa
   assert.doesNotMatch(evidence[0].result, /RAW_SCREENSHOT_BYTES|base64|data:image/u)
 })
 
+test('media payloads nested under a plural container key are omitted too', () => {
+  const evidence = appendFinalAnswerToolEvidence([], {
+    name: 'media_probe',
+    args: {},
+  }, {
+    ok: true,
+    images: [{ data: 'PLURAL_CONTAINER_BYTES', width: 640 }],
+    attachments: [{ dataUrl: 'data:image/png;base64,ATTACHMENT_BYTES', name: 'shot.png' }],
+  })
+
+  assert.equal(evidence.length, 1)
+  assert.match(evidence[0].result, /"width":640/u)
+  assert.match(evidence[0].result, /shot\.png/u)
+  assert.doesNotMatch(
+    evidence[0].result,
+    /PLURAL_CONTAINER_BYTES|ATTACHMENT_BYTES|base64|data:image/u,
+  )
+})
+
 test('an unavailable final-answer review exits with stable structured diagnostics only', async () => {
   let terminal = null
   const result = await processModelResult({

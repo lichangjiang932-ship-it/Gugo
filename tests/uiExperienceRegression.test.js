@@ -36,6 +36,7 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
     'AGENT_PRESETS',
     'INTEGRATIONS',
     'DATA',
+    'USAGE',
     'RECOVERY',
     'ABOUT',
   ]
@@ -53,6 +54,7 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
     AGENT_PRESETS: /case SETTINGS_TAB_AGENT_PRESETS:\s*return <SettingsAgentPresetsPanel/,
     INTEGRATIONS: /case SETTINGS_TAB_INTEGRATIONS:\s*return <SettingsIntegrationsPanel/,
     DATA: /case SETTINGS_TAB_DATA:\s*return <SettingsDataExport/,
+    USAGE: /case SETTINGS_TAB_USAGE:\s*return <SettingsUsagePanel/,
     RECOVERY: /case SETTINGS_TAB_RECOVERY:\s*return <SettingsSideEffectRecoveryPanel/,
     ABOUT: /case SETTINGS_TAB_ABOUT:\s*default:\s*return renderAbout\(\)/,
   }
@@ -117,6 +119,7 @@ test('chat chrome stays focused on conversations and essential composer controls
   const chatSendActions = read('../src/pages/ChatSplit/chatSendActions.js')
   const sendFlow = read('../src/pages/ChatSplit/useChatSendFlow.js')
   const chatView = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const headerBar = read('../src/pages/ChatSplit/chatSplitView/ChatSessionHeaderBar.jsx')
   const messages = read('../src/pages/ChatSplit/ChatMessages.jsx')
   const welcome = read('../src/pages/ChatSplit/chatMessages/NewConversationWelcome.jsx')
   const composer = read('../src/pages/ChatSplit/ChatComposer.jsx')
@@ -124,7 +127,9 @@ test('chat chrome stays focused on conversations and essential composer controls
 
   assert.match(rail, /<SessionList/)
   assert.match(rail, /onSearch=\{handleSearch\}/)
-  assert.match(rail, /collapsed && navButton\(Search/)
+  assert.match(rail, /data-sidebar-search/)
+  assert.match(rail, /aria-keyshortcuts="Control\+k Meta\+k"/)
+  assert.match(rail, /showSearchAction=\{false\}/)
   assert.doesNotMatch(rail, /navButton\(Wrench|path: '\/skills'/)
   assert.match(sessions, /aria-label=\{t\('nav\.searchPlaceholder'\)\}/)
   assert.match(account, /accountMenuOpen/)
@@ -144,15 +149,16 @@ test('chat chrome stays focused on conversations and essential composer controls
   assert.match(sessionMenu, /onDelete\(session\)/)
   assert.match(sessionMenu, /<X className=/)
 
-  assert.match(chatView, /data-testid="chat-session-title"/)
+  assert.match(chatView, /<ChatSessionHeaderBar/)
+  assert.match(headerBar, /data-testid="chat-session-title"/)
   assert.doesNotMatch(`${chat}\n${chatView}`, /<TodoTracker|<CodingWorkbench/)
   assert.doesNotMatch(chat, /if \(!state\.activeSessionId\) \{\s*dispatch\(\{ type: 'NEW_SESSION'/)
   assert.match(sendFlow, /if \(!activeSession\) \{[\s\S]*?type: 'NEW_SESSION'/)
   assert.match(chatSendActions, /const handleSend[\s\S]*?if \(!typedContent && attachments\.length === 0\) return/)
   assert.doesNotMatch(messages, /EXAMPLE_QUESTIONS/)
   assert.match(welcome, /data-testid="new-conversation-welcome"/)
-  assert.match(welcome, /chatMessages\.emptyTitle/)
-  assert.match(welcome, /STARTER_PROMPTS\.map/)
+  assert.match(welcome, /welcome\.title/)
+  assert.match(welcome, /starters\.map/)
   assert.match(composerActions, /<PermissionModeSwitcher/)
   assert.match(composerActions, /<ModelPicker/)
   assert.match(composerActions, /<Plus/)
@@ -165,10 +171,14 @@ test('chat supporting panels preserve a readable transcript on narrow screens', 
   const preview = read('../src/pages/ChatSplit/RightPreviewPane.jsx')
   const previewChrome = read('../src/pages/ChatSplit/preview/PreviewChrome.jsx')
   const styles = read('../src/index.css')
+  const containerWidth = read('../src/pages/ChatSplit/preview/usePreviewContainerWidth.js')
 
   assert.match(preview, /chat-preview-pane/)
   assert.match(previewChrome, /chat-preview-toolbar-actions/)
-  assert.match(styles, /@media \(max-width: 1023px\)[\s\S]*?\.chat-preview-pane[\s\S]*?position: fixed;[\s\S]*?width: 100vw !important;/)
+  assert.match(containerWidth, /closest\('\[data-chat-main-area\]'\)/)
+  assert.match(containerWidth, /ResizeObserver/)
+  assert.match(preview, /chat-preview-pane-focused absolute inset-0 w-full/)
+  assert.match(styles, /\.chat-preview-pane-focused\s*\{\s*border-left: 0;/)
   assert.match(styles, /\.chat-preview-toolbar,\s*\.chat-preview-toolbar-actions\s*\{\s*flex-wrap: wrap;/)
 })
 

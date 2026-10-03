@@ -1,4 +1,5 @@
 import { serializeAttachmentReferences } from '../../lib/attachmentClient.js'
+import { appendServerArtifact } from '../../lib/serverArtifactRevisions.js'
 import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction, resolveLocalPathToolNames } from '../../lib/localPathPreflight.js'
 import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import {
@@ -145,14 +146,6 @@ export function buildServerTurnMessageIds(turnId) {
   return { userId: `${normalized}:user`, assistantId: `${normalized}:assistant` }
 }
 
-function appendArtifact(artifact, artifacts, dispatchMessage) {
-  const filename = artifact.filename || 'artifact'
-  const type = filename.includes('.') ? filename.split('.').pop().toLowerCase() : 'file'
-  if (artifacts.some((item) => item.id === artifact.id)) return
-  artifacts.push({ ...artifact, filename, type })
-  dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverArtifacts: [...artifacts] })
-}
-
 export async function runServerChatTurn({
   abortCtrlRef,
   agentId,
@@ -254,7 +247,7 @@ export async function runServerChatTurn({
       messageTarget,
       flushToolOutput: turnActivityDispatcher.flush,
       onApproval: (request) => requestServerToolApproval(request, owner),
-      onArtifact: (artifact) => appendArtifact(artifact, serverArtifacts, dispatchMessage),
+      onArtifact: (artifact) => appendServerArtifact(artifact, serverArtifacts, dispatchMessage),
     })
     if (!dispatchResult?.cursorCommitted) {
       dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })

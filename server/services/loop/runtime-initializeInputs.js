@@ -1,3 +1,5 @@
+import { userMessageText } from './userMessageText.js'
+
 function bindRuntimeInputs(s) {
   const {
     DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
@@ -46,29 +48,28 @@ export async function initializeInputs(s) {
         ? s.toolSpecs
         : SERVER_TOOL_SPECS
   s.currentUserMessage = (Array.isArray(s.messages) ? s.messages : [])
-      .findLast((message) => message?.role === 'user' && typeof message.content === 'string')
+      .findLast((message) => message?.role === 'user')
+  s.currentUserText = userMessageText(s.currentUserMessage?.content)
   s.currentUserIndex = Array.isArray(s.messages) ? s.messages.lastIndexOf(s.currentUserMessage) : -1
   s.previousUserMessage = s.currentUserIndex > 0
       ? s.messages.slice(0, s.currentUserIndex).findLast((message) => (
-          message?.role === 'user' && typeof message.content === 'string'
+          message?.role === 'user'
         ))
       : null
-  s.previousUserPrompt = String(
-      s.job?.previousUserPrompt || s.previousUserMessage?.content || '',
-    )
+  s.previousUserPrompt = userMessageText(s.job?.previousUserPrompt)
+      || userMessageText(s.previousUserMessage?.content)
   s.intentText = [
       s.job?.prompt || '',
-      s.currentUserMessage?.content || '',
+      s.currentUserText,
     ].join('\n')
   s.hasManagedAttachments = s.job?.hasManagedAttachments === true
       || (Array.isArray(s.job?.managedAttachments) && s.job.managedAttachments.length > 0)
       || MANAGED_ATTACHMENT_MARKER.test(s.intentText)
   s.explicitSkillId = s.skillId
-      || parseSkillIdFromPrompt(s.currentUserMessage?.content || '')
+      || parseSkillIdFromPrompt(s.currentUserText)
       || parseSkillIdFromPrompt(s.job?.prompt || '')
-  s.artifactAuthorizationText = String(
-      s.job?.userPrompt || s.currentUserMessage?.content || s.job?.prompt || '',
-    )
+  s.artifactAuthorizationText = userMessageText(s.job?.userPrompt)
+      || s.currentUserText || userMessageText(s.job?.prompt)
   s.priorTurnOutcome = latestPriorTurnOutcome(s.messages)
   s.isPriorOutcomeStatusInquiry = Boolean(s.priorTurnOutcome)
       && STATUS_INQUIRY_PROMPT.test(s.artifactAuthorizationText.trim())

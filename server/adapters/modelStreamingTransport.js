@@ -1,14 +1,19 @@
+import { getProviderReplayContext } from './providerReplayState.js'
+import { getModelWireDiagnostics } from './modelWireDiagnostics.js'
+
 import {
   consumeNativeProviderStreamPayload,
   createNativeProviderStreamState,
   finishNativeProviderStream,
   getNativeProviderRequestAdapter,
-  isNativeProviderKind,
+  NATIVE_PROVIDER_KINDS,
 } from './nativeModelProviders.js'
 import {
   extractModelResponseError,
   extractUsage,
+  modelHttpResponseError,
 } from './modelProviderResponse.js'
+import { markContextOverflowGeneration } from './modelContextOverflow.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
 import {
   createCompatibleModelStreamState,
@@ -28,6 +33,9 @@ import {
   throwIfModelRequestAbortedBeforeSend,
 } from './modelRequestOutcome.js'
 import { fetchWithEnvProxy } from './proxyFetch.js'
+import { createToolArgumentProgressTracker, hasModelContentProgress } from './modelStreamProgress.js'
+import { modelToolArgumentsIdleMs } from './modelStreamTiming.js'
+import { createUsageTrailerReader, requestsCompatibleUsageTrailer } from './modelStreamUsageTrailer.js'
 
 function reasoningLimitFor({ env, tools, toolChoice }) {
   const executionWithTools = Array.isArray(tools)
@@ -58,6 +66,35 @@ async function abortRunawayReasoning({ reader, controller, limit, native }) {
   throw error
 }
 
+function* consumeNativeFrameWithProgress(chunk, state, argumentProgress, recordProgress) {
+  const events = consumeNativeProviderStreamPayload(chunk, state)
+  // Built-in native adapters retain partial arguments in their stream state;
+  // waiting for tool_call_ready would hide progress until the JSON is complete.
+  if (state.toolCalls instanceof Map) {
+    for (const [index, call] of state.toolCalls) {
+      const progress = argumentProgress(call, index)
+      if (progress) { recordProgress('tool_arguments'); yield progress }
+    }
+  }
+  for (const event of events) {
+    if (['text', 'reasoning'].includes(event.type) && hasModelContentProgress(event.delta)) recordProgress()
+    if (event.type === 'tool_call_ready') {
+      const progress = argumentProgress(event.toolCall, event.index)
+      if (progress) { recordProgress('tool_arguments'); yield progress }
+    }
+    yield event
+  }
+}
+
+function compatibleFinalEvent(toolCallAcc, finishReason, usage) {
+  if (toolCallAcc.size === 0) return { type: 'finish', finishReason: finishReason || 'stop', usage }
+  return {
+    type: 'tool_calls',
+    toolCalls: [...toolCallAcc.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value),
+    finishReason: finishReason || 'tool_calls', usage,
+  }
+}
+
 async function* consumeStreamingResponse({
   response,
   profile,
@@ -69,6 +106,7 @@ async function* consumeStreamingResponse({
   toolChoice,
   controller,
   armTimer,
+  clearTimer,
 }) {
   const jsonEvents = await readJsonModelResponseEvents(response, profile, {
     onFirstByte,
@@ -82,8 +120,8 @@ async function* consumeStreamingResponse({
   if (!reader) throw new Error('无法读取流式响应')
   const toolCallAcc = new Map()
   const readyToolCallIndexes = new Set()
-  const nativeStreamState = providerAdapter || isNativeProviderKind(profile.kind)
-    ? createNativeProviderStreamState(profile.kind, providerAdapter)
+  const nativeStreamState = providerAdapter || NATIVE_PROVIDER_KINDS.has(profile.kind)
+    ? createNativeProviderStreamState(profile.kind, providerAdapter, getProviderReplayContext(providerRequest))
     : null
   const compatibleStreamState = createCompatibleModelStreamState()
   const reasoningCharLimit = reasoningLimitFor({ env, tools, toolChoice })
@@ -92,10 +130,13 @@ async function* consumeStreamingResponse({
   let lastUsage = null
   let sawProviderEvent = false
   let sawTerminal = false
-  for await (const line of readModelSseLines(reader, {
-    onFirstByte,
-    onChunk: () => armTimer('idle', profile.timeouts.idleMs),
-  })) {
+  let generationObserved = false
+  const argumentProgress = createToolArgumentProgressTracker()
+  const recordProgress = (kind) => armTimer('idle', kind === 'tool_arguments'
+    ? modelToolArgumentsIdleMs(profile.timeouts.idleMs) : profile.timeouts.idleMs)
+  const usageTrailer = createUsageTrailerReader(reader, controller.signal)
+  const lines = readModelSseLines(reader, { onFirstByte, onChunk: usageTrailer.onChunk })
+  for await (const line of lines) {
     const decoded = decodeModelStreamLine(line)
     if (!decoded) continue
     sawProviderEvent = true
@@ -104,25 +145,25 @@ async function* consumeStreamingResponse({
         yield* finishNativeProviderStream(nativeStreamState, { requireFinishReason: true })
         return
       }
-      if (toolCallAcc.size > 0) {
-        const calls = [...toolCallAcc.entries()]
-          .sort((a, b) => a[0] - b[0])
-          .map(([, value]) => value)
-        yield {
-          type: 'tool_calls', toolCalls: calls,
-          finishReason: finishReason || 'tool_calls', usage: lastUsage,
-        }
-      } else {
-        yield { type: 'finish', finishReason: finishReason || 'stop', usage: lastUsage }
-      }
+      yield compatibleFinalEvent(toolCallAcc, finishReason, lastUsage)
       return
     }
     const chunk = decoded.data
     const responseError = extractModelResponseError(chunk)
-    if (responseError) throw responseError
+    if (responseError) {
+      const reportedUsage = responseError.usage || lastUsage
+      if (reportedUsage) {
+        responseError.usage = reportedUsage
+        yield { type: 'usage', usage: reportedUsage }
+      }
+      if (generationObserved || Number(reportedUsage?.completionTokens) > 0) markContextOverflowGeneration(responseError)
+      throw responseError
+    }
     if (nativeStreamState) {
-      const nativeEvents = consumeNativeProviderStreamPayload(chunk, nativeStreamState)
+      const nativeEvents = consumeNativeFrameWithProgress(chunk, nativeStreamState, argumentProgress, recordProgress)
       for (const event of nativeEvents) {
+        if ((['text', 'reasoning'].includes(event.type) && String(event.delta || '').length > 0)
+          || ['tool_call_ready', 'tool_call_progress', 'tool_calls'].includes(event.type)) generationObserved = true
         if (event.type === 'reasoning' && event.delta) {
           reasoningChars += event.delta.length
           if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
@@ -137,6 +178,8 @@ async function* consumeStreamingResponse({
       continue
     }
     const frame = normalizeCompatibleModelStreamPayload(chunk, compatibleStreamState)
+    if (frame.text?.length || frame.reasoning?.length || frame.toolCallDeltas.length) generationObserved = true
+    if (hasModelContentProgress(frame.text) || hasModelContentProgress(frame.reasoning)) recordProgress()
     const chunkUsage = extractUsage(chunk)
     if (chunkUsage) {
       lastUsage = chunkUsage
@@ -162,6 +205,8 @@ async function* consumeStreamingResponse({
       else if (delta.arguments) existing.arguments += delta.arguments
       if (!existing.id && existing.name) existing.id = `call-${index}-${existing.name}`
       toolCallAcc.set(index, existing)
+      const progress = argumentProgress(existing, index)
+      if (progress) { recordProgress('tool_arguments'); yield progress }
       if (!readyToolCallIndexes.has(index) && existing.name && existing.arguments.trim()) {
         try {
           JSON.parse(existing.arguments)
@@ -172,6 +217,11 @@ async function* consumeStreamingResponse({
     }
     if (frame.terminal) {
       sawTerminal = true
+      clearTimer()
+      if (!lastUsage && requestsCompatibleUsageTrailer(providerRequest, chunk)) {
+        lastUsage = await usageTrailer.read(lines)
+        if (lastUsage) yield { type: 'usage', usage: lastUsage }
+      }
       break
     }
   }
@@ -188,32 +238,19 @@ async function* consumeStreamingResponse({
     }
     return
   }
-  if (toolCallAcc.size > 0) {
-    const calls = [...toolCallAcc.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, value]) => value)
-    yield {
-      type: 'tool_calls', toolCalls: calls,
-      finishReason: sawTerminal ? finishReason || 'tool_calls' : 'truncated',
-      usage: lastUsage,
-    }
-    return
-  }
-  yield {
-    type: 'finish',
-    finishReason: sawTerminal ? finishReason || 'stop' : 'truncated',
-    usage: lastUsage,
-  }
+  yield compatibleFinalEvent(toolCallAcc, sawTerminal ? finishReason : 'truncated', lastUsage)
 }
 
-/**
- * Provider transport boundary for streaming model events.
- *
- * It owns outbound streaming, first-byte/idle deadlines, provider frame
- * normalization, and incremental tool-call assembly. Session, prompt, memory,
- * upstream Provider cost estimation and HTTP response concerns deliberately
- * stay outside this adapter.
- */
+/** Preserve upstream diagnostics without confusing an HTTP failure with EOF. */
+async function assertStreamingResponseOk(response) {
+  if (response.ok) return
+  const text = await response.text()
+  let data
+  try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
+  throw modelHttpResponseError(data, response, text)
+}
+
+/** Provider streaming boundary: transport deadlines, frames and tool assembly. */
 export async function* streamModelProviderEvents({
   config,
   messages,
@@ -269,13 +306,15 @@ export async function* streamModelProviderEvents({
     toolChoice,
     profile,
     modelRequestId,
+    env,
   })
   const { url, init } = providerRequest
   const providerAdapter = getNativeProviderRequestAdapter(providerRequest)
   throwIfModelRequestAbortedBeforeSend(externalSignal)
   if (typeof onProviderAttempt === 'function') {
-    await onProviderAttempt({ config, profile, requestUrl: url })
+    await onProviderAttempt({ config, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
   }
+  throwIfModelRequestAbortedBeforeSend(externalSignal)
   const controller = new AbortController()
 
   let timedOutPhase = null
@@ -310,16 +349,7 @@ export async function* streamModelProviderEvents({
   try {
     const response = await guardedFetch(url, { ...init, signal: controller.signal })
     responseReceived = true
-    if (!response.ok) {
-      const text = await response.text()
-      let data = null
-      try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
-      const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
-      const error = new Error(message)
-      error.status = response.status
-      error.fromUpstream = true
-      throw error
-    }
+    await assertStreamingResponseOk(response)
 
     yield* consumeStreamingResponse({
       response,
@@ -332,6 +362,7 @@ export async function* streamModelProviderEvents({
       toolChoice,
       controller,
       armTimer,
+      clearTimer,
     })
   } catch (error) {
     if (error?.name === 'AbortError' && !externalSignal?.aborted) {

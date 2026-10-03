@@ -17,7 +17,6 @@ const COMPOSER_INTERACTIVE_SELECTOR = 'button, input, textarea, select, option, 
 
 export default function ChatComposer({
   input,
-  editingMessageId,
   setInput,
   onSend,
   attachments,
@@ -31,7 +30,7 @@ export default function ChatComposer({
   selectedModelProviderId,
   isGenerating,
   onAbort,
-  onCancelMessageEdit,
+  onPause,
   onFileChange,
   onToggleContext,
   onOpenModelPicker,
@@ -183,8 +182,6 @@ export default function ChatComposer({
           />
         )}
         <ComposerContextHeader
-          editingMessageId={editingMessageId}
-          onCancelMessageEdit={onCancelMessageEdit}
           onClearWorkspace={onClearWorkspace}
           onSelectWorkspace={onSelectWorkspace}
           recentWorkspaces={recentWorkspaces}
@@ -250,6 +247,14 @@ export default function ChatComposer({
                   setInput('')
                   return
                 }
+                // Esc interrupts a running turn, as in Claude Code. It pauses
+                // rather than cancels, so the turn can still be continued.
+                if (e.key === 'Escape' && isGenerating && !e.nativeEvent?.isComposing
+                  && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                  e.preventDefault()
+                  ;(onPause || onAbort)?.()
+                  return
+                }
                 handleKeyDown(e)
               }}
               onPaste={(e) => {
@@ -258,7 +263,7 @@ export default function ChatComposer({
                 e.preventDefault()
                 onFileChange?.({ target: { files, value: '' } })
               }}
-              placeholder={t('chatComposer.placeholder')}
+              placeholder={t(isGenerating ? 'chatComposer.placeholderRunning' : 'chatComposer.placeholder')}
               aria-label={t('chatComposer.placeholder')}
               className="chat-composer-input w-full min-w-0 flex-1 cursor-text resize-none overflow-y-auto bg-transparent text-sm leading-6 text-ink outline-none placeholder:text-ink-soft max-h-48"
               rows={1}
@@ -269,12 +274,14 @@ export default function ChatComposer({
             contextPanelOpen={contextPanelOpen}
             contextUsage={contextUsage}
             hasDraftText={Boolean(String(input || '').trim())}
+            hasAttachments={Array.isArray(attachments) && attachments.length > 0}
             fileInputRef={fileInputRef}
             isGenerating={isGenerating}
             modelOptions={modelOptions}
             modelReadiness={modelReadiness}
             modelPickerOpen={modelPickerOpen}
             onAbort={onAbort}
+            onPause={onPause}
             onApprovalModeChange={onApprovalModeChange}
             onCloseModelPicker={onCloseModelPicker}
             onFileChange={onFileChange}

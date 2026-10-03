@@ -40,7 +40,11 @@ test('browser state is blocked when Browser is disabled in Access', async () => 
   upsertIntegration({ userId, provider: 'browser', enabled: false })
   const response = await fetch(baseUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: '{}' })
   assert.equal(response.status, 403)
-  assert.match((await response.json()).error, /disabled/i)
+  assert.deepEqual((await response.json()).error, {
+    code: 'BROWSER_DISABLED',
+    message: 'Browser is disabled in Access',
+    retryable: false,
+  })
 })
 
 test('browser open cannot bypass a managed app connection', async () => {
@@ -51,5 +55,9 @@ test('browser open cannot bypass a managed app connection', async () => {
     body: JSON.stringify({ url: 'https://mail.google.com/' }),
   })
   assert.equal(response.status, 409)
-  assert.match((await response.json()).error, /not connected/i)
+  assert.deepEqual((await response.json()).error, {
+    code: 'BROWSER_REQUEST_FAILED',
+    message: 'Gmail is not connected or is disabled',
+    retryable: false,
+  })
 })

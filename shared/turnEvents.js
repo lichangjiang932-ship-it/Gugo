@@ -1,4 +1,11 @@
+// @ts-check
 import { z } from 'zod'
+import { modelProviderStopDiagnostic } from './modelProviderStopDiagnostic.js'
+import { MODEL_PHASE_PROGRESS_FIELDS } from './modelPhaseProgress.js'
+import { modelContextDiagnosticsSchema } from './modelContextDiagnostics.js'
+import { modelWireDiagnosticsSchema } from './modelWireDiagnostics.js'
+import { toolFailureSchema, terminalReasonSchema, terminalNextActionSchema,
+  completionPoliciesSchema, taskVerificationSchema, turnFailureSchema } from './turnFailureSchemas.js'
 import {
   INLINE_SKILL_DEFINITION_LIMITS,
   unicodeCharacterLength,
@@ -11,14 +18,18 @@ export {
   createTurnActivity,
   parseTurnActivity,
 } from './turnActivity.js'
+export {
+  canAdvanceTurnEventCursor, createTurnEventTransportEnvelope,
+  parseTurnEventTransportEnvelope, parseTurnEventTransportPayload,
+} from './turnEventTransport.js'
 
-export const TURN_EVENT_TYPES = Object.freeze([
+export const TURN_EVENT_TYPES = Object.freeze(/** @type {const} */ ([
   'turn.started', 'turn.attempt', 'model.phase', 'model.failover', 'assistant.delta', 'reasoning.delta',
   'tool.call', 'tool.started', 'tool.completed', 'turn.progress', 'approval.required',
   'approval.resolved', 'turn.checkpoint', 'turn.interrupted', 'turn.blocked', 'turn.paused', 'turn.resumed',
   'turn.completed', 'turn.cancelled',
   'turn.failed', 'heartbeat',
-])
+]))
 
 export const TURN_EVENT_TRANSPORT_VERSION = 1
 export const TURN_EVENT_TRANSPORT_TYPE = 'turn.event'
@@ -58,54 +69,6 @@ const managedAttachmentSchema = z.object({
   createdAt: z.number().int().nonnegative().optional(),
   updatedAt: z.number().int().nonnegative().optional(),
 }).strict()
-const toolFailureSchema = z.object({
-  code: z.string().min(1),
-  message: z.string().min(1),
-  status: z.number().int().min(100).max(599).optional(),
-  retryable: z.boolean(),
-  hint: z.string().optional(),
-  attempts: z.number().int().positive().optional(),
-}).strict()
-const terminalReasonSchema = z.string().min(1).max(2_000)
-const terminalNextActionSchema = z.string().min(1).max(80).regex(/^[a-z][a-z0-9_]{0,79}$/u)
-const taskVerificationCheckSchema = z.object({
-  status: z.enum(['failed', 'indeterminate', 'rerun_required', 'stale']),
-  kind: z.enum(['test', 'lint', 'build', 'check', 'typecheck']),
-  cwd: z.string().min(1).max(1_000),
-  commandScope: z.string().max(1_000),
-  coverage: z.enum(['cwd', 'targeted']),
-  code: z.string().min(1).max(128).regex(/^[A-Z][A-Z0-9_]*$/u),
-  failures: z.number().int().min(0).max(5),
-  requiredEpoch: z.number().int().nonnegative(),
-  mutationTargets: z.array(z.string().min(1).max(2_000)).max(16).optional(),
-  diagnostic: z.string().min(1).max(1_200).optional(),
-}).strict()
-const taskVerificationSchema = z.object({
-  version: z.literal(1),
-  maxFailures: z.number().int().min(1).max(5),
-  consecutiveFailures: z.number().int().min(0).max(5),
-  checks: z.array(taskVerificationCheckSchema).min(1).max(64),
-}).strict()
-const turnFailureSchema = toolFailureSchema.extend({
-  // New terminal projections are code-only. `message` and `hint` remain
-  // optional solely so clients can replay events written by older runtimes.
-  message: z.string().min(1).optional(),
-  hint: z.string().optional(),
-  reason: terminalReasonSchema.optional(),
-  nextAction: terminalNextActionSchema.optional(),
-  manualRetryable: z.boolean().optional(),
-  incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
-  missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
-  taskVerification: taskVerificationSchema.optional(),
-  persistence: z.object({
-    failedEventCount: z.number().int().nonnegative(),
-    blockedEventCount: z.number().int().nonnegative(),
-    failedEventTypes: z.array(z.string().min(1)).max(32),
-    firstFailedSequence: z.number().int().nonnegative().optional(),
-    lastFailedSequence: z.number().int().nonnegative().optional(),
-    failedAt: z.number().int().nonnegative().optional(),
-  }).strict().optional(),
-}).strict()
 const completedArtifactSchema = z.object({
   id: z.string().min(1),
   filename: z.string().min(1),
@@ -113,7 +76,9 @@ const completedArtifactSchema = z.object({
   url: z.string().min(1),
   title: z.string().optional(),
   mimeType: z.string().min(1).optional(),
+  previewRevision: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
 }).strict()
+/** @param {{ maxCharacters?: number | null, maxUtf8Bytes?: number | null, minCharacters?: number }} [options] */
 function inlineSkillTextSchema({ maxCharacters = null, maxUtf8Bytes = null, minCharacters = 0 } = {}) {
   return z.string().superRefine((value, context) => {
     const characterLength = unicodeCharacterLength(value)
@@ -181,6 +146,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     approvalMode: z.enum(['normal', 'acceptEdits', 'plan', 'bypass']).optional(),
     workspacePath: nullableText,
     projectDirectory: nullableText,
+    sessionWorkspaceMode: z.enum(['follow-turn', 'create-only']).optional(),
     userMessageId: z.string().optional(),
     attachments: z.array(managedAttachmentSchema).optional(),
     importedHistoryCount: z.number().int().nonnegative().optional(),
@@ -196,8 +162,13 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     reasoningText: z.string(),
   }).strict(),
   'model.phase': z.object({
+    ...MODEL_PHASE_PROGRESS_FIELDS,
     phase: z.string(), iteration: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(), modelName: nullableText, error: nullableText,
+    contextDiagnostics: modelContextDiagnosticsSchema.optional(),
+    wireDiagnostics: modelWireDiagnosticsSchema.optional(),
+    modelRequestId: z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/u).optional(),
+    physicalAttempt: z.number().int().positive().optional(),
   }).strict(),
   'model.failover': z.object({
     kind: z.enum(['retry', 'failover']),
@@ -276,6 +247,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     taskVerification: taskVerificationSchema.optional(),
+    completionPolicies: completionPoliciesSchema,
     retryable: z.boolean(),
     text: z.string().optional(),
     partialText: z.string().optional(),
@@ -298,6 +270,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     taskVerification: taskVerificationSchema.optional(),
+    completionPolicies: completionPoliciesSchema,
     partialText: z.string().optional(),
     retryable: z.literal(false),
     manualRetryable: z.literal(true),
@@ -311,10 +284,14 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     toolCallId: z.string().min(1).max(256).optional(),
     modelRequestId: z.string().min(1).max(256).optional(),
     requiresUserVerification: z.literal(true).optional(),
-    recoveryAction: z.object({
-      kind: z.literal('open_settings'),
-      path: z.literal('/settings?tab=recovery'),
-    }).strict().optional(),
+    recoveryAction: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('confirm_side_effect') }).strict(),
+      // Retained for persisted side-effect records and model-request recovery.
+      z.object({
+        kind: z.literal('open_settings'),
+        path: z.literal('/settings?tab=recovery'),
+      }).strict(),
+    ]).optional(),
     checkpointSequence: z.number().int().nonnegative().nullable().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
@@ -322,16 +299,40 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     retainedLocalFiles: retainedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict().superRefine((payload, context) => {
-    if (['side_effect_unknown', 'side_effect_outcome_unknown', 'model_request_outcome_unknown'].includes(payload.recoveryKind)
+    if (payload.recoveryKind && ['side_effect_unknown', 'side_effect_outcome_unknown', 'model_request_outcome_unknown'].includes(payload.recoveryKind)
       && !payload.recoveryAction) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['recoveryAction'],
-        message: 'side-effect recovery requires the safe settings action',
+        message: 'outcome recovery requires a safe recovery action',
       })
     }
+    if (payload.recoveryAction?.kind === 'confirm_side_effect') {
+      if (payload.code !== 'SIDE_EFFECT_OUTCOME_UNKNOWN'
+        || payload.recoveryKind !== 'side_effect_outcome_unknown'
+        || payload.modelRequestId !== undefined
+        || (payload.error && (payload.error.code !== 'SIDE_EFFECT_OUTCOME_UNKNOWN'
+          || payload.error.retryable !== false))) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['recoveryAction'],
+          message: 'side-effect confirmation requires an exact non-retryable side-effect outcome boundary',
+        })
+      }
+      for (const key of /** @type {const} */ (['turnId', 'toolCallId'])) {
+        const id = payload[key]
+        const exact = typeof id === 'string' && id.length > 0 && !/\s/u.test(id)
+          && [...id].every((character) => character.charCodeAt(0) > 31 && character.charCodeAt(0) !== 127)
+        if (exact) continue
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: 'side-effect confirmation requires an exact ' + key,
+        })
+      }
+    }
     if (payload.recoveryKind === 'side_effect_outcome_unknown') {
-      for (const key of ['turnId', 'toolCallId', 'requiresUserVerification']) {
+      for (const key of /** @type {const} */ (['turnId', 'toolCallId', 'requiresUserVerification'])) {
         if (payload[key]) continue
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -341,7 +342,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
       }
     }
     if (payload.recoveryKind === 'model_request_outcome_unknown') {
-      for (const key of ['turnId', 'modelRequestId', 'requiresUserVerification']) {
+      for (const key of /** @type {const} */ (['turnId', 'modelRequestId', 'requiresUserVerification'])) {
         if (payload[key]) continue
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -368,6 +369,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     nextAction: terminalNextActionSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    completionPolicies: completionPoliciesSchema,
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
@@ -399,6 +401,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     turnModelUsage: jsonRecord.nullable().optional(),
     estimatedPromptTokens: z.number().int().nonnegative().optional(),
     paused: z.boolean().optional(), clarification: z.unknown().nullable().optional(), interrupted: z.boolean().optional(),
+    completionPolicies: completionPoliciesSchema,
   }).strict(),
   'turn.cancelled': z.object({
     // `reason` is retained for persisted legacy events. Public projections
@@ -408,6 +411,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     nextAction: terminalNextActionSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    completionPolicies: completionPoliciesSchema,
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
@@ -428,6 +432,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     taskVerification: taskVerificationSchema.optional(),
+    completionPolicies: completionPoliciesSchema,
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
@@ -456,7 +461,19 @@ const TurnEventBaseSchema = z.object({
 
 export const PersistedTurnEventSchema = TurnEventBaseSchema.superRefine((event, context) => {
   const result = TURN_EVENT_PAYLOAD_SCHEMAS[event.type].safeParse(event.payload)
-  if (result.success) return
+  if (result.success) {
+    const action = event.payload.recoveryAction
+    if (event.type === 'turn.blocked' && action && typeof action === 'object'
+      && 'kind' in action && action.kind === 'confirm_side_effect'
+      && event.payload.turnId !== event.turnId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'turnId'],
+        message: 'side-effect confirmation must belong to the event turn',
+      })
+    }
+    return
+  }
   for (const issue of result.error.issues) {
     context.addIssue({ ...issue, path: ['payload', ...issue.path] })
   }
@@ -468,6 +485,7 @@ const CODE_ONLY_TERMINAL_EVENT_TYPES = new Set([
   'turn.cancelled',
   'turn.failed',
 ])
+/** @type {Readonly<Partial<Record<keyof typeof TURN_EVENT_PAYLOAD_SCHEMAS, readonly string[]>>>} */
 const LEGACY_PRESENTATION_FIELDS = Object.freeze({
   'turn.interrupted': ['message', 'hint', 'reason'],
   'turn.blocked': ['message', 'hint', 'reason'],
@@ -476,6 +494,13 @@ const LEGACY_PRESENTATION_FIELDS = Object.freeze({
   'turn.paused': ['reason'],
 })
 const STABLE_EVENT_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u
+
+/** @param {string} field @param {unknown} value */
+function isProviderDiagnosticReason(field, value) {
+  if (!value || typeof value !== 'object' || !('reason' in value)) return false
+  const diagnostic = field === 'reason' ? modelProviderStopDiagnostic(value) : ''
+  return diagnostic !== '' && diagnostic === value?.reason
+}
 
 export const TurnEventSchema = PersistedTurnEventSchema.superRefine((event, context) => {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
@@ -489,7 +514,7 @@ export const TurnEventSchema = PersistedTurnEventSchema.superRefine((event, cont
   }
   const legacyFields = LEGACY_PRESENTATION_FIELDS[event.type] || []
   for (const field of legacyFields) {
-    if (Object.hasOwn(payload, field)) {
+    if (Object.hasOwn(payload, field) && !isProviderDiagnosticReason(field, payload)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['payload', field],
@@ -497,7 +522,7 @@ export const TurnEventSchema = PersistedTurnEventSchema.superRefine((event, cont
       })
     }
     if (payload.error && typeof payload.error === 'object'
-      && Object.hasOwn(payload.error, field)) {
+      && Object.hasOwn(payload.error, field) && !isProviderDiagnosticReason(field, payload.error)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['payload', 'error', field],
@@ -513,46 +538,19 @@ export const TurnEventTransportEnvelopeSchema = z.object({
   event: TurnEventSchema,
 }).strict()
 
+/** @param {unknown} value */
 export function parseTurnEvent(value) {
   return TurnEventSchema.parse(value)
 }
 
-/** Read-only compatibility parser for events persisted by pre-code-only runtimes. */
+/** Read-only compatibility parser for events persisted by pre-code-only runtimes.
+ * @param {unknown} value
+ */
 export function parsePersistedTurnEvent(value) {
   return PersistedTurnEventSchema.parse(value)
 }
 
-export function parseTurnEventTransportEnvelope(value) {
-  return TurnEventTransportEnvelopeSchema.parse(value)
-}
-
-export function createTurnEventTransportEnvelope(event) {
-  return parseTurnEventTransportEnvelope({
-    v: TURN_EVENT_TRANSPORT_VERSION,
-    type: TURN_EVENT_TRANSPORT_TYPE,
-    event: parseTurnEvent(event),
-  })
-}
-
-/**
- * Decode the versioned transport envelope while retaining the pre-v1 SSE
- * payload as an explicit compatibility path. Invalid envelope-like values do
- * not fall back to a bare event, so a version mismatch remains fail closed.
- */
-export function parseTurnEventTransportPayload(value) {
-  const envelopeLike = value !== null
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && (
-      value.type === TURN_EVENT_TRANSPORT_TYPE
-      || Object.prototype.hasOwnProperty.call(value, 'v')
-      || Object.prototype.hasOwnProperty.call(value, 'event')
-    )
-  return envelopeLike
-    ? parseTurnEventTransportEnvelope(value).event
-    : parsePersistedTurnEvent(value)
-}
-
+/** @param {import('../types/turn-protocol.js').CreateTurnEventInput} input */
 export function createTurnEvent({
   id,
   sessionId,
@@ -573,14 +571,4 @@ export function createTurnEvent({
     payload,
     createdAt,
   })
-}
-
-export function canAdvanceTurnEventCursor(event, after = -1) {
-  const cursor = Number.isInteger(after) ? after : Math.max(-1, Math.floor(Number(after) || 0))
-  const expectedSequence = cursor + 1
-  if (event?.sequence === expectedSequence) return true
-  return Number.isInteger(event?.sequence)
-    && event.sequence > expectedSequence
-    && Number.isInteger(event.compactedThrough)
-    && event.sequence <= event.compactedThrough
 }

@@ -16,14 +16,3 @@ export function readStoredWidth() {
     return DEFAULT_WIDTH
   }
 }
-
-export function normalizeBrowserUrl(value) {
-  const input = String(value || '').trim()
-  if (!input) return ''
-  try {
-    const url = new URL(/^https?:\/\//i.test(input) ? input : `https://${input}`)
-    return ['http:', 'https:'].includes(url.protocol) ? url.href : ''
-  } catch {
-    return ''
-  }
-}

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { redactSensitiveText } from '../utils/toolCallErrors.js'
 
 export const DEFAULT_MAX_OUTCOME_BYTES = 128 * 1024
 
@@ -6,6 +7,7 @@ export const DEFAULT_MAX_OUTCOME_BYTES = 128 * 1024
 // artifacts, verified local outputs, and mutation verification. Large stdout,
 // binary previews, and other presentation-only fields remain digest-only.
 const RECOVERY_OUTCOME_FIELDS = Object.freeze([
+  'failure',
   'artifactId',
   'artifactIds',
   'artifacts',
@@ -110,6 +112,55 @@ function commandIntentSummary(value) {
   return summary
 }
 
+/** Keep actionable scalar diagnostics, never error/request objects or stacks. */
+export function sanitizeSideEffectFailureText(value, fallback = '', maxLength = 1_000) {
+  if (typeof value !== 'string' || value.length > 16_384) return fallback
+  let text = value
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*/gu, REDACTED)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, REDACTED)
+    .replace(/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/giu, REDACTED)
+    .replace(/\b(?:args|arguments|request(?:Body)?|payload|config|headers)\s*[:=][\s\S]*/giu, '[REDACTED_DETAILS]')
+    .replace(/\{\s*["'][^"']+["']\s*:[\s\S]*/gu, '[REDACTED_DETAILS]')
+    .replace(/\[\s*["'{][\s\S]*/gu, '[REDACTED_DETAILS]')
+    .replace(/(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*)[^\r\n]*/giu, '$1[REDACTED]')
+    .replace(/(\b[A-Za-z_]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|pwd)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, '$1[REDACTED]')
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/giu, (url) => (
+      sanitizeSideEffectRecoveryTarget(url, { kind: 'url' })
+    ))
+  text = redactRecoveryText(redactSensitiveText(text), 16_384)
+  return text.slice(0, maxLength) || fallback
+}
+
+function ownFailureValue(error, key) {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return undefined
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, key)
+    return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Bounded, cycle-safe cause projection suitable for the ledger and public errors. */
+export function sanitizeSideEffectFailure(error, { depth = 0, seen = new Set() } = {}) {
+  const rawCode = ownFailureValue(error, 'code')
+  const code = sanitizeSideEffectFailureText(rawCode)
+  const message = sanitizeSideEffectFailureText(
+    typeof error === 'string' ? error : ownFailureValue(error, 'message'),
+    'Tool execution failed.',
+  )
+  const failure = {
+    code: /^[A-Za-z0-9_.:-]{1,128}$/u.test(code) ? code : 'TOOL_EXECUTION_FAILED',
+    message,
+  }
+  seen.add(error)
+  const cause = ownFailureValue(error, 'cause')
+  if (cause && depth < 2 && !seen.has(cause)) {
+    failure.cause = sanitizeSideEffectFailure(cause, { depth: depth + 1, seen })
+  }
+  return Object.freeze(failure)
+}
+
 export function requiredText(value, name, maxLength = 500) {
   const normalized = String(value || '').trim().slice(0, maxLength)
   if (!normalized) throw new TypeError(`${name} is required`)
@@ -210,7 +261,9 @@ export function recoverableSideEffectOutcomeFields(outcome) {
   const recovery = {}
   for (const key of RECOVERY_OUTCOME_FIELDS) {
     if (!Object.hasOwn(outcome, key)) continue
-    const normalized = boundedRecoveryValue(outcome[key])
+    const normalized = key === 'failure'
+      ? sanitizeSideEffectFailure(outcome[key])
+      : boundedRecoveryValue(outcome[key])
     if (normalized !== undefined) recovery[key] = normalized
   }
   return recovery

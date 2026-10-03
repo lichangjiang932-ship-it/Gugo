@@ -1,7 +1,7 @@
 import { normalizeUiLanguage, SLASH_ACTION_COPY } from '../i18n/translations.js'
 
 export const CORE_SLASH_COMMANDS = [
-  'mcp', 'side', 'init', 'compact', 'feedback', 'continue', 'pet', 'new', 'status', 'goals', 'plan',
+  'mcp', 'init', 'compact', 'feedback', 'continue', 'pet', 'new', 'status', 'goals', 'plan',
 ]
 
 function localeCopy(lang) {
@@ -45,10 +45,6 @@ export function buildCoreSlashCommands(_t, lang = 'en') {
     command('mcp', copy, async (_args, ctx = {}) => {
       ctx.openMcp?.()
       return ''
-    }),
-    command('side', copy, async (_args, ctx = {}) => {
-      ctx.openSideChat?.()
-      return copy.notices.side
     }),
     command('init', copy, async (_args, ctx = {}) => {
       await ctx.triggerSendFlow?.(copy.prompts.init)

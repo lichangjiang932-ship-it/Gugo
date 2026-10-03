@@ -174,7 +174,7 @@ test('EDITED ARGS: 改写后的参数才是 executeTool 收到的参数', async 
   assert.equal(result.text, '改写后已执行。')
 })
 
-test('DENY: 拒绝不杀死 job,拒绝结果作为 tool 消息喂回模型', async () => {
+test('DENY: 拒绝作为工具结果交还模型，模型换路继续，被拒命令绝不执行', async () => {
   const { userId } = issueNormalApprovalSession('approval-deny@example.com')
   const calls = []
   const fakeExecute = async ({ name, args }) => {
@@ -182,6 +182,7 @@ test('DENY: 拒绝不杀死 job,拒绝结果作为 tool 消息喂回模型', asy
     return { ok: true }
   }
   const seenMessages = []
+  let checkpoint = null
 
   const loop = runToolsLoop({
     job: makeJob({ id: 'job-approval-3', userId, title: 'denied' }),
@@ -189,6 +190,7 @@ test('DENY: 拒绝不杀死 job,拒绝结果作为 tool 消息喂回模型', asy
     messages: [{ role: 'user', content: '删库' }],
     runModel: makeRunModel({ finalText: '我换个方式来做。', seenMessages }),
     executeTool: fakeExecute,
+    saveCheckpoint: async (state) => { checkpoint = structuredClone(state); return true },
   })
 
   const pending = await waitForPending(userId)
@@ -197,18 +199,19 @@ test('DENY: 拒绝不杀死 job,拒绝结果作为 tool 消息喂回模型', asy
   const result = await loop
 
   assert.equal(calls.length, 0, '被拒绝时 executeTool 一次都不能被调用')
-  assert.equal(result.text, '我换个方式来做。', 'loop 应当照常收尾并返回终稿文本')
+  assert.equal(result.text, '我换个方式来做。', '模型读到拒绝后自己收尾，而不是本轮直接终止')
+  assert.notEqual(result.code, 'approval_denied')
   assert.equal(result.paused, undefined, '拒绝不是 pause')
   assert.equal(result.budgetExceeded, undefined)
 
-  // 第二轮模型看到的对话里应当有一条标记拒绝的 tool 消息
-  const secondTurn = seenMessages[1]
-  assert.ok(secondTurn, '模型应当被第二次调用(未被 throw 打断)')
-  const toolMsg = secondTurn.find((m) => m.role === 'tool' && m.name === 'bash_exec')
+  assert.equal(seenMessages.length, 2, '拒绝后模型再得到一轮')
+  const deniedToolMessage = seenMessages[1].find((m) => m.role === 'tool' && m.name === 'bash_exec')
+  assert.match(String(deniedToolMessage?.content || ''), /不要原样重试/, '模型看到的是拒绝事实和换路提示')
+  const toolMsg = checkpoint.messages.find((m) => m.role === 'tool' && m.name === 'bash_exec')
   assert.ok(toolMsg, '应当有一条 bash_exec 的 tool 结果消息')
   const payload = JSON.parse(toolMsg.content)
   assert.equal(payload.ok, false)
-  assert.equal(payload.denied, true, 'tool 结果必须标记为被拒绝,模型才能改道')
+  assert.equal(payload.denied, true, '恢复记录保留拒绝事实，不能当作成功')
   assert.ok(typeof payload.error === 'string' && payload.error.length > 0)
 })
 

@@ -1,42 +1,65 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import { useToast } from '../../components/Toast.jsx'
+import { savePreviewScreenshot } from '../../lib/previewScreenshot.js'
+import usePreviewElementPicker from './rightWorkbench/usePreviewElementPicker.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
+import { stripAnsiSequences } from '../../lib/terminalText.js'
+import { appendTerminalEntry, createTerminalTranscript, TERMINAL_STREAM } from '../../lib/terminalTranscript.js'
 import { useUiContributions } from '../../plugins/uiContributionRegistry.js'
 import RightWorkbenchContent from './rightWorkbench/RightWorkbenchContent.jsx'
 import RightWorkbenchFrame from './rightWorkbench/RightWorkbenchFrame.jsx'
+import WorkbenchToolbar from './rightWorkbench/WorkbenchToolbar.jsx'
 import { collectArtifacts } from './rightWorkbench/rightWorkbenchArtifacts.js'
 import {
   clampWidth,
   DEFAULT_WIDTH,
-  normalizeBrowserUrl,
   readStoredWidth,
   WIDTH_STORAGE_KEY,
 } from './rightWorkbench/rightWorkbenchLayout.js'
 
 export default function RightWorkbench({
+  sessionId = '',
+  todos = [],
   messages = [],
   attachments = [],
   activeTab,
   onTabChange,
   onClose,
+  onInsertText,
   onOpenArtifact,
   onSendMessage,
+  selectedWorkspacePath = '',
   isGenerating,
   statusMessage = '',
 }) {
   const { t } = useT()
+  const toast = useToast()
   const contributedTabs = useUiContributions('workbench-tab')
   const artifacts = useMemo(() => collectArtifacts(messages, attachments), [attachments, messages])
   const resizeRef = useRef(null)
   const [panelWidth, setPanelWidth] = useState(readStoredWidth)
-  const [sideInput, setSideInput] = useState('')
-  const [browserInput, setBrowserInput] = useState('https://')
-  const [browserUrl, setBrowserUrl] = useState('')
-  const [browserError, setBrowserError] = useState('')
   const [command, setCommand] = useState('')
   const [cwd, setCwd] = useState('.')
-  const [terminalOutput, setTerminalOutput] = useState('')
+  // The transcript is bounded as it grows (see lib/terminalTranscript.js): a long
+  // session used to append to one string with no ceiling, so every update
+  // re-rendered the whole history and stdout/stderr arrived glued together.
+  const [terminalTranscript, setTerminalTranscript] = useState(createTerminalTranscript)
   const [terminalBusy, setTerminalBusy] = useState(false)
+  // Expand grows the panel to its widest allowed size and remembers where it
+  // was, so the second click restores the reader's own width rather than a guess.
+  const restoreWidthRef = useRef(null)
+  const [panelExpanded, setPanelExpanded] = useState(false)
+  const toggleExpand = () => {
+    if (!panelExpanded) {
+      restoreWidthRef.current = panelWidth
+      setPanelWidth(clampWidth(Number.MAX_SAFE_INTEGER))
+      setPanelExpanded(true)
+    } else {
+      setPanelWidth(clampWidth(restoreWidthRef.current || DEFAULT_WIDTH))
+      setPanelExpanded(false)
+    }
+  }
 
   useEffect(() => {
     const handlePointerMove = (event) => {
@@ -83,32 +106,16 @@ export default function RightWorkbench({
   }
 
   const resetWidth = () => setPanelWidth(clampWidth(DEFAULT_WIDTH))
-
-  const submitSideChat = async (event) => {
-    event.preventDefault()
-    const inputSnapshot = sideInput
-    const content = inputSnapshot.trim()
-    if (!content || isGenerating) return
-    try {
-      const accepted = await onSendMessage?.(content)
-      if (accepted === true) {
-        setSideInput((current) => current === inputSnapshot ? '' : current)
-      }
-    } catch {
-      // Keep the draft intact. The parent surface owns the actionable error.
-    }
-  }
-
-  const navigateBrowser = (event) => {
-    event.preventDefault()
-    const nextUrl = normalizeBrowserUrl(browserInput)
-    if (!nextUrl) {
-      setBrowserError(t('workbench.browserInvalid'))
-      return
-    }
-    setBrowserError('')
-    setBrowserInput(nextUrl)
-    setBrowserUrl(nextUrl)
+  // The capture is of the docked view, so it is the panel's own pixels; the toast
+  // is where a failure explains itself, since a menu that closes on click has
+  // nowhere left to say anything.
+  // Picking hands the selector to the composer so the next message names it.
+  const elementPicker = usePreviewElementPicker({ insertText: onInsertText, t, toast })
+  const takeScreenshot = () => {
+    void savePreviewScreenshot().then((result) => {
+      if (result.ok) toast.success(t('workbench.previewScreenshotSaved', { width: result.width, height: result.height }))
+      else toast.error(t('workbench.previewScreenshotFailed'))
+    })
   }
 
   const runCommand = async (event) => {
@@ -117,13 +124,26 @@ export default function RightWorkbench({
     if (!value || terminalBusy) return
     setTerminalBusy(true)
     setCommand('')
-    setTerminalOutput((current) => `${current}${current ? '\n\n' : ''}> ${value}\n`)
+    setTerminalTranscript((current) => appendTerminalEntry(current, { stream: TERMINAL_STREAM.COMMAND, text: value }))
     try {
       const result = await runWorkbenchTerminal({ command: value, cwd: cwd.trim() || '.' })
       setCwd(result.cwd || cwd)
-      setTerminalOutput((current) => `${current}${result.stdout || ''}${result.stderr || ''}${result.error ? `\n${result.error}` : ''}`)
+      setTerminalTranscript((current) => {
+        let next = current
+        const stdout = stripAnsiSequences(result.stdout)
+        const stderr = stripAnsiSequences(result.stderr)
+        // Each stream keeps its own entry: a failure is not one more
+        // paragraph of output, so the panel can label and place it.
+        if (stdout) next = appendTerminalEntry(next, { stream: TERMINAL_STREAM.STDOUT, text: stdout })
+        if (stderr) next = appendTerminalEntry(next, { stream: TERMINAL_STREAM.STDERR, text: stderr })
+        if (result.error && !stderr) next = appendTerminalEntry(next, { stream: TERMINAL_STREAM.ERROR, text: result.error })
+        return next
+      })
     } catch (error) {
-      setTerminalOutput((current) => `${current}${error.message || t('workbench.terminalFailed')}`)
+      setTerminalTranscript((current) => appendTerminalEntry(current, {
+        stream: TERMINAL_STREAM.ERROR,
+        text: error.message || t('workbench.terminalFailed'),
+      }))
     } finally {
       setTerminalBusy(false)
     }
@@ -133,50 +153,61 @@ export default function RightWorkbench({
     <aside
       id="right-workbench"
       data-testid="right-workbench"
-      className="relative flex h-full min-w-0 max-w-[calc(100vw-60px)] shrink flex-col overflow-hidden border-l border-ink/10 bg-paper"
+      className="relative flex h-full min-w-0 max-w-[calc(100vw-60px)] shrink flex-row overflow-hidden border-l border-ink/10 bg-paper"
       style={{ width: `${panelWidth}px` }}
     >
-      <RightWorkbenchFrame
-        activeTab={activeTab}
-        artifacts={artifacts}
-        beginResize={beginResize}
-        contributedTabs={contributedTabs}
-        isGenerating={isGenerating}
-        onClose={onClose}
-        onResetWidth={resetWidth}
-        onTabChange={onTabChange}
-        panelWidth={panelWidth}
-        resizeWithKeyboard={resizeWithKeyboard}
-        statusMessage={statusMessage}
-        t={t}
-      />
-      <RightWorkbenchContent
-        activeTab={activeTab}
-        artifacts={artifacts}
-        attachments={attachments}
-        browserError={browserError}
-        browserInput={browserInput}
-        browserUrl={browserUrl}
-        command={command}
-        contributedTabs={contributedTabs}
-        cwd={cwd}
-        isGenerating={isGenerating}
-        messages={messages}
-        navigateBrowser={navigateBrowser}
-        onOpenArtifact={onOpenArtifact}
-        onSendMessage={onSendMessage}
-        runCommand={runCommand}
-        setBrowserInput={setBrowserInput}
-        setCommand={setCommand}
-        setCwd={setCwd}
-        setSideInput={setSideInput}
-        setTerminalOutput={setTerminalOutput}
-        sideInput={sideInput}
-        submitSideChat={submitSideChat}
-        t={t}
-        terminalBusy={terminalBusy}
-        terminalOutput={terminalOutput}
-      />
+      {/* One row of content under a header that carries the tool switch — the
+          panel no longer hugs the screen edge with a vertical strip of its own. */}
+      <div className="right-workbench-surface flex min-w-0 flex-1 flex-col overflow-hidden">
+        <RightWorkbenchFrame
+          beginResize={beginResize}
+          isGenerating={isGenerating}
+          onResetWidth={resetWidth}
+          panelWidth={panelWidth}
+          resizeWithKeyboard={resizeWithKeyboard}
+          statusMessage={statusMessage}
+          t={t}
+          toolbar={(
+            <WorkbenchToolbar
+              activeTab={activeTab}
+              contributedTabs={contributedTabs}
+              onClose={onClose}
+              onPickElement={elementPicker.toggle}
+              onResetWidth={resetWidth}
+              onScreenshot={takeScreenshot}
+              picking={elementPicker.picking}
+              onTabChange={onTabChange}
+              onToggleExpand={toggleExpand}
+              panelExpanded={panelExpanded}
+              t={t}
+              workspacePath={selectedWorkspacePath}
+            />
+          )}
+        />
+        <RightWorkbenchContent
+          activeTab={activeTab}
+          artifacts={artifacts}
+          attachments={attachments}
+          sessionId={sessionId}
+          todos={todos}
+          command={command}
+          contributedTabs={contributedTabs}
+          cwd={cwd}
+          isGenerating={isGenerating}
+          messages={messages}
+          onOpenArtifact={onOpenArtifact}
+          onSendMessage={onSendMessage}
+          onTabChange={onTabChange}
+          runCommand={runCommand}
+          setCommand={setCommand}
+          setCwd={setCwd}
+          setTerminalTranscript={setTerminalTranscript}
+          t={t}
+          terminalBusy={terminalBusy}
+          terminalTranscript={terminalTranscript}
+          workspacePath={selectedWorkspacePath}
+        />
+      </div>
     </aside>
   )
 }

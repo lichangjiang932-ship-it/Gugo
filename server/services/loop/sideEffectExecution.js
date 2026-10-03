@@ -1,3 +1,8 @@
+import {
+  sanitizeSideEffectFailure,
+  sanitizeSideEffectFailureText,
+} from '../sideEffectExecutionSerialization.js'
+
 const knownFailedSideEffectOutcomes = new WeakMap()
 
 /**
@@ -6,18 +11,28 @@ const knownFailedSideEffectOutcomes = new WeakMap()
  * A WeakMap deliberately avoids trusting enumerable error fields supplied by
  * plugins or remote tools.
  */
-export function markSideEffectOutcomeKnownFailed(error, { code, retryable = false } = {}) {
+export function markSideEffectOutcomeKnownFailed(error, {
+  code, retryable = false, message, hint, causeCode, metadata,
+} = {}) {
   if (!error || (typeof error !== 'object' && typeof error !== 'function')) return error
-  const safeCode = /^[A-Za-z0-9_.:-]{1,128}$/.test(String(code || ''))
-    ? String(code)
-    : 'TOOL_EXECUTION_FAILED'
+  const safeCode = sanitizeSideEffectFailure({ code }).code
+  const safeHint = sanitizeSideEffectFailureText(hint)
+  const safeCauseCode = causeCode ? sanitizeSideEffectFailure({ code: causeCode }).code : null
   knownFailedSideEffectOutcomes.set(error, {
+    ...(metadata ? structuredClone(metadata) : {}),
     ok: false,
     code: safeCode,
-    error: 'The tool failed without leaving an unverified side effect.',
+    error: sanitizeSideEffectFailureText(message, 'The tool failed without leaving an unverified side effect.'),
     retryable: retryable === true,
+    ...(safeHint ? { hint: safeHint } : {}),
+    ...(safeCauseCode ? { cause: { code: safeCauseCode } } : {}),
   })
   return error
+}
+
+/** Internal trusted failure proof, never inferred from enumerable tool/error fields. */
+export function knownFailedSideEffectOutcome(error) {
+  return knownFailedSideEffectOutcomes.get(error) || null
 }
 
 /**
@@ -131,22 +146,36 @@ function rethrowSideEffectExecutionError(context, {
       } catch { /* fail closed as unknown below */ }
       if (persistedKnownFailure) throw error
     }
+    const failure = sanitizeSideEffectFailure(error)
     let unknown = null
-    try { unknown = ledger.markUnknown(input) } catch { /* fail closed below */ }
+    try {
+      unknown = ledger.markUnknown(input, { outcome: {
+        ok: false,
+        code: unknownCode,
+        error: failure.message,
+        retryable: false,
+        requiresUserVerification: true,
+        failure,
+      } })
+    } catch { /* preserve the safe diagnostic even if the ledger is unavailable */ }
     throw recoveryBlock(
       unknownCode,
       `${toolName} raised an error after crossing the side-effect boundary. It may have partially completed and was not replayed.`,
       unknown,
+      { failure },
     )
   }
   if (input && returned && error?.code !== checkpointFlushErrorCode) {
     if (error?.unsafeToReplay === true) throw error
+    const failure = sanitizeSideEffectFailure(error)
     let unknown = null
-    try { unknown = ledger.markUnknown(input, { outcome: result }) } catch { /* fail closed below */ }
+    try { unknown = ledger.markUnknown(input, { outcome: { ...result, failure } }) }
+    catch { /* preserve the safe diagnostic even if the ledger is unavailable */ }
     throw recoveryBlock(
       unknownCode,
       `The returned outcome of ${toolName} could not be persisted safely. Verify local state before retrying.`,
       unknown,
+      { failure },
     )
   }
   throw error

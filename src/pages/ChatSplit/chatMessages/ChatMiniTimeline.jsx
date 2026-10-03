@@ -1,26 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { buildChatTurnMarkers, getBoundedChatTimeline } from './chatMiniTimeline.js'
+import { buildChatTurnMarkers, resolveChatTimeline } from './chatMiniTimeline.js'
 
-function TimelineWindowControl({ direction, target, onSelectTurn, t }) {
-  const isEarlier = direction === 'earlier'
-  const label = t(
-    isEarlier ? 'chatTimeline.earlierTurns' : 'chatTimeline.laterTurns',
-    { number: target.number },
-  )
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      className="chat-mini-timeline-window-control flex h-3.5 w-8 shrink-0 items-center justify-start rounded-control pl-1 text-xs leading-3 text-ink-fade hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/35 focus-visible:ring-offset-1 focus-visible:ring-offset-paper"
-      data-testid={`chat-timeline-${direction}`}
-      onClick={() => onSelectTurn(target.messageIndex)}
-    >
-      <span aria-hidden="true">{isEarlier ? '▲' : '▼'}</span>
-    </button>
-  )
+function moveTimelineFocus(event) {
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+  const buttons = [...event.currentTarget.querySelectorAll('button')]
+  const current = buttons.indexOf(event.target.closest?.('button'))
+  if (current < 0) return
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+    : Math.max(0, Math.min(buttons.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)))
+  event.preventDefault()
+  buttons[next]?.focus()
 }
 
+/**
+ * The conversation's turn strip.
+ *
+ * One bar per user turn, every turn present, and a preview that shows the request
+ * in full. It is deliberately unbounded in both directions: an earlier version kept
+ * a fixed number of bars and folded the rest into "…" controls, and shortened each
+ * summary to a fixed width, which left the strip unable to answer the two things it
+ * exists for — where am I, and which turn is this. The strip scrolls and tracks the
+ * active turn, so showing all of them costs no extra room.
+ */
 export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTurn, t }) {
   const turns = useMemo(
     () => buildChatTurnMarkers(messages, t('chatTimeline.attachmentFallback')),
@@ -30,13 +32,8 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
   const markerRefs = useRef(new Map())
   const timelineRef = useRef(null)
   const [preview, setPreview] = useState(null)
-  const {
-    activeMessageIndex,
-    visibleTurns,
-    earlierTurn,
-    laterTurn,
-  } = useMemo(
-    () => getBoundedChatTimeline(turns, activeTurnIndex),
+  const { activeMessageIndex, turns: visibleTurns } = useMemo(
+    () => resolveChatTimeline(turns, activeTurnIndex),
     [activeTurnIndex, turns],
   )
 
@@ -70,19 +67,12 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
       className="chat-mini-timeline absolute top-1/2 z-20 hidden -translate-y-1/2 md:flex"
       aria-label={t('chatTimeline.label')}
       data-testid="chat-mini-timeline"
+      onKeyDown={moveTimelineFocus}
     >
       <div
         ref={markerListRef}
-        className="chat-mini-timeline-list relative flex max-h-[min(42vh,18rem)] w-8 flex-col items-center gap-0.5 overflow-y-auto py-1.5"
+        className="chat-mini-timeline-list relative flex max-h-[min(42vh,18rem)] w-8 flex-col items-center gap-1 overflow-y-auto py-1.5"
       >
-        {earlierTurn && (
-          <TimelineWindowControl
-            direction="earlier"
-            target={earlierTurn}
-            onSelectTurn={onSelectTurn}
-            t={t}
-          />
-        )}
         {visibleTurns.map((turn) => {
           const active = turn.messageIndex === activeMessageIndex
           const label = `${t('chatTimeline.jumpTo')} ${turn.number}: ${turn.summary}`
@@ -96,7 +86,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
               type="button"
               aria-current={active ? 'step' : undefined}
               aria-label={label}
-              className="chat-mini-timeline-marker group relative z-10 flex h-3.5 w-8 shrink-0 items-center justify-start rounded-control pl-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/35 focus-visible:ring-offset-1 focus-visible:ring-offset-paper"
+              className="chat-mini-timeline-marker group relative z-10 flex h-3 shrink-0 items-center justify-start rounded-pill pl-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/35 focus-visible:ring-offset-1 focus-visible:ring-offset-paper"
               data-turn-index={turn.messageIndex}
               data-testid="chat-timeline-marker"
               onClick={() => onSelectTurn(turn.messageIndex)}
@@ -105,29 +95,24 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
               onMouseEnter={(event) => showPreview(turn, event.currentTarget)}
               onMouseLeave={() => setPreview(null)}
             >
+              {/* A bar rather than a hairline — one pixel reads as texture, not as
+                  a target — but only just: the strip should stay quiet beside the
+                  conversation it indexes. */}
               <span
                 aria-hidden="true"
-                className={`block h-[3px] rounded-pill transition-[width,background-color,transform] duration-200 ease-out motion-reduce:transition-none ${active ? 'w-4 bg-ink/80' : 'w-2.5 bg-ink/25 group-hover:w-4 group-hover:bg-ink/65 group-hover:translate-x-0.5 group-focus-visible:w-4 group-focus-visible:bg-ink/70'}`}
+                className={`block h-1 rounded-pill transition-[width,background-color] duration-200 ease-out motion-reduce:transition-none ${active ? 'w-5 bg-ink/70' : 'w-3.5 bg-ink/30 group-hover:w-5 group-hover:bg-ink/60 group-focus-visible:w-5 group-focus-visible:bg-ink/70'}`}
               />
             </button>
           )
         })}
-        {laterTurn && (
-          <TimelineWindowControl
-            direction="later"
-            target={laterTurn}
-            onSelectTurn={onSelectTurn}
-            t={t}
-          />
-        )}
       </div>
       {preview && (
         <div
-          className="pointer-events-none absolute left-7 w-52 -translate-y-1/2 rounded-control border border-ink/10 bg-paper/95 px-2.5 py-2 text-left shadow-sm backdrop-blur-sm"
+          className="pointer-events-none absolute left-12 w-64 -translate-y-1/2 rounded-control border border-ink/10 bg-paper/95 px-2.5 py-2 text-left shadow-sm backdrop-blur-sm"
           style={{ top: preview.top }}
           data-testid="chat-timeline-preview"
         >
-          <div className="line-clamp-3 text-ui leading-5 text-ink-soft">{preview.summary}</div>
+          <div className="whitespace-pre-wrap break-words text-ui leading-5 text-ink-soft">{preview.summary}</div>
         </div>
       )}
     </nav>

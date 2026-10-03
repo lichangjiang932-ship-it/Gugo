@@ -6,6 +6,18 @@ import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 import { assertSafeOutboundUrl } from '../utils/outboundNetworkGuard.js'
 import { startBrowserOutboundProxy } from './browserOutboundProxy.js'
 import { ACTION_TIMEOUT_MS, START_TIMEOUT_MS, CdpClient, abortableDelay, abortError, throwIfAborted } from './browserCdpClient.js'
+import { browserSnapshotExpression, elementExpression, elementObjectExpression } from './browserDomAutomation.js'
+import { keyEventParams } from './browserKeyboard.js'
+import { downloadFromBrowserElement } from './browserDownloadAutomation.js'
+import { bindBrowserFileInput } from './browserUploadAutomation.js'
+import {
+  activeBrowserFrameEvaluationParams,
+  activeBrowserFrameSessionId,
+  listBrowserFrames,
+  resetBrowserFrameContext,
+  switchBrowserFrameContext,
+  validateBrowserFrameUrl,
+} from './browserFrameAutomation.js'
 
 const sessions = new Map()
 
@@ -143,17 +155,17 @@ async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !
     if (!pageTarget) throw new Error('浏览器未创建 Page Target')
     client = new CdpClient(pageTarget.webSocketDebuggerUrl)
     await client.connect({ signal })
-    const session = { userId, executable, profileDir, child, client, outboundProxy, targetId: pageTarget.id, sessionId: null, headless, createdAt: Date.now() }
+    const session = {
+      userId, executable, profileDir, child, client, outboundProxy, debuggerBase,
+      targetId: pageTarget.id, sessionId: null, headless, createdAt: Date.now(),
+      activeFrameId: null, activeFrameContextId: null, activeFrameUrl: '', mainFrameId: null,
+      activeFrameSessionId: null, discoverFrameTargets: true, frameTargetSessions: new Map(),
+    }
     child.once('exit', () => {
       sessions.delete(userId)
       void outboundProxy.close()
     })
-    await Promise.all([
-      client.request('Page.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
-      client.request('Runtime.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
-      client.request('Log.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
-      client.request('Network.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
-    ])
+    await enablePageDomains(session, signal)
     sessions.set(userId, session)
     return session
   } catch (error) {
@@ -173,13 +185,41 @@ async function getSession(userId, { headed = false, signal = null } = {}) {
   return createSession(userId, { headless: headed ? false : process.env.BROWSER_HEADLESS !== '0', signal })
 }
 
-async function evaluate(session, expression, signal = null) {
+async function enablePageDomains(session, signal = null) {
+  await Promise.all([
+    session.client.request('Page.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
+    session.client.request('Runtime.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
+    session.client.request('Log.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
+    session.client.request('Network.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
+  ])
+}
+
+async function pageTargets(session, signal = null) {
+  throwIfAborted(signal)
+  if (!session?.debuggerBase) return []
+  const response = await fetch(`${session.debuggerBase}/json/list`, { signal })
+  if (!response.ok) throw new Error(`读取浏览器 Tab 失败: HTTP ${response.status}`)
+  const targets = await response.json()
+  const pages = (Array.isArray(targets) ? targets : [])
+    .filter((target) => target?.type === 'page' && target.id && target.webSocketDebuggerUrl)
+  const active = pages.find((target) => target.id === session.targetId)
+  return [active, ...pages.filter((target) => target !== active)].filter(Boolean).slice(0, 50)
+}
+
+async function validateSwitchTargetUrl(rawUrl) {
+  const value = String(rawUrl || '').trim()
+  if (value === 'about:blank') return value
+  return validateUrl(value)
+}
+
+async function evaluate(session, expression, signal = null, { mainFrame = false } = {}) {
   const result = await session.client.request('Runtime.evaluate', {
     expression,
     awaitPromise: true,
     returnByValue: true,
     userGesture: true,
-  }, session.sessionId, ACTION_TIMEOUT_MS, signal)
+    ...activeBrowserFrameEvaluationParams(session, { mainFrame }),
+  }, activeBrowserFrameSessionId(session, { mainFrame }), ACTION_TIMEOUT_MS, signal)
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || '页面脚本执行失败')
   return result.result?.value
 }
@@ -198,6 +238,7 @@ export async function browserOpenUrl({ userId, url, headed = false, signal = nul
   const targetUrl = await validateUrl(url)
   throwIfAborted(signal)
   const session = await getSession(userId, { headed, signal })
+  resetBrowserFrameContext(session)
   const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId, ACTION_TIMEOUT_MS, signal)
   if (result.errorText) throw new Error(result.errorText)
   await waitForReady(session, ACTION_TIMEOUT_MS, signal)
@@ -208,6 +249,7 @@ export async function browserConnectApp({ userId, url, signal = null }) {
   const targetUrl = await validateUrl(url)
   throwIfAborted(signal)
   const session = await getSession(userId, { headed: true, signal })
+  resetBrowserFrameContext(session)
   const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId, ACTION_TIMEOUT_MS, signal)
   if (result.errorText) throw new Error(result.errorText)
   await waitForReady(session, ACTION_TIMEOUT_MS, signal)
@@ -225,25 +267,112 @@ export async function browserState({ userId, signal = null }) {
     rootChildren: document.getElementById('root')?.childElementCount ?? null,
     scripts: [...document.scripts].map((script) => ({ src: script.src, type: script.type })),
     resources: performance.getEntriesByType('resource').map((entry) => entry.name).slice(-100),
-  })`, signal)
-  return { connected: true, headless: session.headless, ...page, createdAt: session.createdAt }
+  })`, signal, { mainFrame: true })
+  return {
+    connected: true,
+    headless: session.headless,
+    ...page,
+    activeFrameId: session.activeFrameId || session.mainFrameId || null,
+    activeFrameUrl: session.activeFrameUrl || page.url,
+    frameContextActive: Object.hasOwn(
+      activeBrowserFrameEvaluationParams(session),
+      'contextId',
+    ),
+    createdAt: session.createdAt,
+  }
+}
+
+export async function browserTabs({ userId, signal = null } = {}) {
+  const session = await getSession(userId, { signal })
+  const targets = await pageTargets(session, signal)
+  return {
+    activeTargetId: session.targetId,
+    tabs: targets.map((target) => ({
+      targetId: String(target.id),
+      title: String(target.title || '').slice(0, 500),
+      url: String(target.url || '').slice(0, 16_384),
+      active: target.id === session.targetId,
+    })),
+  }
+}
+
+async function switchPageTarget(session, target, {
+  signal = null,
+  createClient = (url) => new CdpClient(url),
+} = {}) {
+  const nextClient = createClient(target.webSocketDebuggerUrl)
+  try {
+    await nextClient.connect({ signal })
+  } catch (error) {
+    nextClient.close()
+    throw error
+  }
+  const previous = {
+    client: session.client,
+    sessionId: session.sessionId,
+    targetId: session.targetId,
+    activeFrameId: session.activeFrameId,
+    activeFrameContextId: session.activeFrameContextId,
+    activeFrameSessionId: session.activeFrameSessionId,
+    frameTargetSessions: session.frameTargetSessions,
+    activeFrameUrl: session.activeFrameUrl,
+    mainFrameId: session.mainFrameId,
+  }
+  try {
+    session.client = nextClient
+    session.sessionId = null
+    session.targetId = target.id
+    session.frameTargetSessions = new Map()
+    resetBrowserFrameContext(session)
+    await enablePageDomains(session, signal)
+    await waitForReady(session, ACTION_TIMEOUT_MS, signal)
+  } catch (error) {
+    Object.assign(session, previous)
+    nextClient.close()
+    throw error
+  }
+  previous.client.close()
+}
+
+export async function browserSwitchTab({ userId, targetId, signal = null } = {}) {
+  const requestedTargetId = String(targetId || '').trim()
+  if (!requestedTargetId || requestedTargetId.length > 512) throw new Error('请输入有效 Browser Tab ID')
+  const session = await getSession(userId, { signal })
+  const targets = await pageTargets(session, signal)
+  const target = targets.find((candidate) => candidate.id === requestedTargetId)
+  if (!target) throw new Error(`Browser Tab 不存在: ${requestedTargetId}`)
+  await validateSwitchTargetUrl(target.url)
+  if (target.id !== session.targetId) await switchPageTarget(session, target, { signal })
+  return browserState({ userId, signal })
+}
+
+export async function browserFrames({ userId, signal = null } = {}) {
+  const session = await getSession(userId, { signal })
+  return listBrowserFrames(session, { signal })
+}
+
+export async function browserSwitchFrame({
+  userId,
+  frameId,
+  authorizeFrame = null,
+  signal = null,
+} = {}) {
+  const session = await getSession(userId, { signal })
+  const frame = await switchBrowserFrameContext(session, {
+    frameId,
+    signal,
+    authorizeFrame: async (candidate) => {
+      await validateBrowserFrameUrl(candidate, validateUrl)
+      if (typeof authorizeFrame === 'function') await authorizeFrame(candidate)
+    },
+  })
+  return { frame, ...(await browserState({ userId, signal })) }
 }
 
 export async function browserSnapshot({ userId, maxText = 12000, signal = null } = {}) {
   const session = await getSession(userId, { signal })
   const limit = Math.max(1000, Math.min(50000, Number(maxText) || 12000))
-  return evaluate(session, `(() => {
-    const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim()
-    const nodes = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[contenteditable="true"]')]
-      .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
-      .slice(0, 200)
-      .map((el, index) => {
-        const ref = 'e' + (index + 1); el.setAttribute('data-yma-ref', ref)
-        const label = clean(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name)
-        return '[ref=' + ref + '] <' + el.tagName.toLowerCase() + '> ' + JSON.stringify(label).slice(0, 240)
-      })
-    return { url: location.href, title: document.title, text: clean(document.body?.innerText).slice(0, ${limit}), elements: nodes }
-  })()`, signal)
+  return evaluate(session, browserSnapshotExpression(limit), signal)
 }
 
 export async function browserConsole({ userId, clear = false, signal = null } = {}) {
@@ -288,92 +417,6 @@ export async function browserConsole({ userId, clear = false, signal = null } = 
   return { entries }
 }
 
-function elementExpression(refOrSelector, action) {
-  const target = JSON.stringify(String(refOrSelector || ''))
-  return `(() => {
-    const target = ${target}
-    let el = document.querySelector('[data-yma-ref="' + CSS.escape(target) + '"]')
-    if (!el) { try { el = document.querySelector(target) } catch {} }
-    if (!el) return { ok: false, error: 'element not found: ' + target }
-    ${action}
-  })()`
-}
-
-const KEY_DEFINITIONS = Object.freeze({
-  Enter: { code: 'Enter', keyCode: 13, text: '\r' },
-  Tab: { code: 'Tab', keyCode: 9 },
-  Escape: { code: 'Escape', keyCode: 27 },
-  Backspace: { code: 'Backspace', keyCode: 8 },
-  Delete: { code: 'Delete', keyCode: 46 },
-  ArrowLeft: { code: 'ArrowLeft', keyCode: 37 },
-  ArrowUp: { code: 'ArrowUp', keyCode: 38 },
-  ArrowRight: { code: 'ArrowRight', keyCode: 39 },
-  ArrowDown: { code: 'ArrowDown', keyCode: 40 },
-  Home: { code: 'Home', keyCode: 36 },
-  End: { code: 'End', keyCode: 35 },
-  PageUp: { code: 'PageUp', keyCode: 33 },
-  PageDown: { code: 'PageDown', keyCode: 34 },
-  Space: { code: 'Space', keyCode: 32, text: ' ' },
-})
-
-const KEY_ALIASES = Object.freeze({
-  esc: 'Escape',
-  return: 'Enter',
-  spacebar: 'Space',
-  left: 'ArrowLeft',
-  up: 'ArrowUp',
-  right: 'ArrowRight',
-  down: 'ArrowDown',
-  del: 'Delete',
-})
-
-function keyEventParams(rawKey) {
-  const raw = String(rawKey || '').trim()
-  if (!raw || raw.length > 64) throw new Error('请输入有效按键（例如 Enter、Tab 或 Control+A）')
-  const parts = raw.split('+').map((part) => part.trim()).filter(Boolean)
-  const mainRaw = parts.pop()
-  let modifiers = 0
-  for (const modifier of parts) {
-    const normalized = modifier.toLowerCase()
-    if (normalized === 'alt') modifiers |= 1
-    else if (normalized === 'control' || normalized === 'ctrl') modifiers |= 2
-    else if (normalized === 'meta' || normalized === 'command' || normalized === 'cmd') modifiers |= 4
-    else if (normalized === 'shift') modifiers |= 8
-    else throw new Error(`不支持的组合键修饰符: ${modifier}`)
-  }
-
-  const aliased = KEY_ALIASES[String(mainRaw || '').toLowerCase()] || mainRaw
-  const definition = KEY_DEFINITIONS[aliased]
-  if (definition) {
-    return {
-      key: aliased === 'Space' ? ' ' : aliased,
-      code: definition.code,
-      windowsVirtualKeyCode: definition.keyCode,
-      nativeVirtualKeyCode: definition.keyCode,
-      modifiers,
-      ...(definition.text && !(modifiers & 7) ? { text: definition.text, unmodifiedText: definition.text } : {}),
-    }
-  }
-
-  const characters = [...String(aliased || '')]
-  if (characters.length !== 1) throw new Error(`不支持的按键: ${mainRaw}`)
-  const character = characters[0]
-  const upper = character.toUpperCase()
-  const isLetter = /^[A-Za-z]$/.test(character)
-  const isDigit = /^[0-9]$/.test(character)
-  const keyCode = isLetter || isDigit ? upper.charCodeAt(0) : character.codePointAt(0)
-  const eventKey = isLetter && (modifiers & 7) && !(modifiers & 8) ? character.toLowerCase() : character
-  const text = modifiers & 7 ? '' : ((modifiers & 8) && isLetter ? upper : eventKey)
-  return {
-    key: text || eventKey,
-    code: isLetter ? `Key${upper}` : isDigit ? `Digit${character}` : '',
-    windowsVirtualKeyCode: keyCode,
-    nativeVirtualKeyCode: keyCode,
-    modifiers,
-    ...(text ? { text, unmodifiedText: character } : {}),
-  }
-}
-
 export async function browserClick({ userId, target, signal = null }) {
   const session = await getSession(userId, { signal })
   const result = await evaluate(session, elementExpression(target, `el.scrollIntoView({block:'center'}); el.click(); return {ok:true}`), signal)
@@ -395,6 +438,34 @@ export async function browserType({ userId, target, text, submit = false, signal
   `), signal)
   if (!result?.ok) throw new Error(result?.error || '输入失败')
   return { ok: true }
+}
+
+async function setBrowserFileInput(session, options) {
+  return bindBrowserFileInput(session, options, evaluate)
+}
+
+export async function browserUploadFile({ userId, target, filePath, signal = null }) {
+  const session = await getSession(userId, { signal })
+  throwIfAborted(signal)
+  await setBrowserFileInput(session, { target, filePath, signal })
+  return { ok: true, filename: path.basename(String(filePath)), ...(await browserState({ userId, signal })) }
+}
+
+export async function browserDownload({
+  userId, target, stagingDirectory, timeoutMs, maxBytes, signal = null,
+}) {
+  const session = await getSession(userId, { signal })
+  try {
+    return await downloadFromBrowserElement(session, {
+      target, stagingDirectory, timeoutMs, maxBytes, signal,
+    })
+  } catch (error) {
+    // A timed-out/oversized download may still hold its staging file open.
+    // Stop the isolated browser before the service removes that directory so
+    // sensitive authenticated partial content cannot continue writing later.
+    closeBrowserSession(userId)
+    throw error
+  }
 }
 
 export async function browserSelect({ userId, target, value, signal = null }) {
@@ -487,6 +558,17 @@ export const _browserInternals = {
   profileDirectoryForUser,
   isReusableSession,
   keyEventParams,
+  browserSnapshotExpression,
+  elementExpression,
+  elementObjectExpression,
+  setBrowserFileInput,
+  enablePageDomains,
+  pageTargets,
+  validateSwitchTargetUrl,
+  switchPageTarget,
   getSession,
   evaluate,
+  listBrowserFrames,
+  switchBrowserFrameContext,
+  resetBrowserFrameContext,
 }

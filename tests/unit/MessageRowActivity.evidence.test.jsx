@@ -6,6 +6,63 @@ import { createRoot } from 'react-dom/client'
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 import MessageRow from '../../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 import { setupDom } from './helpers/messageRowActivityTestUtils.js'
+import { translateKey } from '../../src/i18n/translations.js'
+import { createTurnEvent } from '../../shared/turnEvents.js'
+import { dispatchTurnEvent } from '../../src/lib/turnClient/turnEventDispatch.js'
+import { reduceMessageState } from '../../src/store/reducers/messageReducer.js'
+
+for (const lang of ['zh', 'en']) {
+  test(`durable user cancellation keeps partial output and outranks a generic incomplete reason (${lang})`, async () => {
+    const dom = setupDom()
+    const element = document.getElementById('root')
+    const root = createRoot(element)
+    let state = { activeSessionId: 'cancel-session', sessions: [{ id: 'cancel-session', messages: [{
+      id: 'cancel-message', role: 'assistant', content: '', meta: { streaming: true, executionStarted: true },
+    }] }] }
+    const partialText = '1\n2\n...\n55'
+    const t = (key, values = {}) => translateKey(key, lang).replace(/\{(\w+)\}/g, (_, name) => values[name])
+    try {
+      await dispatchTurnEvent(createTurnEvent({ id: 'cancel-event', sessionId: 'cancel-session', turnId: 'cancel-turn',
+        sequence: 1, createdAt: 10, type: 'turn.cancelled', payload: { code: 'TURN_CANCELLED', partialText,
+          iterations: 0, incompleteReason: 'turn_incomplete', missingRequirements: ['remaining_task_steps'], nextAction: 'retry_turn' },
+      }), { messageTarget: { sessionId: 'cancel-session', messageId: 'cancel-message' },
+        dispatch: (action) => { state = reduceMessageState(state, action) || state },
+      })
+      const msg = state.sessions[0].messages[0]
+      assert.equal(msg.meta.cancelled, true)
+      assert.equal(msg.meta.failed, false)
+      assert.equal(msg.meta.streaming, false)
+      assert.equal(msg.meta.serverPartialText, partialText)
+      await act(async () => root.render(<I18nProvider><MessageRow msg={msg} rowKey={msg.id}
+        generatingMessageId="" lang={lang} t={t} /></I18nProvider>))
+      assert.equal(element.querySelector('[data-testid="reply-completion-state"]').textContent, t('chatMessages.toolStopped'))
+      const reason = element.querySelector('[data-testid="incomplete-task-reason"]').textContent
+      assert.ok(reason.includes(t('chatMessages.incompleteReasonCancelled')))
+      assert.equal(reason.includes(t('chatMessages.incompleteReasonFallback')), false)
+      assert.match(element.querySelector('[data-testid="incomplete-task-notice"]').textContent, /TURN_CANCELLED/u)
+      assert.match(element.textContent, /55/u)
+      assert.equal(element.querySelector('.chat-tool-list'), null)
+      for (const [index, [incompleteReason, reasonKey]] of [
+        ['side_effect_outcome_unknown', 'chatMessages.sideEffectUnknownBody'],
+        ['model_request_outcome_unknown', 'chatMessages.modelRequestUnknownBody'],
+      ].entries()) {
+        await dispatchTurnEvent(createTurnEvent({ id: `specific-cancel-${index}`, sessionId: 'cancel-session', turnId: 'cancel-turn',
+          sequence: index + 2, createdAt: 11 + index, type: 'turn.cancelled',
+          payload: { code: 'TURN_CANCELLED', partialText, incompleteReason, missingRequirements: ['operation_outcome_verification'] },
+        }), { messageTarget: { sessionId: 'cancel-session', messageId: 'cancel-message' },
+          dispatch: (action) => { state = reduceMessageState(state, action) || state },
+        })
+        await act(async () => root.render(<I18nProvider><MessageRow msg={state.sessions[0].messages[0]} rowKey="cancel-message"
+          generatingMessageId="" lang={lang} t={t} /></I18nProvider>))
+        assert.equal(element.querySelector('[data-testid="reply-completion-state"]').textContent, t('chatMessages.incompleteTitle'))
+        const specific = element.querySelector('[data-testid="incomplete-task-reason"]').textContent
+        assert.ok(specific.includes(t(reasonKey)), incompleteReason)
+        assert.equal(specific.includes(t('chatMessages.incompleteReasonCancelled')), false)
+        assert.equal(state.sessions[0].messages[0].meta.cancelled, true)
+      }
+    } finally { await act(async () => root.unmount()); dom.window.close() }
+  })
+}
 
 test('a failed file task without receipts keeps its missing-file completion state', async () => {
   const dom = setupDom()

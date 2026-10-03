@@ -5,3 +5,7 @@ public/sandbox/*.min.js -text -whitespace linguist-vendored
 # Published conformance fixtures include byte-level package digests and
 # signatures, so Git must not rewrite their bytes on Windows checkouts.
 tests/fixtures/plugin-compatibility-v1/** text eol=lf
+
+# Historical host-policy ownership is bound to the complete issued text hash.
+# Keep these fixtures byte-identical when Windows Git enables core.autocrlf.
+tests/fixtures/pptxAuthoringPolicyV*.txt text eol=lf

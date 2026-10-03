@@ -294,7 +294,7 @@ test('plugin sandbox input is bounded plain data without getter or Proxy executi
   )
 })
 
-test('plugin sandbox vm cannot escape to the worker realm through constructor chains', async () => {
+test('plugin sandbox vm rejects dynamic code generation through constructor chains', async () => {
   const probes = [
     "function transform() { return globalThis.constructor.constructor('return typeof process')() }",
     "function transform() { return ({}).constructor.constructor('return typeof process')() }",
@@ -303,8 +303,8 @@ test('plugin sandbox vm cannot escape to the worker realm through constructor ch
   ]
   for (const source of probes) {
     const result = await runTransformer({ plugin: { source }, input: null })
-    assert.equal(result.ok, true)
-    assert.equal(result.output, 'undefined')
+    assert.equal(result.ok, false)
+    assert.match(result.error, /code generation.*disallowed/i)
   }
 })
 

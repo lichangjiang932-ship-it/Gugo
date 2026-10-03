@@ -5,7 +5,8 @@ const PLAN_EXECUTION_CONFIRMATIONS = new Map([
 ])
 
 export function intentModeForAgentMode(agentMode) {
-  if (agentMode === 'code') return 'execute'
+  // Code mode makes tools available; it is not a command to mutate something
+  // on every send. Infer the work from this message, not a sticky UI preference.
   if (agentMode === 'plan') return 'answer'
   return 'auto'
 }

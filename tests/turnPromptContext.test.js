@@ -49,10 +49,13 @@ test('turn prompt keeps compiled blocks in stable order before dynamic context',
 
   assert.match(contents[0], /^# Agent: Stable Agent/)
   assert.match(contents[1], /## SOUL/)
-  assert.match(contents[2], /^# Skills/)
-  assert.match(contents[3], /^# Session Context/)
-  assert.match(contents[4], /^# Long-term memory/)
-  assert.match(contents[5], /^# Workspace instructions/)
+  // The response-format contract is static, so it sits in the stable prefix with
+  // the other compiled blocks, ahead of every per-turn block.
+  assert.match(contents[2], /^# Output Contract/)
+  assert.match(contents[3], /^# Skills/)
+  assert.match(contents[4], /^# Workspace instructions/)
+  assert.match(contents[5], /^# Session Context/)
+  assert.match(contents[6], /^# Long-term memory/)
 })
 test('trusted runtime prompt blocks use a fixed additive slot and receive only frozen scope metadata', () => {
   const observedScopes = []
@@ -96,7 +99,7 @@ test('trusted runtime prompt blocks use a fixed additive slot and receive only f
 
   assert.equal(memoryIndex >= 0, true)
   assert.equal(pluginIndex, memoryIndex + 1)
-  assert.equal(workspaceIndex, pluginIndex + 1)
+  assert.ok(workspaceIndex < memoryIndex)
   assert.match(contents[pluginIndex], /Source: trusted-project-plugin/)
   assert.deepEqual(prepared.pluginPromptBlockIds, ['trusted-project-plugin:project-hints'])
   assert.deepEqual(observedScopes, [{
@@ -117,16 +120,41 @@ test('changing workspace instructions preserves compiled block cache hits and co
   const afterSecond = getPromptCompilerStats()
 
   assert.deepEqual(
-    second.messages.slice(0, 4),
-    first.messages.slice(0, 4),
-    'dynamic workspace text must not alter the four compiled blocks',
+    [0, 1, 3, 5].map((index) => second.messages[index]),
+    [0, 1, 3, 5].map((index) => first.messages[index]),
+    'changed workspace text must not alter the compiled blocks',
   )
   for (const type of ['identity', 'ishiki', 'skills', 'sessions']) {
     assert.equal(afterFirst[type].misses, 1)
     assert.equal(afterSecond[type].hits, 1)
     assert.equal(afterSecond[type].misses, 1)
   }
-  assert.notEqual(second.messages.at(-1).content, first.messages.at(-1).content)
+  assert.notEqual(second.messages[4].content, first.messages[4].content)
+})
+
+test('changing session, memory and runtime hints never moves ahead of stable instructions', () => {
+  const instruction = '# Workspace instructions\nKeep every instruction exactly.  \n'
+  const prepareDynamic = (version) => prepareTurnPromptContext({
+    userId: 'dynamic-context-owner', agentId: AGENT.id, skillIds: [SKILL.id], sessionId: 'dynamic-context-session',
+  }, {
+    getAgent: () => AGENT,
+    prepareSkillsForPrompt: () => [SKILL],
+    prepareSkillCatalogForPrompt: () => [],
+    readWorkspaceInstructions: () => ({ text: instruction }),
+    buildSessionsBlock: () => ({ text: `Session evidence ${version}`, sources: { archiveId: `archive-${version}` } }),
+    prepareMemoryInjectionContext: () => ({ text: `Memory evidence ${version}`, memoryIds: [`memory-${version}`] }),
+    renderRuntimePromptBlocks: () => ({ blocks: [{ id: 'hints', pluginId: 'fixture', text: `Runtime evidence ${version}` }], errors: [] }),
+  })
+  const first = prepareDynamic('one')
+  const second = prepareDynamic('two')
+  assert.deepEqual(first.messages.slice(0, 5), second.messages.slice(0, 5))
+  assert.equal(second.messages[4].content, instruction)
+  assert.deepEqual(second.messages.slice(5).map((message) => message.content), [
+    'Session evidence two', 'Memory evidence two', '# Runtime Plugin Context: hints\nSource: fixture\n\nRuntime evidence two',
+  ])
+  assert.equal(second.compactionArchiveId, 'archive-two')
+  assert.deepEqual(second.memoryIds, ['memory-two'])
+  assert.deepEqual(second.pluginPromptBlockIds, ['fixture:hints'])
 })
 
 test('turn prompt executes an unknown local skill definition with the quality contract', () => {
@@ -192,7 +220,7 @@ test('skill catalog failure does not block an explicitly selected skill', () => 
     env: { AGENT_INJECT_ENABLED: '0' },
   }, {
     prepareSkillCatalogForPrompt: () => {
-      throw new Error('catalog unavailable')
+      throw new Error('catalog unavailable PRIVATE_CATALOG_ARGUMENT')
     },
     prepareSkillsForPrompt: () => [{
       id: 'explicit-writer',
@@ -207,7 +235,8 @@ test('skill catalog failure does not block an explicitly selected skill', () => 
 
   assert.deepEqual(prepared.skillIds, ['explicit-writer'])
   assert.match(prepared.messages.map((message) => message.content).join('\n'), /EXPLICIT_SKILL_BODY_SURVIVES_CATALOG_FAILURE/)
-  assert.equal(warnings.some((warning) => warning.includes('catalog unavailable')), true)
+  assert.equal(warnings.some((warning) => warning.includes('skill catalog failed: PROMPT_CONTEXT_UNAVAILABLE')), true)
+  assert.doesNotMatch(warnings.join('\n'), /PRIVATE_CATALOG_ARGUMENT/u)
 })
 
 test('an unselected skill contributes catalog metadata without its instructions', () => {

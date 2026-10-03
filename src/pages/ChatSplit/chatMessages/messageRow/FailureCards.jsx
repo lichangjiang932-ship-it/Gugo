@@ -1,6 +1,7 @@
 import { AlertTriangle } from 'lucide-react'
 import { stripChoices } from '../../../../lib/choices.js'
 import { getVisibleModelErrorMessage } from '../../../../lib/chatFlowGuards.js'
+import { modelRequestFailureCopy } from '../../../../lib/modelRequestDiagnostics.js'
 
 function FailureLine({ action, className = '', detail, testId, title }) {
   return (
@@ -22,6 +23,7 @@ function FailureLine({ action, className = '', detail, testId, title }) {
 const actionClass = 'ml-2 inline-flex font-medium text-accent-ink underline-offset-4 hover:underline focus-visible:underline'
 
 export function SideEffectRecoveryCard({ modelRequest = false, msg, t }) {
+  const modelCopy = modelRequest ? modelRequestFailureCopy(msg?.meta?.serverFailure, t) : null
   const recoveryQuery = new URLSearchParams({
     tab: 'recovery',
     turnId: String(msg?.meta?.serverTurnId || ''),
@@ -30,8 +32,8 @@ export function SideEffectRecoveryCard({ modelRequest = false, msg, t }) {
   return <FailureLine
     className="mt-3"
     testId={modelRequest ? 'model-request-recovery-blocked' : 'side-effect-recovery-blocked'}
-    title={t(modelRequest ? 'chatMessages.modelRequestUnknownTitle' : 'chatMessages.sideEffectUnknownTitle')}
-    detail={t(modelRequest ? 'chatMessages.modelRequestUnknownBody' : 'chatMessages.sideEffectUnknownBody')}
+    title={modelCopy ? modelCopy.title : t('chatMessages.sideEffectUnknownTitle')}
+    detail={modelCopy ? modelCopy.detail : t('chatMessages.sideEffectUnknownBody')}
     action={(
       <a
         className={actionClass}

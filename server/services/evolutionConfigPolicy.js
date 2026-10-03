@@ -12,6 +12,7 @@ const boolean = Object.freeze({ kind: 'boolean' })
 export const EVOLUTION_CONFIG_POLICY_VERSION = 'runtime-config-policy-v2'
 export const EVOLUTION_CONFIG_ALLOWED_KEYS = Object.freeze({
   AGENT_INJECT_ENABLED: boolean,
+  GUGO_MAX_ITERS: integer(1, 100_000),
   JOB_MAX_ITERS: integer(1, 100_000),
   JOB_MAX_MODEL_CALLS: integer(1, 100_000),
   JOB_MAX_MODEL_TOKENS: integer(0, 1_000_000_000),

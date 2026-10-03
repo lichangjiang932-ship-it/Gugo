@@ -2,14 +2,15 @@ import { useState } from 'react'
 import { FolderOpen, LoaderCircle } from 'lucide-react'
 import InlineDirectoryBrowser from '../../components/InlineDirectoryBrowser.jsx'
 
-export default function DirectoryRequestCard({ request, busy, error = '', onAuthorize, t, browseDirectories }) {
+export default function DirectoryRequestCard({ request, busy, error = '', onAuthorize, onReject, lockAccessMode = false, t, browseDirectories }) {
   const [path, setPath] = useState(request.suggested_path || request.suggestedPath || '')
   const [browserOpen, setBrowserOpen] = useState(false)
   const requestedMode = request.access_mode || request.accessMode
   const [accessMode, setAccessMode] = useState(requestedMode === 'read_write' ? 'read_write' : 'read_only')
   const [authorizationScope, setAuthorizationScope] = useState('session')
 
-  const authorize = () => onAuthorize({ path, accessMode, authorizationScope })
+  const effectiveMode = lockAccessMode ? (requestedMode === 'read_write' ? 'read_write' : 'read_only') : accessMode
+  const authorize = () => onAuthorize({ path, accessMode: effectiveMode, authorizationScope })
 
   return (
     <div className="mt-3 rounded-md border border-dashed border-running/45 bg-running/5 p-3" data-testid="directory-request-card">
@@ -23,17 +24,24 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
       <div className="mt-3 flex flex-col gap-2 md:flex-row">
         <input
           value={path}
+          disabled={!!busy}
           onChange={(event) => setPath(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && path.trim() && !busy) authorize()
+            if (event.key === 'Enter' && path.trim() && !busy && !event.defaultPrevented
+              && !event.repeat && !event.isComposing && !event.nativeEvent?.isComposing
+              && event.keyCode !== 229 && event.nativeEvent?.keyCode !== 229
+              && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+              event.preventDefault()
+              authorize()
+            }
           }}
           placeholder={t('taskSteering.directoryPathPlaceholder')}
           className="h-9 min-w-0 flex-1 rounded-md border border-running/30 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-focus"
         />
         <select
-          value={accessMode}
+          value={effectiveMode}
           onChange={(event) => setAccessMode(event.target.value)}
-          disabled={!!busy}
+          disabled={!!busy || lockAccessMode}
           aria-label={t('taskSteering.directoryAccessMode')}
           className="h-9 rounded-md border border-running/30 bg-paper px-2 text-xs text-ink"
         >
@@ -69,6 +77,15 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
           {t('taskSteering.chooseDirectory')}
         </button>
       </div>
+      {typeof onReject === 'function' && <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={onReject} disabled={!!busy && busy !== 'grant'}
+          data-testid="directory-reject-cancel"
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-danger/35 px-3 text-xs text-danger hover:bg-danger/5 disabled:opacity-40">
+          {busy === 'reject' && <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+          {t('taskSteering.directoryRejectCancel')}
+        </button>
+        <span className="text-xs text-ink-fade">{t('taskSteering.directoryCancelKeepsFiles')}</span>
+      </div>}
       {browserOpen && (
         <InlineDirectoryBrowser
           initialPath={path}

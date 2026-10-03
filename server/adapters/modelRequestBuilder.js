@@ -2,6 +2,8 @@ import { ensureApiVersionPath, profileForConfig } from './modelEndpoint.js'
 import { attachModelRequestIdentity } from './modelRequestIdentity.js'
 import { prepareOutboundMessages, retainReasoningForEnv } from './outboundMessagePipeline.js'
 import { buildNativeProviderRequest, isNativeProviderKind } from './nativeModelProviders.js'
+import { canonicalizeModelTools, promptCacheKeyFor } from './modelRequestCache.js'
+import { attachModelWireDiagnostics } from './modelWireDiagnostics.js'
 
 export function normalizeOpenAICompatibleUrl(rawUrl = '') {
   const trimmed = rawUrl.trim().replace(/\/+$/, '')
@@ -47,8 +49,26 @@ function systemContentToText(content) {
     .join('\n')
 }
 
-function normalizeMessagesForOpenAI(messages = []) {
-  return mergeLeadingSystemMessages(messages).map((message) => {
+function normalizeMessagesForOpenAI(messages = [], profile = {}) {
+  let leadingSystem = true
+  const compatible = profile.supportsMidConversationSystem === false ? messages.map((message) => {
+    if (message.role !== 'system') leadingSystem = false
+    // Keep host guards exactly where they apply. Never move late control
+    // messages into the reusable initial system prefix or rewrite checkpoints.
+    return !leadingSystem && message.role === 'system' ? { ...message, role: 'user' } : message
+  }) : messages
+  const merged = mergeLeadingSystemMessages(compatible)
+  if (profile.requiresUserMessage === true && !merged.some((message) => message.role === 'user')) {
+    // Compaction can legitimately leave a summary + paired tool tail only.
+    // Some local templates nevertheless require a user-role query. This is a
+    // bounded host control in the provider view, not a fabricated user goal,
+    // new authorization, or a change to the durable archive/compaction policy.
+    const firstConversationIndex = merged.findIndex((message) => message.role !== 'system')
+    merged.splice(firstConversationIndex < 0 ? merged.length : firstConversationIndex, 0, {
+      role: 'user', content: '[Runtime continuation; not new authorization]\nContinue from the existing conversation and tool results under the original instructions and permissions.',
+    })
+  }
+  return merged.map((message) => {
     if (
       message?.role === 'assistant'
       && Array.isArray(message.tool_calls)
@@ -65,10 +85,12 @@ function normalizeMessagesForOpenAI(messages = []) {
  * 该端点能不能吃 stream_options.include_usage。
  * 保守策略:已知支持的家族才开;其余保持关闭,除非用户显式 MODEL_STREAM_USAGE=1。
  */
-export function supportsStreamUsage(config, env = process.env) {
+export function supportsStreamUsage(config, env = process.env, profile = null) {
   const forced = String(env.MODEL_STREAM_USAGE || '').trim()
   if (forced === '1') return true
   if (forced === '0') return false
+  const capability = (profile || profileForConfig(config || {}, env)).supportsStreamUsage
+  if (typeof capability === 'boolean') return capability
   const base = String(config?.baseUrl || '').toLowerCase()
   if (!base) return false
   return /(^|\/\/|\.)(api\.)?(deepseek|openai|siliconflow|moonshot|dashscope|bigmodel|xiaomimimo|together|fireworks|groq)\b/.test(base)
@@ -76,6 +98,22 @@ export function supportsStreamUsage(config, env = process.env) {
 }
 
 export { retainReasoningForEnv }
+
+function compatibleToolSelection(tools, toolChoice, profile) {
+  const canonical = canonicalizeModelTools(tools)
+  if (!toolChoice || typeof toolChoice !== 'object' || profile.supportsNamedToolChoice !== false) {
+    return { tools: canonical, toolChoice }
+  }
+  const name = toolChoice.type === 'function' ? String(toolChoice.function?.name || '').trim() : ''
+  const selected = canonical.find((spec) => spec?.function?.name === name)
+  if (!selected) {
+    throw Object.assign(new Error('The named tool choice is not present in the authorized request tool set.'),
+      { code: 'MODEL_TOOL_CHOICE_UNAVAILABLE', retryable: false, type: 'configuration_error' })
+  }
+  // A required call with only the named, already-authorized schema preserves
+  // the original selection constraint without sending an unsupported object.
+  return { tools: [selected], toolChoice: 'required' }
+}
 
 export function buildOpenAICompatibleRequest({
   config,
@@ -86,6 +124,7 @@ export function buildOpenAICompatibleRequest({
   env = process.env,
   profile = null,
   ephemeralContext = '',
+  cacheOwnerId = null,
 }) {
   const endpoint = profile || profileForConfig(config || {}, env)
   const model = config?.modelName
@@ -112,7 +151,7 @@ export function buildOpenAICompatibleRequest({
 
   const body = {
     model,
-    messages: normalizeMessagesForOpenAI(outboundMessages),
+    messages: normalizeMessagesForOpenAI(outboundMessages, endpoint),
     temperature: config?.temperature ?? 0.7,
     stream,
   }
@@ -129,16 +168,19 @@ export function buildOpenAICompatibleRequest({
     throw error
   }
   if (Array.isArray(tools) && tools.length > 0) {
-    body.tools = tools
-    if (toolChoice) body.tool_choice = toolChoice
+    const selection = compatibleToolSelection(tools, toolChoice, endpoint)
+    body.tools = selection.tools
+    if (selection.toolChoice) body.tool_choice = selection.toolChoice
     if (endpoint.supportsParallelTools) body.parallel_tool_calls = true
   }
   if (endpoint.keepAlive) {
     body.keep_alive = endpoint.keepAlive
   }
-  if (stream && supportsStreamUsage(config)) {
+  if (stream && supportsStreamUsage(config, env, endpoint)) {
     body.stream_options = { include_usage: true }
   }
+  const promptCacheKey = promptCacheKeyFor({ config, profile: endpoint, ownerId: cacheOwnerId })
+  if (promptCacheKey) body.prompt_cache_key = promptCacheKey
 
   return {
     url: normalizeOpenAICompatibleUrl(config?.baseUrl),
@@ -155,5 +197,7 @@ export function buildModelProviderRequest(args = {}) {
   const providerRequest = isNativeProviderKind(profile.kind)
     ? buildNativeProviderRequest({ ...args, profile })
     : buildOpenAICompatibleRequest({ ...args, profile })
-  return attachModelRequestIdentity(providerRequest, args.modelRequestId)
+  return attachModelWireDiagnostics(attachModelRequestIdentity(providerRequest, args.modelRequestId), {
+    config: args.config, profile, ownerId: args.cacheOwnerId,
+  })
 }

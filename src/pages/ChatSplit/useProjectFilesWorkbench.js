@@ -1,12 +1,12 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
-export default function useProjectFilesWorkbench({ setWorkbenchOpen, setWorkbenchTab }) {
+export default function useProjectFilesWorkbench() {
+  const [workbenchMessage, setWorkbenchMessage] = useState('')
   useEffect(() => {
-    const openProjectFiles = () => {
-      setWorkbenchTab('files')
-      setWorkbenchOpen(true)
-    }
-    window.addEventListener('chat-workbench:open-files', openProjectFiles)
-    return () => window.removeEventListener('chat-workbench:open-files', openProjectFiles)
-  }, [setWorkbenchOpen, setWorkbenchTab])
+    if (!workbenchMessage) return undefined
+    const timer = setTimeout(() => setWorkbenchMessage(''), 5000)
+    return () => clearTimeout(timer)
+  }, [workbenchMessage])
+
+  return { workbenchMessage, setWorkbenchMessage }
 }

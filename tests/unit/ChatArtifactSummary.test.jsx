@@ -65,7 +65,6 @@ test('tool artifact renders final explanation and file card together', async () 
         onNavigatePermissions={() => {}}
         onOpenInPreview={() => {}}
         onExpandCompaction={() => {}}
-        onQuoteSelection={() => {}}
       />,
     )
   })
@@ -98,7 +97,6 @@ test('generation only hides actions for the streaming assistant and completed me
     onNavigatePermissions: () => {},
     onOpenInPreview: () => {},
     onExpandCompaction: () => {},
-    onQuoteSelection: () => {},
   }
   const message = {
     id: 'assistant-streaming',

@@ -1,5 +1,7 @@
 import { getVisibleModelErrorMessage } from '../../../../lib/chatFlowGuards.js'
 import { normalizePublicFailureCode } from '../../../../../shared/turnEventProjection.js'
+import { modelRequestFailureCopy } from '../../../../lib/modelRequestDiagnostics.js'
+import { modelProviderStopDiagnostic } from '../../../../../shared/modelProviderStopDiagnostic.js'
 
 // Validate the original text before case normalization. Unicode case folding can
 // otherwise turn confusables such as `K` into an apparently valid ASCII code.
@@ -26,6 +28,16 @@ const REASON_KEYS = Object.freeze({
   task_verification_repair_exhausted: 'chatMessages.incompleteReasonVerificationExhausted',
   task_verification_repair_pending: 'chatMessages.incompleteReasonVerificationPending',
   tool_no_progress: 'chatMessages.incompleteReasonNoProgress',
+  // The authorization family. Without these the card printed the raw code
+  // ("APPROVAL_DENIED") as its reason.
+  approval_denied: 'toolApproval.reasonDenied',
+  approval_required: 'toolApproval.reasonRequired',
+  approval_expired: 'toolApproval.reasonExpired',
+  tool_permission_denied: 'toolApproval.reasonPermission',
+  tool_authorization_unavailable: 'toolApproval.reasonAuthorization',
+  explicit_read_only_constraint: 'toolApproval.reasonReadOnly',
+  explicit_tool_free_constraint: 'toolApproval.reasonToolFree',
+  tool_disabled_by_config: 'toolApproval.reasonToolDisabled',
 })
 
 const REQUIREMENT_KEYS = Object.freeze({
@@ -56,6 +68,13 @@ const REQUIREMENT_KEYS = Object.freeze({
   verification_failure_repair: 'chatMessages.incompleteRequirementVerificationRepair',
   conclusive_project_verification: 'chatMessages.incompleteRequirementConclusiveVerification',
   rerun_verification_scope: 'chatMessages.incompleteRequirementVerificationRerun',
+  user_direction: 'toolApproval.requirementUserDirection',
+  tool_approval: 'toolApproval.requirementApproval',
+  renewed_tool_approval: 'toolApproval.requirementRenewedApproval',
+  tool_permission: 'toolApproval.requirementPermission',
+  authorization_state_repair: 'toolApproval.requirementAuthorization',
+  explicit_user_authorization: 'toolApproval.requirementWriteAuthorization',
+  enabled_tool_configuration: 'toolApproval.requirementToolConfig',
 })
 
 const DEFAULT_REQUIREMENTS = Object.freeze({
@@ -123,10 +142,37 @@ export function normalizeIncompleteReasonCode(value) {
   return INCOMPLETE_REASON_CODE_PATTERN.test(reason) ? reason.toLowerCase() : ''
 }
 
+const AUTHORIZATION_REASONS = new Set([
+  'approval_denied', 'approval_required', 'approval_expired', 'tool_permission_denied',
+  'tool_authorization_unavailable', 'explicit_read_only_constraint',
+  'explicit_tool_free_constraint', 'tool_disabled_by_config',
+])
+
+/**
+ * Whether the incomplete card below the answer already says why the turn
+ * stopped in the user's terms. When it does, the answer must not lead with the
+ * generic "something went wrong — check your model's tool support" line: for a
+ * refusal or a permission stop that sentence is both redundant and wrong.
+ */
+export function incompleteCardExplainsStop(failure) {
+  return AUTHORIZATION_REASONS.has(normalizeIncompleteReasonCode(failure?.incompleteReason))
+}
+
 function normalizeReason(failure) {
   const reason = normalizeIncompleteReasonCode(failure?.incompleteReason)
   if (reason) return reason
   return normalizePublicFailureCode(failure?.code, 'TURN_INCOMPLETE').toLowerCase()
+}
+
+function isGenericCancellation(msg, failure, incompleteReason) {
+  if (incompleteReason && incompleteReason !== 'turn_incomplete') return false
+  const code = normalizePublicFailureCode(failure.code, 'TURN_INCOMPLETE')
+  const confirmed = code === 'TURN_CANCELLED' || (msg?.meta?.cancelled === true && code === 'TURN_INCOMPLETE')
+  // A cancellation flag must not erase recovery/permission failures or an
+  // unresolved operation. Only the generic terminal fallback is replaceable.
+  return confirmed && msg?.meta?.serverConnectionState !== 'blocked'
+    && msg?.meta?.serverRecoveryBlocked !== true && !msg?.meta?.serverRecoveryKind
+    && !failure.recovery && !failure.cause
 }
 
 function defaultRequirementsForReason(reasonCode) {
@@ -184,6 +230,7 @@ export function buildIncompleteTaskPresentation(msg, t, {
 } = {}) {
   const failure = msg?.meta?.serverFailure || {}
   const incompleteReasonCode = normalizeIncompleteReasonCode(failure.incompleteReason)
+  const cancelled = isGenericCancellation(msg, failure, incompleteReasonCode)
   const reasonCode = normalizeReason(failure)
   const reasonKey = REASON_KEYS[reasonCode]
   const recordedUnknownReason = Boolean(
@@ -198,11 +245,12 @@ export function buildIncompleteTaskPresentation(msg, t, {
     && localizedFailureReason !== translated(t, 'errors.chatFailure')
       ? localizedFailureReason
       : ''
-  const reason = reasonKey
+  const reason = cancelled ? translated(t, 'chatMessages.incompleteReasonCancelled')
+    : modelProviderStopDiagnostic(failure) || (reasonCode === 'model_request_outcome_unknown' ? modelRequestFailureCopy(failure, t).reason : reasonKey
     ? translated(t, reasonKey, { attempts: Number(failure.attempts) || 0 })
     : specificFailureReason || translated(t, recordedUnknownReason
       ? 'chatMessages.incompleteReasonRecordedCode'
-      : 'chatMessages.incompleteReasonFallback', { code: reasonCode.toUpperCase() })
+      : 'chatMessages.incompleteReasonFallback', { code: reasonCode.toUpperCase() }))
   const rawRequirements = Array.isArray(failure.missingRequirements)
     ? failure.missingRequirements
     : []
@@ -213,7 +261,8 @@ export function buildIncompleteTaskPresentation(msg, t, {
     .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
   const missing = requirementCodes.length > 0
     ? requirementCodes.map((code) => (
-        REQUIREMENT_KEYS[code]
+        reasonCode === 'model_request_outcome_unknown' && code === 'operation_outcome_verification'
+          ? translated(t, 'modelRequestRecovery.verifyModelOutcome') : REQUIREMENT_KEYS[code]
           ? translated(t, REQUIREMENT_KEYS[code])
           : translated(t, 'chatMessages.incompleteRequirementRecordedCode', {
               code: code.toUpperCase(),
@@ -235,10 +284,11 @@ export function buildIncompleteTaskPresentation(msg, t, {
   const manualRetryable = failure.manualRetryable === true
   const verificationNextStepKey = VERIFICATION_NEXT_STEP_KEYS[reasonCode]
   return {
-    code: incompleteReasonCode.toUpperCase()
+    titleKey: cancelled ? 'chatMessages.toolStopped' : 'chatMessages.incompleteTitle',
+    code: cancelled ? 'TURN_CANCELLED' : incompleteReasonCode.toUpperCase()
       || normalizePublicFailureCode(failure.code, 'TURN_INCOMPLETE'),
     missing,
-    nextStep: translated(t, verificationNextStepKey || (retryable
+    nextStep: translated(t, (reasonCode === 'model_request_outcome_unknown' ? 'modelRequestRecovery.nextVerifyModel' : verificationNextStepKey) || (retryable
       ? 'chatMessages.incompleteNextRetry'
       : manualRetryable
         ? 'chatMessages.incompleteNextManualRecovery'

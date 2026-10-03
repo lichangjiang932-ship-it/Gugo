@@ -1,3 +1,5 @@
+import { resetMutationVerificationRecovery } from './loop/mutationVerificationRecovery.js'
+
 export const MAX_FAILED_TURN_RETRIES = 1
 
 export function failureSupportsFailedRetry(failurePayload) {
@@ -17,7 +19,6 @@ export function failureAllowsFailedRetry(failurePayload, attemptPayload) {
 export function resetManualRetryVerificationBudget(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return state || null
   const repair = state.completionGuards?.taskVerificationRepair
-  if (!repair || typeof repair !== 'object' || Array.isArray(repair)) return state
   const resetFailures = (entries) => (Array.isArray(entries) ? entries.map((entry) => ({
     ...entry,
     failures: 0,
@@ -27,12 +28,14 @@ export function resetManualRetryVerificationBudget(state) {
     ...state,
     completionGuards: {
       ...state.completionGuards,
-      taskVerificationRepair: {
+      mutationVerificationRetries: 0,
+      mutationVerificationRecovery: resetMutationVerificationRecovery(state.completionGuards?.mutationVerificationRecovery),
+      ...(repair && typeof repair === 'object' && !Array.isArray(repair) ? { taskVerificationRepair: {
         ...repair,
         pending: resetFailures(repair.pending),
         consecutiveFailures: 0,
         lastFailureBatchId: '',
-      },
+      } } : {}),
     },
   }
 }

@@ -4,10 +4,11 @@ import {
 } from '../core/runtimePolicyRuntime.js'
 import {
   BUILTIN_POLICY_ID,
+  APPROVAL_MODES,
   requiresPerCallApproval,
   resolveApprovalMode,
 } from '../utils/approvalPolicy.js'
-import { getApprovalSettings } from './approvalSettingsStore.js'
+import { getEffectiveApprovalSettings as getApprovalSettings } from './approvalSettingsStore.js'
 import { enforceMandatoryPerCallApproval } from './approvalGateAuthorizationSupport.js'
 import { getHook } from './hooksService.js'
 import { validateHookAuthorizationProvenance } from './hookAuthorizationProvenance.js'
@@ -43,10 +44,16 @@ function policyProvenanceIsCompatible(expected, actual) {
   return samePolicyProvenance(expected, actual)
 }
 
-function policyDriftResult({ expected = null, actual = null } = {}) {
+function localized(locale, zh, en) {
+  return locale === 'zh' ? zh : en
+}
+
+function policyDriftResult({ expected = null, actual = null, locale = 'zh' } = {}) {
   return {
     proceed: false,
-    reason: '运行时策略已变更，旧的审批或执行快照已失效；请重新发起这次工具调用',
+    reason: localized(locale,
+      '运行时策略已变更，旧的审批或执行快照已失效；请重新发起这次工具调用',
+      'The runtime policy changed, so the old approval or execution snapshot is stale; please re-issue this tool call.'),
     code: 'policy_provenance_drift',
     policyDrift: true,
     retryable: true,
@@ -55,11 +62,13 @@ function policyDriftResult({ expected = null, actual = null } = {}) {
   }
 }
 
-function policyFailureResult(decision, provenance = null) {
+function policyFailureResult(decision, provenance = null, locale = 'zh') {
   const failureCode = decision?.failure?.code || 'RUNTIME_POLICY_EXECUTION_FAILED'
   return {
     proceed: false,
-    reason: '当前运行时策略无法给出可信决策，已保守拒绝执行',
+    reason: localized(locale,
+      '当前运行时策略无法给出可信决策，已保守拒绝执行',
+      'The current runtime policy cannot produce a trustworthy decision; execution was conservatively rejected.'),
     code: 'policy_runtime_unavailable',
     policyFailure: true,
     systemFailure: true,
@@ -73,10 +82,12 @@ function hasUserIdentity(userId) {
   return typeof userId === 'string' && userId.trim().length > 0
 }
 
-function missingUserIdentityResult({ approvalId = null } = {}) {
+function missingUserIdentityResult({ approvalId = null, locale = 'zh' } = {}) {
   return {
     proceed: false,
-    reason: '无法确认工具调用所属用户，已保守拒绝执行',
+    reason: localized(locale,
+      '无法确认工具调用所属用户，已保守拒绝执行',
+      'The user that owns this tool call could not be determined; execution was conservatively rejected.'),
     code: 'approval_user_identity_missing',
     identityFailure: true,
     systemFailure: true,
@@ -86,10 +97,12 @@ function missingUserIdentityResult({ approvalId = null } = {}) {
   }
 }
 
-function hookAuthorizationFailureResult(validation) {
+function hookAuthorizationFailureResult(validation, locale = 'zh') {
   return {
     proceed: false,
-    reason: validation?.reason || 'Hook 授权来源无法验证，已保守拒绝执行',
+    reason: validation?.reason || localized(locale,
+      'Hook 授权来源无法验证，已保守拒绝执行',
+      'The hook authorization source could not be verified; execution was conservatively rejected.'),
     code: validation?.code || 'hook_authorization_provenance_invalid',
     hookAuthorizationFailure: true,
     systemFailure: true,
@@ -110,6 +123,7 @@ export function revalidateHookAuthorization({
   toolName,
   args = {},
   requireLive = true,
+  locale = 'zh',
 } = {}) {
   try {
     const validation = validateHookAuthorizationProvenance({
@@ -130,19 +144,23 @@ export function revalidateHookAuthorization({
     })
     return validation.valid
       ? { proceed: true, hookAuthorizationProvenance: validation.provenance }
-      : hookAuthorizationFailureResult(validation)
+      : hookAuthorizationFailureResult(validation, locale)
   } catch {
     return hookAuthorizationFailureResult({
       code: 'hook_authorization_verification_failed',
-      reason: 'Hook 授权验证失败，已保守拒绝执行',
-    })
+      reason: localized(locale,
+        'Hook 授权验证失败，已保守拒绝执行',
+        'Hook authorization verification failed; execution was conservatively rejected.'),
+    }, locale)
   }
 }
 
-function approvalContextMismatchResult(approval, expected = null) {
+function approvalContextMismatchResult(approval, expected = null, locale = 'zh') {
   return {
     proceed: false,
-    reason: '持久化审批与当前工具调用不匹配，已保守拒绝执行',
+    reason: localized(locale,
+      '持久化审批与当前工具调用不匹配，已保守拒绝执行',
+      'The persisted approval does not match the current tool call; execution was conservatively rejected.'),
     code: 'approval_context_mismatch',
     approvalContextMismatch: true,
     retryable: false,
@@ -188,7 +206,7 @@ function plainPolicyData(value) {
   }
 }
 
-function resolvePolicyInputs({ userId, toolName, args, settings }) {
+function resolvePolicyInputs({ userId, toolName, args, settings, locale = 'zh' }) {
   const dynamicMetadata = getToolMetadata(toolName, { args, userId })
   const dynamicRegistration = getDynamicTool(toolName, { userId })
   const isRuntimePlugin = dynamicRegistration?.origin === 'plugin'
@@ -203,7 +221,9 @@ function resolvePolicyInputs({ userId, toolName, args, settings }) {
         ...(dynamicMetadata || {}),
         riskClass: riskOverride.riskClass,
         requiresApproval: riskOverride.riskClass !== 'read',
-        reason: `用户风险覆盖: ${riskOverride.riskClass}`,
+        reason: localized(locale,
+          `用户风险覆盖: ${riskOverride.riskClass}`,
+          `User risk override: ${riskOverride.riskClass}`),
       }
     : dynamicMetadata
   return { isRuntimePlugin, riskOverride, metadata }
@@ -217,10 +237,10 @@ function resolvePolicyInputs({ userId, toolName, args, settings }) {
  * 实际上后者应该重试。带 systemFailure/retryable 标记后,
  * caller 能给模型完全不同的措辞。
  */
-function terminalDecision(approval) {
+function terminalDecision(approval, locale = 'zh') {
   // 记录凭空消失 = 基础设施问题(DB 被清/行被删),不是用户拒绝
   if (!approval) {
-    return { proceed: false, reason: '审批记录已丢失', systemFailure: true, retryable: true }
+    return { proceed: false, reason: localized(locale, '审批记录已丢失', 'The approval record is missing'), systemFailure: true, retryable: true }
   }
   switch (approval.status) {
     case 'approved':
@@ -229,11 +249,11 @@ function terminalDecision(approval) {
       return { proceed: true, args: approval.effectiveArgs, approvalId: approval.id, edited: true }
     case 'denied':
       // 唯一真正的「用户说不」
-      return { proceed: false, reason: '用户拒绝了这次调用', approvalId: approval.id, deniedByUser: true }
+      return { proceed: false, reason: localized(locale, '用户拒绝了这次调用', 'The user rejected this call'), approvalId: approval.id, deniedByUser: true }
     case 'expired':
-      return { proceed: false, reason: '审批超时未处理(视同拒绝)', approvalId: approval.id, expired: true }
+      return { proceed: false, reason: localized(locale, '审批超时未处理(视同拒绝)', 'The approval timed out without a decision (treated as rejected)'), approvalId: approval.id, expired: true }
     case 'cancelled':
-      return { proceed: false, reason: '任务已取消,审批作废', approvalId: approval.id, cancelled: true }
+      return { proceed: false, reason: localized(locale, '任务已取消,审批作废', 'The task was cancelled, so the approval is void'), approvalId: approval.id, cancelled: true }
     default:
       return null // still pending
   }
@@ -253,11 +273,12 @@ export function revalidateToolPermission({
   taskGrants = [],
   expectedPolicyProvenance = undefined,
   allowAsk = false,
+  locale = 'zh',
 } = {}) {
   const activeProvenance = getActiveRuntimePolicyProvenance()
-  if (!hasUserIdentity(userId)) return missingUserIdentityResult()
+  if (!hasUserIdentity(userId)) return missingUserIdentityResult({ locale })
   if (!policyProvenanceIsCompatible(expectedPolicyProvenance, activeProvenance)) {
-    return policyDriftResult({ expected: expectedPolicyProvenance, actual: activeProvenance })
+    return policyDriftResult({ expected: expectedPolicyProvenance, actual: activeProvenance, locale })
   }
 
   try {
@@ -287,10 +308,11 @@ export function revalidateToolPermission({
       return policyDriftResult({
         expected: expectedPolicyProvenance,
         actual: classified.policyProvenance,
+        locale,
       })
     }
     if (classified.decision?.failure) {
-      return policyFailureResult(classified.decision, classified.policyProvenance)
+      return policyFailureResult(classified.decision, classified.policyProvenance, locale)
     }
     // Host safety invariant: plugin policy cannot manufacture the human approval
     // required for model-authored code. `allowAsk` requires a terminal record.
@@ -300,8 +322,8 @@ export function revalidateToolPermission({
       return {
         proceed: false,
         reason: toolName === 'run_code'
-          ? 'run_code 必须由用户逐次批准后才能执行'
-          : `${toolName} 必须由用户逐次批准后才能执行`,
+          ? localized(locale, 'run_code 必须由用户逐次批准后才能执行', 'run_code must be approved by the user for each call before it can run')
+          : localized(locale, `${toolName} 必须由用户逐次批准后才能执行`, `${toolName} must be approved by the user for each call before it can run`),
         approvalRequired: true,
         permissionMode: settings.mode,
         suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
@@ -322,8 +344,8 @@ export function revalidateToolPermission({
       proceed: false,
       reason: classified.decision?.reason || (
         classified.decision?.decision === 'ask'
-          ? '当前策略要求重新批准这次调用'
-          : '当前策略拒绝这次调用'
+          ? localized(locale, '当前策略要求重新批准这次调用', 'The current policy requires re-approving this call')
+          : localized(locale, '当前策略拒绝这次调用', 'The current policy rejects this call')
       ),
       policyDenied: classified.decision?.decision === 'deny',
       approvalRequired: classified.decision?.decision === 'ask',
@@ -335,7 +357,7 @@ export function revalidateToolPermission({
     console.error('[approval] 重验当前权限失败,已保守拒绝:', err?.stack || err)
     return {
       proceed: false,
-      reason: '无法确认当前权限模式,已保守拒绝',
+      reason: localized(locale, '无法确认当前权限模式,已保守拒绝', 'The current permission mode could not be confirmed; execution was conservatively rejected.'),
       systemFailure: true,
       retryable: true,
       policyProvenance: getActiveRuntimePolicyProvenance(),
@@ -343,17 +365,17 @@ export function revalidateToolPermission({
   }
 }
 
-export function terminalDecisionForCurrentMode(approval, expectedApprovalContext = null) {
+export function terminalDecisionForCurrentMode(approval, expectedApprovalContext = null, locale = 'zh') {
   if (approval && !hasUserIdentity(approval.userId)) {
-    return missingUserIdentityResult({ approvalId: approval.id })
+    return missingUserIdentityResult({ approvalId: approval.id, locale })
   }
   if (expectedApprovalContext && !hasUserIdentity(expectedApprovalContext.userId)) {
-    return missingUserIdentityResult({ approvalId: approval?.id || null })
+    return missingUserIdentityResult({ approvalId: approval?.id || null, locale })
   }
   if (approval && !approvalMatchesExpectedContext(approval, expectedApprovalContext)) {
-    return approvalContextMismatchResult(approval, expectedApprovalContext)
+    return approvalContextMismatchResult(approval, expectedApprovalContext, locale)
   }
-  const decision = terminalDecision(approval)
+  const decision = terminalDecision(approval, locale)
   if (!decision?.proceed) return decision
 
   const args = decision.args ?? approval.effectiveArgs ?? approval.args ?? {}
@@ -364,67 +386,11 @@ export function terminalDecisionForCurrentMode(approval, expectedApprovalContext
     args,
     expectedPolicyProvenance: approval.policyProvenance,
     allowAsk: true,
+    locale,
   })
   return currentPermission.proceed
     ? { ...decision, policyProvenance: currentPermission.policyProvenance }
     : { ...currentPermission, approvalId: approval.id }
-}
-
-/**
- * 把 gate 的拒绝结果翻译成给模型看的工具结果。
- *
- * 关键是让模型能区分三种情况并采取不同行动:
- *   - 用户拒绝  → 别再试了,换个思路或问用户
- *   - 系统故障  → 可以重试,不是用户不同意
- *   - 超时/取消 → 说明情况,别当成被否决
- */
-export function formatDeniedToolResult(gate) {
-  const base = { ok: false, denied: true, error: gate?.reason || '调用未获批准' }
-  if (gate?.systemFailure) {
-    const retryable = gate.retryable !== false
-    return {
-      ...base,
-      denied: false, // 不是「被拒绝」,是没走成
-      systemFailure: true,
-      retryable,
-      error: retryable
-        ? `${gate.reason || '审批系统暂时不可用'}。这是系统故障,不是用户拒绝 —— 可以稍后重试,不要因此放弃任务或要求用户手动操作。`
-        : `${gate.reason || '授权已失效'}。这是安全校验失败,不是用户拒绝；必须重新发起工具调用获取新的授权。`,
-    }
-  }
-  if (gate?.expired) {
-    return { ...base, expired: true, error: `${gate.reason}。用户可能不在,可以先做不需要批准的部分。` }
-  }
-  if (gate?.cancelled) {
-    return { ...base, cancelled: true, error: gate.reason }
-  }
-  if (gate?.approvalRequired) {
-    return {
-      ...base,
-      denied: false,
-      code: 'approval_required',
-      approvalRequired: true,
-      retryable: true,
-      permissionMode: gate.permissionMode || null,
-      suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
-      error: `${gate.reason || '本次工具调用尚未获得批准'}。请重新发起该工具调用以创建新的逐次审批请求；获得用户批准后再继续。`,
-    }
-  }
-  if (gate?.policyDenied) {
-    const currentMode = gate.permissionMode === 'plan' ? '计划模式' : String(gate.permissionMode || '当前模式')
-    const suggestedMode = gate.suggestedPermissionMode === 'acceptEdits' ? '自动接受编辑模式' : '正常模式'
-    return {
-      ...base,
-      code: gate.permissionMode === 'plan'
-        ? 'policy_denied_plan_mode'
-        : 'policy_denied_permission_mode',
-      policyDenied: true,
-      permissionMode: gate.permissionMode || null,
-      suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
-      error: `该工具存在，但操作在${currentMode}下被策略禁止。请切换到${suggestedMode}后继续；不要将此解释为缺少写入或执行工具。`,
-    }
-  }
-  return { ...base, deniedByUser: true, error: `${gate?.reason || '用户拒绝了这次调用'}。请换一个方案,不要重复请求同一个操作。` }
 }
 
 export function authorizeApprovalRequest({
@@ -443,10 +409,11 @@ export function authorizeApprovalRequest({
   requestId = null,
   toolCallId = null,
   taskGrants = [],
+  locale = 'zh',
 } = {}) {
-  if (!hasUserIdentity(userId)) return { gate: missingUserIdentityResult() }
+  if (!hasUserIdentity(userId)) return { gate: missingUserIdentityResult({ locale }) }
 
-  const effectiveMode = mode || resolveApprovalMode()
+  const effectiveMode = APPROVAL_MODES.includes(mode) ? mode : resolveApprovalMode()
   // 用户档位 + 「总是允许」清单。读失败不阻断,退回最严格的默认(normal/空)。
   let settings = { mode: undefined, rememberedGrants: [], riskOverrides: [] }
   try {
@@ -459,6 +426,7 @@ export function authorizeApprovalRequest({
     toolName,
     args,
     settings,
+    locale,
   })
   const classified = classifyWithActivePolicy({
     toolName,
@@ -474,7 +442,7 @@ export function authorizeApprovalRequest({
   })
   let verdict = classified.decision
   const policyProvenance = classified.policyProvenance
-  if (verdict?.failure) return { gate: policyFailureResult(verdict, policyProvenance) }
+  if (verdict?.failure) return { gate: policyFailureResult(verdict, policyProvenance, locale) }
   // Runtime policies may tighten this host boundary, never weaken it.
   verdict = enforceMandatoryPerCallApproval({
     toolName,
@@ -487,7 +455,7 @@ export function authorizeApprovalRequest({
     return {
       gate: {
         proceed: false,
-        reason: verdict.reason || '当前策略拒绝这次调用',
+        reason: verdict.reason || localized(locale, '当前策略拒绝这次调用', 'The current policy rejects this call'),
         policyDenied: true,
         permissionMode: settings.mode,
         suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
@@ -502,8 +470,10 @@ export function authorizeApprovalRequest({
     return {
       gate: hookAuthorizationFailureResult({
         code: 'hook_authorization_provenance_missing',
-        reason: '旧式 Hook 预授权缺少独立来源与调用作用域，已保守拒绝执行',
-      }),
+        reason: localized(locale,
+          '旧式 Hook 预授权缺少独立来源与调用作用域，已保守拒绝执行',
+          'Legacy hook pre-authorization lacks an independent source and call scope; execution was conservatively rejected.'),
+      }, locale),
     }
   }
   if (hookAuthorizationProvenance) {
@@ -519,6 +489,7 @@ export function authorizeApprovalRequest({
       toolName,
       args,
       requireLive: true,
+      locale,
     })
     if (!hookAuthorization.proceed) return { gate: hookAuthorization }
     // Hooks may waive ordinary prompts, but mandatory tools still enter the
@@ -542,7 +513,7 @@ export function authorizeApprovalRequest({
       ...verdict,
       decision: 'ask',
       risk: verdict.risk || 'low',
-      reason: String(forceApprovalReason || '').trim() || 'pre_tool_use Hook 要求逐次批准',
+      reason: String(forceApprovalReason || '').trim() || localized(locale, 'pre_tool_use Hook 要求逐次批准', 'The pre_tool_use hook requires per-call approval'),
     }
   }
   if (verdict?.decision === 'allow') {
@@ -559,7 +530,7 @@ export function authorizeApprovalRequest({
   }
 
   if (verdict?.decision !== 'ask') {
-    return { gate: policyFailureResult(verdict, policyProvenance) }
+    return { gate: policyFailureResult(verdict, policyProvenance, locale) }
   }
 
   return {

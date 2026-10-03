@@ -1,3 +1,4 @@
+import { PERMANENT_FAILED_RETRY_REJECTION_CODES } from '../../shared/turnFailureCodes.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
 import {
   normalizeArtifactIds,
@@ -10,17 +11,7 @@ import {
   mergeLocalFileReceipts,
 } from './turnRecoveryProjection.js'
 
-const PERMANENT_REJECTION_CODES = new Set([
-  'TURN_FAILED_RETRY_NOT_ALLOWED',
-  'TURN_FAILED_RETRY_LIMIT_REACHED',
-  'TURN_FAILED_RETRY_UNSUPPORTED',
-  'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
-  'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
-  'TURN_FAILED_RETRY_EVENT_INVALID',
-  'TURN_FAILED_RETRY_ATTEMPT_INVALID',
-  'TURN_FAILED_RETRY_PROJECTION_INVALID',
-  'TURN_FAILED_RETRY_CONFLICT',
-])
+const PERMANENT_REJECTION_CODES = new Set(PERMANENT_FAILED_RETRY_REJECTION_CODES)
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)

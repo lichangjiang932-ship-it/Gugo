@@ -39,6 +39,7 @@ export function collectArtifacts(messages, currentAttachments = []) {
       messageId: message?.id,
       turnId: message?.meta?.serverTurnId,
     }).map((reference) => ({
+      ...reference,
       ...(reference.previewArtifact?.directFile || {}),
       id: reference.id,
       messageId: message.id,

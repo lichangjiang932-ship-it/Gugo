@@ -1,3 +1,5 @@
+import { MODEL_PROVIDER_STOP_REASON_ERROR_CODE } from '../../../shared/modelProviderStopDiagnostic.js'
+
 function assertRequest(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError('Loop model request must be an object')
@@ -10,6 +12,7 @@ const NON_REPLAYABLE_MODEL_ERROR_CODES = new Set([
   'MODEL_BUDGET_EXCEEDED',
   'MODEL_REQUEST_CONTEXT_DRIFT',
   'MODEL_REQUEST_OUTCOME_UNKNOWN',
+  MODEL_PROVIDER_STOP_REASON_ERROR_CODE,
 ])
 
 const MODEL_EVENT_CONTEXT_FIELDS = Object.freeze([

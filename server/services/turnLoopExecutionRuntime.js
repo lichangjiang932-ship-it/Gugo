@@ -1,3 +1,4 @@
+import { normalizeModelPhaseProgress } from '../../shared/modelPhaseProgress.js'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
 import {
   checkpointMessagesForTurn,
@@ -15,6 +16,9 @@ import { createChatOnlyToolExecutionError } from './turnModelRequestRuntime.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
 import { normalizeTurnOptionalId } from './turnStartRuntime.js'
 import { abortError, normalizePositiveInteger } from './turnEnginePolicy.js'
+import { getTurnPermissionContextSnapshot } from './turnPermissionContext.js'
+import { optionalContextDiagnostics, optionalWireDiagnostics, requireContextDiagnosticDurability } from './loop/runtimeContextDiagnostics.js'
+import { copyPublicTimelineCheckpoint, recordPublicToolAnchor, updateTurnPublicText } from './turnPublicTimeline.js'
 
 const ATOMIC_CHECKPOINT_UNSUPPORTED_CODE = 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED'
 const ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE = 'TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH'
@@ -73,10 +77,13 @@ function createCheckpointWriter({
     const checkpointState = {
       ...checkpoint,
       approvalMode: effectiveApprovalMode,
+      turnPermissionContext: getTurnPermissionContextSnapshot(scope),
       modelMode: normalizedModelMode,
       executionEnvironment: effectiveExecutionEnvironment,
       promptContextSnapshot,
       turnMessages: state.checkpointMessages,
+      // Host-produced display evidence overrides any loop/plugin checkpoint field.
+      publicTimeline: copyPublicTimelineCheckpoint(state.publicTimeline, scope),
       ...(state.latestModelUsage ? { latestModelUsage: state.latestModelUsage } : {}),
       ...(state.turnModelUsage ? { turnModelUsage: state.turnModelUsage } : {}),
       ...(state.latestEstimatedPromptTokens !== null
@@ -154,20 +161,29 @@ function toolFailure(result) {
   }
 }
 
-function createTurnLoopEventCallbacks({ emitter, state }) {
+function createTurnLoopEventCallbacks({ emitter, state, memoryDiagnostics = null }) {
+  let memoryReported = false
   return {
-    onModelPhase: async ({ phase, iteration, usage, modelName, error }) => {
+    onModelPhase: requireContextDiagnosticDurability(async ({ phase, iteration, usage, modelName, error, contextDiagnostics, wireDiagnostics, modelRequestId, physicalAttempt, ...progress }) => {
       const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
       if (normalizedUsage) {
         state.latestModelUsage = normalizedUsage
         state.turnModelUsage = addTurnModelUsage(state.turnModelUsage, normalizedUsage)
       }
+      const diagnostics = contextDiagnostics ? optionalContextDiagnostics({ ...contextDiagnostics,
+        ...(memoryDiagnostics && !memoryReported ? { memory: memoryDiagnostics } : {}) }) : null
+      const wire = wireDiagnostics ? optionalWireDiagnostics(wireDiagnostics) : null
       await emitter('model.phase', {
         phase, iteration, usage: normalizedUsage || usage, modelName, error,
+        ...(diagnostics ? { contextDiagnostics: diagnostics } : {}),
+        ...(wire ? { wireDiagnostics: wire, modelRequestId, physicalAttempt } : {}),
+        ...normalizeModelPhaseProgress(progress),
       })
-    },
+      if (diagnostics && memoryDiagnostics) memoryReported = true
+    }),
     onModelDelta: async ({ text, iteration, modelName }) => {
       state.streamedAssistantText += String(text || '')
+      updateTurnPublicText(state, state.streamedAssistantText)
       await emitter('assistant.delta', { text, iteration, modelName })
     },
     onReasoningDelta: async ({ text, iteration, modelName }) => {
@@ -184,21 +200,31 @@ function createTurnLoopEventCallbacks({ emitter, state }) {
       ...(deletions !== undefined ? { deletions } : {}),
       ...(phase !== undefined ? { phase } : {}),
     }),
-    onToolCall: async (call) => emitter('tool.call', {
-      toolCallId: call.id, name: call.name, args: call.args,
-    }),
-    onToolStarted: async (call) => emitter('tool.started', {
-      toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
-    }),
-    onToolCompleted: async (outcome) => emitter('tool.completed', {
-      toolCallId: outcome.call.id,
-      name: outcome.call.name,
-      args: outcome.executionArgs ?? outcome.call.args,
-      result: outcome.result,
-      error: toolFailure(outcome.result),
-      artifactId: outcome.artifactId || null,
-      artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
-    }),
+    onToolCall: async (call) => {
+      const textOffset = state.streamedAssistantText.length
+      const event = await emitter('tool.call', { toolCallId: call.id, name: call.name, args: call.args })
+      recordPublicToolAnchor(state, call, textOffset)
+      return event
+    },
+    onToolStarted: async (call) => {
+      const textOffset = state.streamedAssistantText.length
+      const event = await emitter('tool.started', {
+        toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
+      })
+      recordPublicToolAnchor(state, call, textOffset)
+      return event
+    },
+    onToolCompleted: async (outcome) => {
+      const textOffset = state.streamedAssistantText.length
+      const event = await emitter('tool.completed', {
+        toolCallId: outcome.call.id, name: outcome.call.name,
+        args: outcome.executionArgs ?? outcome.call.args, result: outcome.result,
+        error: toolFailure(outcome.result), artifactId: outcome.artifactId || null,
+        artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
+      })
+      recordPublicToolAnchor(state, outcome.call, textOffset)
+      return event
+    },
     onApprovalPending: async (approval) => emitter('approval.required', {
       approvalId: approval.id, toolName: approval.toolName, args: approval.args,
       risk: approval.risk, metadataSource: approval.metadataSource,
@@ -258,6 +284,7 @@ export function createTurnLoopExecutionRuntime({ deps }) {
     pendingRecoveryAttempt,
     effectiveIntentMode,
     resolvedToolSpecs,
+    deferredToolSpecs = resolvedToolSpecs,
     effectiveToolsConfig,
     toolResolutionDecision,
     activeSkillId,
@@ -298,6 +325,7 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       pendingRecoveryAttempt,
       onRecoveryAttempt: (attempt) => {
         state.streamedAssistantText = String(attempt?.assistantText || '')
+        updateTurnPublicText(state, state.streamedAssistantText)
       },
       onPromptTokenEstimate: (value) => {
         state.latestEstimatedPromptTokens = normalizePromptTokenEstimate(value)
@@ -327,7 +355,8 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       executionLease,
       state,
     })
-    const eventCallbacks = createTurnLoopEventCallbacks({ emitter, state })
+    const eventCallbacks = createTurnLoopEventCallbacks({ emitter, state,
+      memoryDiagnostics: promptContext?.memoryDiagnostics || null })
     const steeringOptions = createTurnSteeringOptions({
       deps, scope, steeringOwnerId, steeringScope,
     })
@@ -362,7 +391,7 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       signal,
       toolSpecs: resolvedToolSpecs,
       toolsConfig: effectiveToolsConfig,
-      fallbackToolSpecs: resolvedToolSpecs,
+      fallbackToolSpecs: deferredToolSpecs,
       toolResolutionDecision,
       skillId: activeSkillId,
       executeTool: chatOnlyMode

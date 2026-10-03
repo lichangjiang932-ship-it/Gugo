@@ -6,6 +6,7 @@ import {
   unregisterByOrigin,
   unregisterDynamicTool,
 } from '../services/toolRegistry.js'
+import { validateToolSchemaDefinition } from '../utils/toolJsonSchema.js'
 
 const mcpEventListeners = new Set()
 
@@ -21,7 +22,7 @@ export function buildRegisteredToolSpec(server, tool) {
     function: {
       name: toolName,
       description: tool.description || `${server.name} - ${tool.name}`,
-      parameters: tool.inputSchema || { type: 'object', properties: {} },
+      parameters: tool.inputSchema ?? { type: 'object', properties: {} },
     },
   }
 }
@@ -225,10 +226,18 @@ function registerToolEntry(userId, source, entry) {
   }
 }
 
-export function synchronizeToolsForConnection(userId, server, previousConnection, connection) {
+export function synchronizeToolsForConnection(userId, server, previousConnection, connection, {
+  replacingConnection = Boolean(previousConnection && previousConnection !== connection),
+} = {}) {
   const source = mcpToolSource(userId, server.id)
   const previousEntries = toolRegistrationEntries(server, previousConnection?.tools || [])
   const nextEntries = toolRegistrationEntries(server, connection?.tools || [])
+  // Validate the whole replacement before revoking any previous registration.
+  // A bad later tool must not invalidate already-shown schemas or approvals.
+  for (const entry of nextEntries.values()) {
+    const schemaError = validateToolSchemaDefinition(entry.spec.function.parameters)
+    if (schemaError) throw Object.assign(new Error(schemaError.error), schemaError)
+  }
   const previousRegistrations = previousConnection?._mcpToolRegistrations instanceof Map
     ? previousConnection._mcpToolRegistrations
     : new Map()
@@ -237,7 +246,6 @@ export function synchronizeToolsForConnection(userId, server, previousConnection
   const removed = []
   const updated = []
   const blockedByForeignRegistration = new Set()
-  const replacingConnection = Boolean(previousConnection && previousConnection !== connection)
 
   for (const [name, previousEntry] of previousEntries) {
     const nextEntry = nextEntries.get(name)

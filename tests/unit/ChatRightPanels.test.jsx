@@ -87,7 +87,14 @@ test('a generated file preview is the only mounted right panel', async () => {
       <I18nProvider><ChatRightPanels {...baseProps} previewArtifact={null} /></I18nProvider>,
     ))
     assert.ok(rootElement.querySelector('[data-testid="right-workbench"]'))
-    assert.match(rootElement.textContent, /current-audio\.mp3/)
+    // The top bar marks the active tool in its settings menu; the vertical edge
+    // strip no longer exists.
+    assert.equal(
+      rootElement.querySelector('[data-testid="workbench-tool-switch"] [aria-current="page"]').getAttribute('data-tool'),
+      'files',
+    )
+    assert.ok(rootElement.querySelector('[data-testid="workbench-tool-entry"]'))
+    assert.ok(rootElement.querySelector('[data-testid="workbench-files"]'), 'the workspace files panel renders')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

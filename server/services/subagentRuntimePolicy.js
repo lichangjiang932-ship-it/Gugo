@@ -30,7 +30,7 @@ const RESUMABLE_SUBAGENT_STATUSES = new Set(['interrupted'])
 /**
  * 独立跑的子代理默认预算。
  * ★ 120 次 / 10 分钟 → 1000 次 / 2 小时,和 job 侧的放宽保持同一口径。
- * 墙钟同样不含模型延迟(见 jobBudget.trackModelMs)。
+ * 墙钟扣除共享模型等待区间的并集(见 jobBudget.beginModelWait)，重叠等待不重复扣除。
  */
 const SUBAGENT_BUDGET = Object.freeze({
   maxTotalCalls: envInt('SUBAGENT_MAX_TOOL_CALLS', 1000),
@@ -172,109 +172,59 @@ async function requestTreeApproval({ context, approveTool = requestApproval, ...
  * 只读工具规格 — 用于 explore/plan 类型（不能修改文件）。
  */
 const READONLY_TOOL_SPECS = [
-  {
-    type: 'function',
-    function: {
-      name: 'web_search',
-      description: '搜索互联网，获取最新信息。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '搜索关键词' },
-          maxResults: { type: 'number', description: '返回结果数量（默认 5）' },
-        },
-        required: ['query'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_url',
-      description: '抓取 URL 内容并提取正文为 Markdown。',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string', description: '要抓取的网页 URL' },
-        },
-        required: ['url'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'list_directory',
-      description: '列出目录内容。探索一个陌生项目时先用它看结构,再决定读哪些文件。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '目录路径(绝对路径,或已授权的本地路径)' },
-          limit: { type: 'number', description: '最多返回多少项(默认 200)' },
-        },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'read_file',
-      description: '读取工作区文件。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径' },
-        },
-        required: ['path'],
-      },
-    },
-  },
+  // Keep the policy's existing allowlist, but publish the exact contracts
+  // consumed by the shared validator and filesystem/web dispatchers.
+  getBuiltinSpec('web_search'),
+  getBuiltinSpec('fetch_url'),
+  getBuiltinSpec('list_directory'),
+  getBuiltinSpec('read_file'),
   // ★ M1:代码搜索三件套(全只读,适合 explore/plan)
   ...CODE_SEARCH_TOOL_SPECS,
   ...LSP_TOOL_SPECS,
   // ★ M3:反思 / 请求澄清(纯思维型,无副作用)
   ...AGENTIC_TOOL_SPECS,
-  // ★ 长期记忆:探索到的项目背景值得跨会话留下来
-  ...MEMORY_TOOL_SPECS,
+  // Skills are instructions, not permissions. A subagent loads one through the
+  // same activation the main loop uses (runtimeSkillActivation: the user's own
+  // visible skills, the same ownership/trust check), never a second path.
+  getBuiltinSpec('load_skill'),
 ]
+
+/**
+ * Tools a subagent may call but is not shown up front. They stay authorized —
+ * the same validator, approval gate, directory grant and side-effect ledger
+ * apply — and `search_tools` mounts them when the task needs one. A smaller
+ * opening schema is what keeps a local model's subagent on task (Claude Code
+ * defers rarely used tools the same way).
+ */
+export const SUBAGENT_DEFERRED_TOOL_NAMES = Object.freeze(new Set([
+  'lsp', 'find_symbol', 'list_imports', 'sleep_until', 'request_directory',
+  'git_log', 'git_blame', 'run_project_check', 'remember',
+]))
+
+/** The discovery tool, added only when this run has something deferred. */
+export const SUBAGENT_SEARCH_TOOL_SPEC = getBuiltinSpec('search_tools')
 
 /**
  * 完整工具规格 — 用于 general 类型（可读写）。
  */
 const FULL_TOOL_SPECS = [
   ...READONLY_TOOL_SPECS,
-  {
-    type: 'function',
-    function: {
-      name: 'write_file',
-      description: '写文件到工作区。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径' },
-          content: { type: 'string', description: '文件内容' },
-        },
-        required: ['path', 'content'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'edit_file',
-      description: '编辑文件中的指定内容（SEARCH/REPLACE）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径' },
-          oldText: { type: 'string', description: '要替换的原文' },
-          newText: { type: 'string', description: '替换后的新内容' },
-        },
-        required: ['path', 'oldText', 'newText'],
-      },
-    },
-  },
+  // Durable memory is a write. Only a general worker may request it, and the
+  // normal external-side-effect approval policy remains authoritative.
+  ...MEMORY_TOOL_SPECS,
+  getBuiltinSpec('write_file'),
+  getBuiltinSpec('edit_file'),
+  // General workers may complete the same inspect → change → verify cycle as
+  // their parent. Every command still passes the normal directory, approval,
+  // checkpoint and side-effect boundaries.
+  getBuiltinSpec('bash_exec'),
+  getBuiltinSpec('run_command'),
+  getBuiltinSpec('run_test'),
+  getBuiltinSpec('run_project_check'),
+  getBuiltinSpec('git_status'),
+  getBuiltinSpec('git_diff'),
+  getBuiltinSpec('git_log'),
+  getBuiltinSpec('git_blame'),
   // ★ M2: Codex 风格多文件原子 patch
   ...APPLY_PATCH_TOOL_SPECS,
   getBuiltinSpec('Agent'),

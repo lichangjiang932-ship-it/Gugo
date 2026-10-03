@@ -2,7 +2,6 @@ import {
   callBackgroundModel,
   callBackgroundModelWithTools,
 } from '../adapters/modelProxy.js'
-import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { fetchAndExtract } from '../adapters/toolProxy.js'
 import { dispatchAgenticTool } from '../utils/agenticTools.js'
 import { dispatchApplyPatchTool } from '../utils/applyPatch.js'
@@ -12,13 +11,13 @@ import { dispatchLspTool } from '../utils/lspTool.js'
 import { dispatchMemoryTool } from '../utils/memoryTools.js'
 import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import { requestApproval } from './approvalGate.js'
+import { getSubagentExecutionPolicy } from './subagentExecutionPolicy.js'
 import { dispatchHooks } from './hooksService.js'
-import { hasConfiguredLspProvider } from './lspRuntime.js'
 import {
   normalizePromptContextIds,
-  prepareOptionalPromptContext,
 } from './optionalPromptContext.js'
-import { buildSafetyBlock, prepareInlineSkillsForPrompt } from './promptCompiler.js'
+import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
+import { buildSubagentMessages } from './subagentPromptContext.js'
 import {
   approvalCacheKey,
   createSubagentApprovalContext,
@@ -31,7 +30,7 @@ import {
 } from './subagentBatchRuntime.js'
 import { SUBAGENT_MAX_PER_BATCH } from './subagentBatchConfig.js'
 import { resolveSubagentModelBinding } from './subagentModelBindingRuntime.js'
-import { invokeRuntimeSubagentProvider } from './subagentProvider.js'
+import { constrainedSubagentProviderResolution, invokeRuntimeSubagentProvider } from './subagentProvider.js'
 import {
   MAX_CONCURRENT_PER_USER,
   MAX_SUBAGENT_DEPTH,
@@ -52,6 +51,7 @@ import {
   appendProviderProvenance,
   checkpointFromTrace,
   getSubagentRun,
+  inheritedSubagentContext,
   insertRun,
   makeCheckpointResumable,
   markRunRunning,
@@ -61,6 +61,7 @@ import {
   providerProvenanceFromTrace,
   recoverInterruptedSubagentRuns,
   resolveRunPersistencePort,
+  retainSubagentPolicyTrace,
   saveRunCheckpoint,
   saveRunTrace,
   sideEffectRecoveryError,
@@ -71,6 +72,7 @@ import {
   traceWithCheckpoint,
   updateRun,
 } from './subagentRunState.js'
+import { dispatchSubagentExecutionTool } from './subagentExecutionTools.js'
 import { runSubagentToolLoop } from './subagentToolLoop.js'
 import { searchWeb } from './webSearchService.js'
 export {
@@ -110,23 +112,15 @@ async function executeSubagentTool(toolName, args, {
   idempotentResume = false,
   sideEffectRecoveryPlan = null,
 } = {}) {
+  const execution = dispatchSubagentExecutionTool(toolName, args, {
+    userId, signal, toolCallId, idempotencyKey, idempotentResume, sideEffectRecoveryPlan,
+  })
+  if (execution !== undefined) return execution
   switch (toolName) {
     case 'web_search':
       return searchWeb({ userId, query: args.query, maxResults: args.max_results ?? args.maxResults })
     case 'fetch_url':
       return fetchAndExtract({ url: args.url })
-    case 'read_file':
-    case 'list_directory':
-    case 'write_file':
-    case 'edit_file':
-      return dispatchFsShellTool(toolName, args, {
-        userId,
-        signal,
-        toolCallId,
-        idempotencyKey,
-        idempotentResume,
-        sideEffectRecoveryPlan,
-      })
     case 'grep_code':
     case 'find_symbol':
     case 'list_imports':
@@ -142,6 +136,13 @@ async function executeSubagentTool(toolName, args, {
     case 'request_directory':
     case 'sleep_until':
       return dispatchAgenticTool(toolName, args, { userId })
+    // Control tools the shared loop resolves itself: search_tools mounts from
+    // this run's authorized snapshot, load_skill activates through the same
+    // runtimeSkillActivation as the main agent. The executor only acknowledges.
+    case 'search_tools':
+      return { ok: true, query: String(args?.query || '').trim(), requestedLimit: args?.limit }
+    case 'load_skill':
+      return { ok: true, requestedSkillId: String(args?.skill_id || '').trim() }
     case 'Agent': {
       const rawRequest = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
       const request = { ...rawRequest }
@@ -229,8 +230,10 @@ function normalizeSubagentInput(options = {}) {
     throw new Error(`subagent depth must be between 0 and ${MAX_SUBAGENT_DEPTH}`)
   }
   input.normalizedPrompt = String(input.prompt).trim()
+  getSubagentExecutionPolicy(input.approvalContext, { userId: input.userId })
   return input
 }
+
 async function prepareSubagentRuntime(input) {
   const runPersistence = resolveRunPersistencePort(input.persistencePort)
   const storedRun = await runPersistence.getRun({ id: input.id, userId: input.userId })
@@ -249,6 +252,7 @@ async function prepareSubagentRuntime(input) {
       return { terminal: toRun(storedRun) }
     }
   }
+  const effectiveApprovalContext = inheritedSubagentContext(input, storedTrace)
   const requestedModelName = String(
     storedRun ? (storedRun.modelName || '') : (input.modelName || ''),
   ).trim() || null
@@ -261,13 +265,15 @@ async function prepareSubagentRuntime(input) {
   const normalizedConfigRevision = Number.isInteger(requestedRevision) && requestedRevision > 0
     ? requestedRevision
     : null
-  const modelBinding = input.resolveModelBinding({
+  const resolvedBinding = input.resolveModelBinding({
     userId: input.userId,
     providerId: requestedProviderId || '',
     modelName: requestedModelName || '',
     configRevision: normalizedConfigRevision,
     requirePersistedBinding: Boolean(storedRun),
   })
+  const modelBinding = { ...resolvedBinding,
+    env: resolvedBinding.env ? Object.freeze({ ...resolvedBinding.env }) : null }
   if (storedRun) {
     const callerProviderId = String(input.modelProviderId || '').trim()
     const callerModelName = String(input.modelName || '').trim()
@@ -283,10 +289,11 @@ async function prepareSubagentRuntime(input) {
   const trace = storedRun
     ? storedTrace
     : [
-        { type: 'start', description: input.description, locale: normalizedLocale, at: now() },
+        { type: 'start', description: input.description, locale: normalizedLocale, agentId: input.agentId, at: now() },
         ...(input.team ? [{ type: 'team', team: input.team, at: now() }] : []),
       ]
   if (storedRun) trace.push({ type: 'resume', fromStatus: storedRun.status, at: now() })
+  retainSubagentPolicyTrace(trace, effectiveApprovalContext, input.userId)
   const state = {
     checkpointState: checkpointFromTrace(trace),
     ownsRunAttempt: false,
@@ -301,7 +308,7 @@ async function prepareSubagentRuntime(input) {
     modelBinding,
     slotLease,
     effectiveBudget: input.budget || createJobBudget({ ...SUBAGENT_BUDGET }),
-    effectiveApprovalContext: input.approvalContext || createSubagentApprovalContext(),
+    effectiveApprovalContext,
     trace,
     state,
     onTranscriptEvent(event) {
@@ -355,7 +362,10 @@ async function invokeSubagentProviderPhase(runtime) {
     const initialTeam = storedRun
       ? parseTrace(storedRun.trace).find((event) => event?.type === 'team')?.team
       : input.team
-    resolution = await input.invokeSubagentProvider({
+    const policy = getSubagentExecutionPolicy(runtime.effectiveApprovalContext, { userId: input.userId })
+    const constrained = policy?.readOnly || policy?.goalPlanBinding?.planId || policy?.goalPlanBinding?.unknown
+    resolution = constrained ? constrainedSubagentProviderResolution(input.invokeSubagentProvider)
+      : await input.invokeSubagentProvider({
       runId: input.id,
       resume: Boolean(storedRun),
       type: input.type,
@@ -411,48 +421,9 @@ async function invokeSubagentProviderPhase(runtime) {
     id: input.id, userId: input.userId, status, resultText, trace,
   })
 }
-function buildSubagentMessages(runtime) {
-  const { input } = runtime
-  const { system, tools } = SUBAGENT_TYPES[input.type]
-  const effectiveTools = tools.filter((spec) => (
-    spec?.function?.name !== 'lsp' || hasConfiguredLspProvider()
-  ))
-  const promptContextMessages = prepareOptionalPromptContext({
-    preparePromptContext: input.preparePromptContext,
-    input: {
-      userId: input.userId,
-      agentId: input.agentId,
-      skillIds: normalizePromptContextIds(input.skillIds),
-      skillDefinitions: prepareInlineSkillsForPrompt({
-        skillIds: input.skillIds,
-        skillDefinitions: input.skillDefinitions,
-      }),
-      query: input.normalizedPrompt,
-    },
-    scope: 'subagent.prompt',
-  }).messages
-  return {
-    effectiveTools,
-    messages: [
-      { role: 'system', content: buildSafetyBlock().text },
-      ...promptContextMessages,
-      {
-        role: 'system',
-        content: input.type === 'general'
-          ? `${system}\nYou may call Agent with up to ${SUBAGENT_MAX_PER_BATCH} independent tasks to run them in parallel. Nested delegation is bounded to ${MAX_SUBAGENT_DEPTH} levels.`
-          : system,
-      },
-      ...(input.team ? [{
-        role: 'system',
-        content: `# Team Context\nTeam: ${input.team.name} (${input.team.id})\nMode: ${input.team.mode}\nYour role: ${input.team.role || input.description || input.type}\nWork only on your assigned scope. Your transcript is isolated from other members; return a concise result for the leader to merge.`,
-      }] : []),
-      { role: 'user', content: input.normalizedPrompt },
-    ],
-  }
-}
 async function executeBuiltinSubagent(runtime) {
   const { input, modelBinding, state, trace, runPersistence } = runtime
-  const { effectiveTools, messages } = buildSubagentMessages(runtime)
+  const { effectiveTools, messages } = await buildSubagentMessages(runtime)
   if (runtime.storedRun && state.checkpointState) {
     state.checkpointState = makeCheckpointResumable(state.checkpointState)
     trace.splice(0, trace.length, ...traceWithCheckpoint(trace, state.checkpointState))

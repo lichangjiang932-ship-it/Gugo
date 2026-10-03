@@ -11,6 +11,7 @@ import { checkBashCommandDanger } from './bashGuard.js'
 import { createHash } from 'node:crypto'
 import { CONNECTOR_WRITE_TOOL_SET } from '../../shared/connectorWriteTools.js'
 import { findMatchingTaskGrant } from './taskGrants.js'
+import { isReadOnlySubagentRequest } from './subagentTaskPolicy.js'
 
 export const APPROVAL_MODES = Object.freeze(['off', 'unattended', 'all'])
 export const DEFAULT_APPROVAL_MODE = 'unattended'
@@ -80,8 +81,12 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   // 浏览器自动化:能在已登录的会话里代替用户点按钮 = 可发消息/可下单
   browser_click: 'medium',
   browser_type: 'medium',
+  browser_upload_file: 'high',
+  browser_download: 'high',
   browser_select: 'medium',
   browser_press: 'medium',
+  browser_switch_tab: 'low',
+  browser_switch_frame: 'low',
   browser_open_url: 'low',
   browser_navigate: 'low',
   // 连接器:打开外部应用
@@ -95,11 +100,19 @@ const ALWAYS_CONFIRM_TOOLS = CONNECTOR_WRITE_TOOL_SET
 
 /** 一望即知无副作用的读类工具,永不审批(白名单优先于上表)。 */
 export const NEVER_APPROVE_TOOLS = Object.freeze([
+  'load_skill',
+  'search_tools',
   'reflect',
   'request_clarification',
   'request_directory',
   'sleep_until',
   'manage_todos',
+  // Writes one episode into the agent's own journal under <workspace>/.agent/.
+  // Listed explicitly rather than left to the name heuristic: were it ever renamed
+  // to something matching WRITE_INTENT_RE it would start prompting on nearly every
+  // turn, and a user trained to approve reflexively is worse off than one whose
+  // agent keeps a bounded, deletable log.
+  'record_experience',
   'read_file',
   'list_directory',
   'grep_code',
@@ -108,6 +121,8 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'lsp',
   'git_status',
   'git_diff',
+  'git_log',
+  'git_blame',
   'image_info',
   'media_probe',
   'pdf_info',
@@ -116,6 +131,8 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'file_hash_manifest',
   'web_search',
   'browser_state',
+  'browser_tabs',
+  'browser_frames',
   'browser_snapshot',
   'browser_console',
   'browser_screenshot',
@@ -137,14 +154,20 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
 
 const NEVER = new Set(NEVER_APPROVE_TOOLS)
 
-// Plan mode exposes only local, side-effect-free inspection tools to the
-// model. Network/connector/dynamic tools fail closed even when they describe
-// themselves as read-only. The same allowlist is also enforced at execution.
+// Plan mode exposes only side-effect-free inspection tools to the model. As in
+// Claude Code's plan mode that includes research — web search, a read-only
+// fetch, and read-only (explore/plan) subagents — but never a write, a command,
+// a non-GET request or a dynamic/connector tool, even one that describes itself
+// as read-only. The same allowlist is also enforced at execution.
 const PLAN_LOCAL_READ_TOOLS = new Set([
+  'load_skill',
+  'search_tools',
+  'read_skill_resource',
   'reflect',
   'request_clarification',
   'request_directory',
   'manage_todos',
+  'goal_plan_status',
   'read_artifact_source',
   'list_directory',
   'read_file',
@@ -154,6 +177,8 @@ const PLAN_LOCAL_READ_TOOLS = new Set([
   'lsp',
   'git_status',
   'git_diff',
+  'git_log',
+  'git_blame',
   'image_info',
   'media_probe',
   'pdf_info',
@@ -161,7 +186,23 @@ const PLAN_LOCAL_READ_TOOLS = new Set([
   'archive_list',
   'file_hash_manifest',
   'process_list',
+  'web_search',
 ])
+
+/**
+ * Plan-mode tools whose read-only-ness depends on the call: visible to the
+ * model, but each call is judged by its arguments at execution.
+ */
+const PLAN_CONDITIONAL_READ_TOOLS = new Set(['fetch_url', 'Agent'])
+
+function isPlanReadOnlyCall(name, args = {}) {
+  if (PLAN_LOCAL_READ_TOOLS.has(name)) return true
+  if (name === 'fetch_url') {
+    return SAFE_HTTP_METHODS.has(str(args?.method).toUpperCase() || 'GET')
+  }
+  if (name === 'Agent') return isReadOnlySubagentRequest(args)
+  return false
+}
 
 export function isToolVisibleInPermissionMode(toolName, permissionMode = DEFAULT_PERMISSION_MODE) {
   const name = str(toolName).trim()
@@ -169,7 +210,7 @@ export function isToolVisibleInPermissionMode(toolName, permissionMode = DEFAULT
   const mode = PERMISSION_MODES.includes(permissionMode)
     ? permissionMode
     : DEFAULT_PERMISSION_MODE
-  return mode !== 'plan' || PLAN_LOCAL_READ_TOOLS.has(name)
+  return mode !== 'plan' || PLAN_LOCAL_READ_TOOLS.has(name) || PLAN_CONDITIONAL_READ_TOOLS.has(name)
 }
 
 /** 动态工具(MCP / 插件)里带这些词的按写操作处理。 */
@@ -252,8 +293,29 @@ function str(value) {
   return typeof value === 'string' ? value : ''
 }
 
+const PREVIEW_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+
+/** The preview opens this machine; anywhere else is the reader's decision. */
+function externalPreviewUrl(value) {
+  try {
+    const parsed = new URL(str(value).trim())
+    if (!/^https?:$/.test(parsed.protocol)) return null
+    return PREVIEW_LOOPBACK_HOSTS.has(parsed.hostname) ? null : parsed.origin
+  } catch {
+    return null
+  }
+}
+
 function explicitConfirmationReason(toolName, args = {}) {
-  if (toolName !== 'pdf_transform') return null
+  const name = str(toolName).trim()
+  if (name === 'preview_navigate') {
+    // Localhost is what the preview is for and needs no ceremony; an address that
+    // leaves this machine is asked about once, and "remember" answers it for that
+    // address afterwards.
+    const external = externalPreviewUrl(args.url)
+    return external ? `预览将打开本机之外的地址：${external}` : null
+  }
+  if (name !== 'pdf_transform') return null
   const operation = str(args.operation).trim().toLowerCase()
   if (operation === 'fill_form') return '填写 PDF 表单可能写入错误或敏感内容'
   if (operation === 'overlay_text') return '覆盖 PDF 原文区域可能遮盖既有内容'
@@ -316,8 +378,18 @@ function applyArgumentRisk(name, safeArgs, initialRisk, initialReason) {
     const method = str(safeArgs.method).toUpperCase() || 'GET'
     risk = higher(risk, 'medium')
     reason = `对外发起 ${method} 请求`
+  } else if (name === 'browser_upload_file') {
+    risk = higher(risk, 'high')
+    reason = '把已授权的本地文件提交给当前网页'
+  } else if (name === 'browser_download') {
+    risk = higher(risk, 'high')
+    reason = '从已登录网页下载并写入已授权的本地路径'
   } else if (['browser_click', 'browser_type', 'browser_select', 'browser_press'].includes(name)) {
     reason = '在已登录的浏览器会话中代为操作'
+  } else if (name === 'browser_switch_tab') {
+    reason = '切换到另一个浏览器标签页或弹窗'
+  } else if (name === 'browser_switch_frame') {
+    reason = '切换到另一个已授权浏览器框架'
   } else if (name === 'browser_open_url' || name === 'browser_navigate' || name === 'connected_app_open') {
     reason = '打开外部应用'
   } else if (name === 'qq_mail_send') {
@@ -382,7 +454,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     // capability must not inherit plan privileges merely by reusing a builtin
     // read-only name such as read_file. The no-metadata case remains supported
     // for the small pure-policy API used by legacy callers and unit tests.
-    if (PLAN_LOCAL_READ_TOOLS.has(name)
+    if (isPlanReadOnlyCall(name, safeArgs)
       && (!metadata || metadata.origin === 'builtin')) {
       return { needsApproval: false, risk: 'low', reason: null }
     }
@@ -390,7 +462,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       needsApproval: false,
       denied: true,
       risk: APPROVAL_REQUIRED_TOOLS[name] || 'medium',
-      reason: '当前是计划模式（仅限工作区只读）。该工具仍已加载，但写入、命令、网络和外部工具被策略禁止执行。请切换到自动接受编辑模式或正常模式后继续。',
+      reason: '当前是计划模式（只读调研）。该工具仍已加载，但写入、命令、非 GET 请求、可写子代理和外部工具被策略禁止执行。请继续只读调研，把要做的改动写进计划交给用户批准；用户切换到自动接受编辑模式或正常模式后才会执行。',
     }
   }
   if (NEVER.has(name)) return { needsApproval: false, risk: 'low', reason: null }
@@ -412,7 +484,12 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       return { needsApproval: false, risk: 'low', reason: null }
     }
     risk = metadata.riskClass === 'exec' ? 'high' : 'medium'
-    reason = metadata.reason || (metadata.riskClass === 'write_local' ? '修改本地数据' : metadata.riskClass === 'exec' ? '执行外部工具' : '调用可能产生副作用的外部工具')
+    // A reason built from this call's own arguments beats the tool's generic one:
+    // "预览将打开本机之外的地址：https://example.com" tells the reader what they
+    // are deciding about, and "调用可能产生副作用的外部工具" does not.
+    reason = parameterConfirmationReason
+      || metadata.reason
+      || (metadata.riskClass === 'write_local' ? '修改本地数据' : metadata.riskClass === 'exec' ? '执行外部工具' : '调用可能产生副作用的外部工具')
   }
 
   if (!risk) {

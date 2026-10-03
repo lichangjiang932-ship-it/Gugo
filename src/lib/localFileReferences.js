@@ -4,81 +4,20 @@ import {
   normalizeArtifactReferenceType,
 } from './artifactReferences.js'
 import { normalizeVerifiedLocalFilePath } from './verifiedLocalFileIdentity.js'
+import {
+  MUTATION_TOOL_NAMES,
+  absolutePath,
+  callArguments,
+  callId,
+  callName,
+  callResult,
+  callSucceeded,
+  isDryRunCall,
+  resultPaths,
+  validChangeStats,
+  workspacePathResolver,
+} from './toolCallMutationEvidence.js'
 
-const MUTATION_TOOL_NAMES = new Set([
-  'apply_patch',
-  'bash_exec',
-  'edit_file',
-  'multi_edit',
-  'patch_file',
-  'run_command',
-  'write_file',
-])
-
-function parseObject(value) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value
-  if (typeof value !== 'string' || !value.trim()) return null
-  try {
-    const parsed = JSON.parse(value)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function callName(call = {}) {
-  return String(call?.name || call?.function?.name || '').trim()
-}
-
-function callArguments(call = {}) {
-  return parseObject(call?.args)
-    || parseObject(call?.arguments)
-    || parseObject(call?.function?.arguments)
-    || {}
-}
-
-function callResult(call = {}) {
-  const result = parseObject(call?.result)
-  if (!result) return null
-  if (!result.path && !result.changes && typeof result.content === 'string') {
-    return parseObject(result.content) || result
-  }
-  return result
-}
-
-function callSucceeded(call, result) {
-  const status = String(call?.status || '').trim().toLowerCase()
-  if (['cancelled', 'error', 'failed'].includes(status)) return false
-  return result?.ok !== false && !call?.error
-}
-
-function absolutePath(value) {
-  const path = String(value || '').trim()
-  const key = normalizeVerifiedLocalFilePath(path)
-  return key ? { key, path } : null
-}
-
-function resultPaths(result = {}) {
-  const values = [
-    result.path,
-    result.fullPath,
-    result.outputPath,
-    ...(Array.isArray(result.changedFiles) ? result.changedFiles : []),
-    ...(Array.isArray(result.changedPaths) ? result.changedPaths : []),
-    ...(Array.isArray(result.outputPaths) ? result.outputPaths : []),
-    ...(Array.isArray(result.changes) ? result.changes.map((change) => change?.path) : []),
-  ]
-  const paths = new Map()
-  for (const value of values) {
-    const normalized = absolutePath(value)
-    if (normalized) paths.set(normalized.key, normalized.path)
-  }
-  return paths
-}
-
-function callId(call = {}) {
-  return String(call?.id || call?.toolCallId || '').trim()
-}
 
 function artifactIdsFromResult(result = {}, paths = new Map()) {
   const idsByPath = new Map([...paths.keys()].map((key) => [key, new Set()]))
@@ -145,26 +84,21 @@ function mutationEvidence(toolCalls = []) {
   return mutations
 }
 
-function validChangeStats(result) {
-  if (!Array.isArray(result?.changes)) return []
-  const changes = []
-  for (const change of result.changes) {
-    if (!change || typeof change !== 'object' || Array.isArray(change)) continue
-    const normalized = absolutePath(change.path)
-    const additions = change.additions
-    const deletions = change.deletions
-    if (!normalized
-      || !Number.isSafeInteger(additions)
-      || additions < 0
-      || !Number.isSafeInteger(deletions)
-      || deletions < 0) continue
-    changes.push({
-      key: normalized.key,
-      additions,
-      deletions,
-    })
+export function toolCallChangeStats(call = {}, { workspacePath = '' } = {}) {
+  const name = callName(call)
+  const result = callResult(call)
+  if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)) return null
+  if (isDryRunCall(call, result)) return null
+  const changes = validChangeStats(result, workspacePathResolver(workspacePath))
+  if (changes.length === 0) return null
+  let additions = 0
+  let deletions = 0
+  for (const change of changes) {
+    additions += change.additions
+    deletions += change.deletions
   }
-  return changes
+  if (!Number.isSafeInteger(additions) || !Number.isSafeInteger(deletions)) return null
+  return { additions, deletions }
 }
 
 /**
@@ -507,3 +441,5 @@ export function retainedLocalFileOpenPayload(reference) {
 export function localFileOpenPayload(reference) {
   return verifiedLocalFileOpenPayload(reference) || retainedLocalFileOpenPayload(reference)
 }
+
+/** The path as a reader thinks of it: relative to the project they are in. */

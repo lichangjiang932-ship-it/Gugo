@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { isContextLengthError } from '../server/adapters/modelProxy.js'
+import { runToolLoop } from '../server/services/loop/index.js'
 import {
   callModelWithContextRecovery,
   getAutoCompactionThreshold,
@@ -45,6 +46,18 @@ test('认得各家本地推理服务器的上下文溢出文案', () => {
     // OpenAI 原本就认得的,不能回归
     { status: 400, message: 'context_length_exceeded' },
     { status: 400, message: 'Please reduce the length of the messages' },
+    { status: 400, message: 'prompt too long; exceeded max context length by 1234 tokens' },
+    { status: 413, message: 'prompt too long' },
+    { status: 400, message: 'Trying to keep the first 4096 tokens when context overflows' },
+    { status: 400, message: 'The input token count (300000) exceeds the maximum number of tokens allowed' },
+    { status: 422, message: 'maximum context length is 32768 tokens' },
+    // 本应用自己的附件预算守卫:请求还没发出去就判定塞不下。它和上游溢出是同一种
+    // 情况,必须走同一条压缩恢复,否则用户的两个 docx 附件会把整轮任务判死。
+    {
+      status: 413,
+      code: 'ATTACHMENT_CONTEXT_BUDGET_EXCEEDED',
+      message: '附件展开后的请求仍超出上下文预算（估算 9000 token，阈值 6000 token）。',
+    },
   ]
   for (const error of cases) {
     assert.equal(isContextLengthError(error), true, `应识别: ${error.message}`)
@@ -58,6 +71,17 @@ test('不把无关错误误判成上下文溢出', () => {
     { status: 400, message: 'invalid tool_choice value' },
     { status: 429, message: 'rate limit exceeded' },
     { status: 500, message: 'internal server error' },
+    { status: 400, message: 'context field is required' },
+    { status: 413, message: 'request body too large' },
+    { status: 422, message: 'invalid tool schema' },
+    { status: 500, message: 'could not create inference context' },
+    { status: 400, message: 'The output token count exceeds the maximum number of tokens allowed' },
+    { status: 429, message: 'The input token count exceeds the maximum number of tokens allowed per minute' },
+    { status: 403, message: 'maximum context length is not available for this credential' },
+    { status: 503, message: 'prompt too long' },
+    // 名字相近但不是上下文问题:附件本身太大/格式不对,压缩救不了它。
+    { status: 413, code: 'ATTACHMENT_TOO_LARGE', message: 'attachment exceeds the upload limit' },
+    { status: 413, code: 'REQUEST_BODY_BUDGET_EXCEEDED', message: 'request body budget exceeded' },
     {},
     null,
   ]
@@ -96,7 +120,38 @@ test('第一次溢出后强制压缩重试,成功就正常返回', async () => {
   assert.equal(result.response.content, '压缩之后就跑通了')
 })
 
+test('附件预算守卫触发的溢出也走压缩重试,而不是把整轮判死', async () => {
+  // 用户真实场景:会话本身已经贴着阈值,再挂两个 docx 附件。守卫在请求发出前
+  // 抛 413 —— 这一轮必须像上游溢出一样被压缩重试,否则任务永远是「未完成」。
+  const guardError = Object.assign(
+    new Error('附件展开后的请求仍超出上下文预算（估算 9000 token，阈值 6000 token）。'),
+    { code: 'ATTACHMENT_CONTEXT_BUDGET_EXCEEDED', status: 413, retryable: false },
+  )
+  let attempts = 0
+  const result = await callModelWithContextRecovery({
+    messages: [
+      { role: 'system', content: '系统指令' },
+      ...Array.from({ length: 30 }, (_, i) => ({ role: 'user', content: `历史消息 ${i} `.repeat(50) })),
+    ],
+    tools: [],
+    contextWindow: 4096,
+    isContextLengthError,
+    // 摘要模型是另一条链路:压缩本身要能工作,才谈得上「压缩后重试」。
+    callSummaryModel: async () => ({ content: '对话摘要', toolCalls: [] }),
+    callModel: async () => {
+      attempts += 1
+      if (attempts === 1) throw guardError
+      return { content: '压缩之后附件就放得下了', toolCalls: [] }
+    },
+  })
+  assert.ok(attempts >= 2, '守卫报错后必须压缩再试一次')
+  // 第二次请求必须是「强制压缩」后的结果，而不是原样重发。
+  assert.equal(result.recovery.forced, true)
+  assert.equal(result.response.content, '压缩之后附件就放得下了')
+})
+
 test('三级全部失败时给出可操作的说明,而不是上游原文', async () => {
+  const upstreamError = contextError()
   await assert.rejects(
     () => callModelWithContextRecovery({
       messages: [
@@ -107,16 +162,68 @@ test('三级全部失败时给出可操作的说明,而不是上游原文', asyn
       contextWindow: 2048,
       isContextLengthError,
       // 无论压缩成什么样都塞不下 —— 模拟「工具 schema 本身就超窗」
-      callModel: async () => { throw contextError() },
+      callModel: async () => { throw upstreamError },
     }),
     (error) => {
       assert.equal(error.code, 'CONTEXT_UNRECOVERABLE')
       // ★ 原实现第三级没有 catch,冒上去的是 "the request exceeds..." 这种
       // 用户完全不知道该做什么的原文。
       assert.match(error.message, /上下文窗口|工具/)
+      assert.match(error.message, /请确认服务提供商的上下文窗口配置/)
+      assert.match(error.message, /缩短本轮输入/)
+      assert.match(error.message, /上下文窗口更大的模型/)
+      assert.strictEqual(error.cause, upstreamError)
       return true
     },
   )
+})
+
+test('tool loop context recovery preserves localized advice and the original failure evidence', async (t) => {
+  const cases = [
+    {
+      locale: 'zh',
+      advice: [/请确认服务提供商的上下文窗口配置/, /缩短本轮输入/, /上下文窗口更大的模型/],
+      rejected: /Context recovery/,
+    },
+    {
+      locale: 'en',
+      advice: [/Check that the provider's context-window configuration/, /shorten this turn's input/, /model with a larger context window/],
+      rejected: /[\u3400-\u9fff]/u,
+    },
+  ]
+  for (const { locale, advice, rejected } of cases) {
+    await t.test(locale, async () => {
+      const upstreamError = contextError()
+      let attempts = 0
+      await assert.rejects(() => runToolLoop({
+        job: { id: `context-advice-${locale}`, userId: `context-advice-${locale}-user`, origin: 'chat', locale, prompt: 'Answer briefly.' },
+        step: { id: `context-advice-${locale}`, kind: 'chat' },
+        messages: [{ role: 'user', content: 'Answer briefly.' }],
+        toolSpecs: [], intentMode: 'answer', maxIters: 1, enableToolHooks: false,
+        contextWindow: 2048,
+        runModel: async (request) => {
+          attempts += 1
+          assert.equal(Object.hasOwn(request, 'locale'), false, 'presentation locale must not leak into model options')
+          throw upstreamError
+        },
+      }), (error) => {
+        assert.equal(error.code, 'CONTEXT_UNRECOVERABLE')
+        assert.strictEqual(error.cause, upstreamError)
+        assert.equal(error.compactionErrorCode, 'CONTEXT_COMPACTION_REFUSED')
+        assert.equal(typeof error.compactionError, 'string')
+        assert.ok(error.compactionError.length > 0)
+        for (const expected of advice) assert.match(error.message, expected)
+        assert.doesNotMatch(error.message, rejected)
+        assert.equal(error.noProgress, true, 'the failure explains that the retry would be identical')
+        return true
+      })
+      // Reported defect: with nothing left to compact, the recovery loop sent
+      // the identical request three times. The retry is now suppressed, and the
+      // error says so. Localization still must not change the behaviour, which
+      // is why both locales assert the same count.
+      assert.equal(attempts, 1, 'an identical retry must not be re-sent')
+    })
+  }
 })
 
 test('非上下文错误不走恢复流程,原样上抛', async () => {

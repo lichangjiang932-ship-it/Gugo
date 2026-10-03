@@ -82,6 +82,7 @@ function makeRunModelRequestState({ locale = 'en', wrapUpText = '' } = {}) {
       DIRECTORY_REVIEW_GUARD_MARKER: '[directory-review]',
       budgetExceededCopy,
       extractTextToolCalls: () => ({ detected: false }),
+      salvageBareJsonToolCall: () => ({ detected: false }),
       filterCurrentDynamicToolSpecs: (specs) => specs,
       formatIncompleteTerminalText: () => '',
       getToolMetadata: () => ({ isReadOnly: true }),
@@ -137,6 +138,13 @@ test('localized terminal model text enforces both locales when strict terminal c
     localizedTerminalModelText('zh', '进度已经保存。', { strictLocale: true }),
     '进度已经保存。',
   )
+})
+
+test('strict English presentation preserves short replies and unfamiliar Latin-script terms', () => {
+  for (const value of ['All set.', 'Everything succeeded.', 'Authentication restored.', 'Résumé export succeeded.']) {
+    assert.equal(localizedTerminalModelText('en', value, { strictLocale: true }), value)
+  }
+  assert.equal(localizedTerminalModelText('en', '12345', { strictLocale: true }), '')
 })
 
 test('partial-result defaults, redaction, and path arrays follow the locale', () => {

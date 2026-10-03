@@ -9,6 +9,8 @@ import {
   isLocalEndpoint,
   resolveEndpointProfile,
 } from '../server/utils/endpointProfile.js'
+import { resolveModelConfigForModel } from '../server/adapters/modelProviderConfig.js'
+import { profileForConfig } from '../server/adapters/modelEndpoint.js'
 
 test('kind 按端口推断', () => {
   assert.equal(inferEndpointKind('http://localhost:11434'), 'ollama')
@@ -418,4 +420,58 @@ test('空入参不抛', () => {
   assert.equal(typeof profile.kind, 'string')
   assert.equal(profile.isLocal, false)
   assert.ok(profile.contextWindow > 0)
+})
+
+test('Anthropic cache TTL legacy beta is off by default and requires an explicit boolean opt-in', () => {
+  const input = { baseUrl: 'https://api.anthropic.com/v1', modelName: 'claude-fixture', env: { MODEL_PROMPT_CACHE_RETENTION: 'long' } }
+  assert.equal(resolveEndpointProfile(input).requiresPromptCacheTtlBeta, false)
+  assert.equal(resolveEndpointProfile({ ...input, overrides: { requiresPromptCacheTtlBeta: true } }).requiresPromptCacheTtlBeta, true)
+  for (const value of [false, undefined, null, '', 'true', 'false', 1, 0, {}, []]) {
+    assert.equal(resolveEndpointProfile({ ...input, overrides: { requiresPromptCacheTtlBeta: value } }).requiresPromptCacheTtlBeta,
+      false, `non-boolean opt-in ${String(value)} must not enable a legacy header`)
+  }
+})
+
+test('named ENV profile and exact model profiles reach the real config-to-endpoint pipeline', () => {
+  for (const collection of ['models', 'modelProfiles']) {
+    const env = { MODEL_PROVIDERS: 'gateway', MODEL_PROVIDER_GATEWAY_BASE_URL: 'https://legacy-gateway.example.invalid/v1',
+      MODEL_PROVIDER_GATEWAY_MODELS: 'legacy,ga,sibling', MODEL_PROVIDER_GATEWAY_PROFILE: JSON.stringify({
+        kind: 'anthropic', requiresPromptCacheTtlBeta: true,
+        [collection]: { ga: { requiresPromptCacheTtlBeta: false }, sibling: { contextWindow: 8192 } },
+      }) }
+    for (const [modelName, expected] of [['legacy', true], ['ga', false], ['sibling', true]]) {
+      const config = resolveModelConfigForModel({ modelName, providerId: 'gateway', env })
+      assert.equal(config.configured, true)
+      const profile = profileForConfig(config, env)
+      assert.equal(profile.kind, 'anthropic')
+      assert.equal(profile.requiresPromptCacheTtlBeta, expected, `${collection}/${modelName}`)
+    }
+  }
+})
+
+test('cache TTL compatibility overrides use exact model identity and do not affect siblings', () => {
+  const env = { MODEL_PROVIDERS: 'gateway', MODEL_PROVIDER_GATEWAY_BASE_URL: 'https://legacy-gateway.example.invalid/v1',
+    MODEL_PROVIDER_GATEWAY_MODELS: 'legacy,legacy-latest,ordinary', MODEL_PROVIDER_GATEWAY_PROFILE: JSON.stringify({
+      kind: 'anthropic', models: { legacy: { requiresPromptCacheTtlBeta: true } },
+    }) }
+  for (const modelName of ['legacy', 'legacy-latest', 'ordinary']) {
+    const profile = profileForConfig(resolveModelConfigForModel({ modelName, providerId: 'gateway', env }), env)
+    assert.equal(profile.requiresPromptCacheTtlBeta, modelName === 'legacy')
+  }
+  const topLevel = profileForConfig({
+    ...resolveModelConfigForModel({ modelName: 'legacy', providerId: 'gateway', env }),
+    modelProfiles: { legacy: { requiresPromptCacheTtlBeta: false } },
+  }, env)
+  assert.equal(topLevel.requiresPromptCacheTtlBeta, false, 'an exact top-level profile retains precedence')
+})
+
+test('non-Anthropic endpoint profiles remain unaffected by the legacy Anthropic cache flag', () => {
+  for (const kind of ['openai-compatible', 'gemini', 'ollama', 'lmstudio', 'llamacpp', 'vllm']) {
+    const base = { baseUrl: 'https://gateway.example.invalid/v1', modelName: 'fixture', env: {}, overrides: { kind } }
+    const ordinary = resolveEndpointProfile(base)
+    const requested = resolveEndpointProfile({ ...base, overrides: { kind, requiresPromptCacheTtlBeta: true,
+      models: { fixture: { requiresPromptCacheTtlBeta: true } } } })
+    assert.equal(requested.requiresPromptCacheTtlBeta, false)
+    assert.deepEqual(requested, ordinary)
+  }
 })

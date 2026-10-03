@@ -1,4 +1,5 @@
 import { observeLoopEvent } from './eventIsolation.js'
+import { emitWirePreparation } from './runtimeContextDiagnostics.js'
 import {
   appendModelProviderAttempt,
   createModelInvocation,
@@ -8,6 +9,13 @@ import {
 } from './modelInvocationCheckpoint.js'
 import { installArtifactSteeringContract } from './runtime-initializeArtifactSteering.js'
 import { installTerminalCompletion } from './runtime-initializeTerminalCompletion.js'
+import { discardContinuedAnswer } from './outputContinuation.js'
+import { assertContextRecoveryActive } from '../contextCompactionState.js'
+import { publicModelRequestDiagnostics, snapshotInterruptedModelRequest } from './modelGenerationRecovery.js'
+import { SEMANTIC_SUMMARY_CACHE_HIT, semanticSummaryError } from '../contextSemanticSummaryPolicy.js'
+import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { isContextOverflowWithoutGeneration } from '../../adapters/modelContextOverflow.js'
+import { assertCompactionRequestSettled, assertMainRequestSettled, cachedCompactionResponse, cacheCompactionResponse, compactionInvocationState, createCompactionRecoveryCheckpoint, restoreCompactionCheckpoint } from './compactionCheckpoint.js'
 
 export function resolveExecutionBudgetOptions(job, restoredBudget) {
   if (!restoredBudget || typeof restoredBudget !== 'object') return restoredBudget
@@ -21,6 +29,7 @@ function installSteeringMessageRuntime(s) {
     requestedArtifactOutputDirective } = s.d
   s.appendSteeringMessages = (messages = []) => {
     if (!messages.length) return 0
+    discardContinuedAnswer(s)
     s.repeatCallGuard.reset()
     s.loopGuard.resetRepetition?.()
     s.pendingRepeatCallReminder = null
@@ -102,7 +111,7 @@ async function prepareTrackedInvocation(s, context, preparedRequest, attempt) {
     s.modelInvocation = resolution.invocation || null
     let recoveredBudgetError = null
     if (resolution.kind === 'replay' && resolution.invocation?.usageApplied === false) {
-      try { recordRecoveredModelResult(s.budget, resolution.response, context.budgetOptions) }
+      try { recordRecoveredModelResult(s.budget, resolution.response, { ...context.budgetOptions, modelCallAlreadyCounted: resolution.invocation.callBudgetApplied === true }) }
       catch (error) { recoveredBudgetError = error }
       s.modelInvocation = { ...resolution.invocation, usageApplied: true }
     }
@@ -180,6 +189,11 @@ async function prepareTrackedInvocation(s, context, preparedRequest, attempt) {
         },
       })
       context.assertActive()
+      if (providerAttempt.wireDiagnostics) {
+        await emitWirePreparation(s, { wireDiagnostics: providerAttempt.wireDiagnostics,
+          modelRequestId: invocation.id, physicalAttempt: providerAttempt.sequence, configRevision: invocation.configRevision })
+      }
+      context.assertActive()
     },
   }
 }
@@ -193,11 +207,22 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
   }
   const invocation = context.preparedInvocation?.invocation
   try {
+    const summaryBudget = context.consumeSummaryBudget?.(1)
+    if (summaryBudget?.ok === false) {
+      throw Object.assign(semanticSummaryError('SUMMARY_BUDGET_EXCEEDED', summaryBudget.reason || 'Semantic summary budget exceeded'), { modelRequestOutcome: 'not_sent' })
+    }
     const response = await runWithModelBudget(
       s.budget,
       () => {
         context.assertActive()
-        return s.runModel(preparedRequest)
+        s.modelInvocation = { ...s.modelInvocation, callBudgetApplied: true }
+        return s.runModel({
+          ...preparedRequest,
+          onToolCallProgress: async (progress) => {
+            context.assertActive()
+            await context.heartbeat.recordToolProgress?.(progress)
+          },
+        })
       },
       context.budgetOptions,
     )
@@ -222,6 +247,23 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
     if (context.requestFenceFailures.has(error)) throw error
     context.assertActive()
     const checkpointed = s.modelInvocation?.id === invocation.id ? s.modelInvocation : invocation
+    if (error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN') {
+      // Diagnostics are not a response or proof of non-execution. Keep the
+      // invocation unknown/in-flight and all existing reconciliation fences.
+      if (s.signal?.aborted || preparedRequest.signal?.aborted) throw error
+      const diagnostics = checkpointed.status === 'in_flight' ? snapshotInterruptedModelRequest(checkpointed, error) : null
+      if (diagnostics) {
+        context.assertActive()
+        s.modelInvocation = { ...checkpointed, modelRequestDiagnostics: diagnostics }
+        await s.checkpointBarrier.flush({ meta: {
+          boundary: 'model-request-diagnostics', iteration: s.iter,
+          attempt: invocation.attempt, modelRequestId: invocation.id,
+        } })
+        context.assertActive()
+        try { error.modelRequestDiagnostics = publicModelRequestDiagnostics(diagnostics) } catch { /* retain frozen primary error */ }
+      }
+      throw error
+    }
     if (error?.partialModelResult) {
       s.modelInvocation = {
         ...checkpointed,
@@ -257,10 +299,14 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
     }
     if (error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN' || error?.unsafeToReplay === true) throw error
     context.assertActive()
+    const failureUsage = error?.modelRequestOutcome === 'failed' && isContextOverflowWithoutGeneration(error)
+      ? normalizeModelUsage(error.usage) : null
+    if (failureUsage && checkpointed.failureUsageApplied !== true) s.budget.trackModelUsage?.(failureUsage)
     s.modelInvocation = {
       ...checkpointed,
       status: 'failed',
       errorCode: String(error?.code || 'MODEL_CALL_FAILED'),
+      ...(failureUsage ? { failureUsage, failureUsageApplied: true } : {}),
     }
     context.assertActive()
     await s.checkpointBarrier.flush({
@@ -329,6 +375,16 @@ async function callTrackedModel(s, options) {
   if (assertRequestActive !== null && typeof assertRequestActive !== 'function') {
     throw new TypeError('assertRequestActive must be a function or null')
   }
+  // A cancelled turn must not start another model request, not even for a
+  // wrap-up answer. Fail before the heartbeat, budget or message preparation so
+  // cancellation never re-enters the model transport.
+  if (requestSignal?.aborted) {
+    const reason = requestSignal.reason
+    if (reason instanceof Error) throw reason
+    const error = new Error('Turn cancelled')
+    error.name = 'AbortError'
+    throw error
+  }
   const requestFenceFailures = new Set()
   const assertActive = () => {
     if (!assertRequestActive) return
@@ -367,22 +423,40 @@ async function callTrackedModel(s, options) {
       messages,
       ephemeralMessages,
       tools,
-      callModel: (modelRequest) => invokeModelWithCompatibilityFallback(s, context, modelRequest),
+      callModel: (modelRequest) => {
+        assertCompactionRequestSettled(s)
+        return invokeModelWithCompatibilityFallback(s, context, modelRequest)
+      },
+      callSummaryModel: async (modelRequest) => {
+        const assertSummaryActive = () => { assertActive(); assertContextRecoveryActive(modelRequest.signal) }
+        assertSummaryActive()
+        const cached = cachedCompactionResponse(s, modelRequest)
+        if (cached) return { ...cached, [SEMANTIC_SUMMARY_CACHE_HIT]: true }
+        assertMainRequestSettled(s)
+        const summaryContext = { ...context, assertActive: assertSummaryActive, budgetOptions: { allowOverBudget: false }, consumeSummaryBudget: consumeBudget, preparedInvocation: null, forcedFallbackUsed: false, heartbeat: { beginRequest: async () => {} } }
+        const response = await invokeModelWithCompatibilityFallback(compactionInvocationState(s), summaryContext, modelRequest)
+        assertSummaryActive()
+        await cacheCompactionResponse(s, modelRequest, response)
+        assertSummaryActive()
+        return summaryContext.preparedInvocation?.cached ? { ...response, [SEMANTIC_SUMMARY_CACHE_HIT]: true } : response
+      },
+      recoveryCheckpoint: createCompactionRecoveryCheckpoint(s),
+      onCompactionProgress: (progress) => s.onModelPhase?.({ phase: progress.phase === 'fallback' ? 'compaction_fallback' : 'compacting', iteration: s.iter, compaction: progress }),
       isContextLengthError,
       contextWindow: s.contextWindow,
+      locale: s.job?.locale,
       semanticSummary: s.semanticSummary,
       signal: requestSignal,
       userId: s.job?.userId || null,
       sessionId: s.recoverySessionId,
       compactionArchivePort: s.compactionArchivePort,
-      ...(typeof consumeBudget === 'function' ? { consumeBudget } : {}),
       ...(toolChoice !== undefined ? { toolChoice } : {}),
       onTextDelta: async (text, metadata = {}) => {
-        if (text) await heartbeat.recordDelta()
+        if (typeof text === 'string' && text.trim()) await heartbeat.recordDelta()
         if (typeof onTextDelta === 'function') await onTextDelta(text, metadata)
       },
       onReasoningDelta: async (text, metadata = {}) => {
-        if (text) await heartbeat.recordDelta()
+        if (typeof text === 'string' && text.trim()) await heartbeat.recordDelta()
         if (typeof onReasoningDelta === 'function') await onReasoningDelta(text, metadata)
       },
     })
@@ -396,6 +470,9 @@ async function callTrackedModel(s, options) {
       })
       assertActive()
     }
+    // The completed model-response checkpoint already contains the recipe.
+    // A subsequent logical request in this live iteration starts a new scope.
+    s.compactionCheckpoint = restoreCompactionCheckpoint()
     return { ...request, messages: stripEphemeralToolMediaMessages(request.messages) }
   } finally {
     await heartbeat.stop()

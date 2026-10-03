@@ -26,18 +26,27 @@ import {
   createDesktopPetDragSession,
   resolveDesktopPetDragMove,
 } from './petDrag.js'
+import { clampPetBounds } from './petBounds.js'
+import { createDesktopHosts } from './desktopHosts.js'
 import {
   configureDesktopMainWindowPermissions,
   createDesktopMainWindow,
   secureDesktopWebContents,
 } from './mainWindowSecurity.js'
 import { configureDesktopUpdates } from './updateSetup.js'
+import { createDesktopFileActionSetup } from './fileActionSetup.js'
 
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, 'preload.cjs')
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.ico')
 const BACKEND_DISCONNECT_TIMEOUT_MS = 16_000
+const desktopFileActions = createDesktopFileActionSetup({ app, dialog, ipcMain, shell })
+const desktopHosts = createDesktopHosts({
+  ipcMain,
+  getApplicationOrigin: () => applicationOrigin,
+  getMainWindow: () => mainWindow,
+})
 
 let mainWindow = null
 let petWindow = null
@@ -78,17 +87,6 @@ function showDesktopPetMenu() {
   return true
 }
 
-function clampPetBounds(bounds) {
-  const display = screen.getDisplayMatching(bounds)
-  const area = display.workArea
-  return {
-    x: Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width),
-    y: Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height),
-    width: bounds.width,
-    height: bounds.height,
-  }
-}
-
 function sendPetState() {
   if (!petWindow || petWindow.isDestroyed()) return
   petWindow.webContents.send('desktop:pet-state', petState)
@@ -98,12 +96,16 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 function sendUpdateStatus(status, details = {}) {
+  if (status !== 'ready') updateReady = false
   if (!mainWindow || mainWindow.isDestroyed()) return
   mainWindow.webContents.send('desktop:update-status', { status, ...details })
 }
 
 function configureDesktopRuntime() {
-  const paths = resolveDesktopDataPaths(app.getPath('userData'))
+  const paths = resolveDesktopDataPaths(app.getPath('userData'), {
+    env: process.env,
+    cwd: app.getAppPath(),
+  })
   const port = resolveDesktopPort(process.env.GUGO_DESKTOP_PORT)
   const pluginRoots = resolveDesktopPluginRoots({
     configured: process.env.CODEX_PLUGIN_ROOTS,
@@ -118,12 +120,13 @@ function configureDesktopRuntime() {
   // A packaged app can be installed next to a source checkout. Never treat a
   // neighbouring developer .env as the desktop user's model configuration.
   process.env.GUGO_LOAD_DOTENV = '0'
+  process.env.GUGO_DESKTOP_BRIDGE_SECRET = desktopFileActions.secret
   process.env.GUGO_SQLITE_DRIVER = 'node'
   process.env.SERVER_HOST = '127.0.0.1'
   process.env.SERVER_PORT = String(port)
-  process.env.APP_DATA_DIR ||= paths.dataDir
-  process.env.APP_DB_PATH ||= paths.database
-  process.env.ARTIFACT_DIR ||= paths.artifacts
+  process.env.APP_DATA_DIR = paths.dataDir
+  process.env.APP_DB_PATH = paths.database
+  process.env.ARTIFACT_DIR = paths.artifacts
   const defaultWorkspaceRoot = path.join(app.getPath('documents'), 'Gugo')
   mkdirSync(defaultWorkspaceRoot, { recursive: true })
   process.env.WORKSPACE_ROOT ||= defaultWorkspaceRoot
@@ -271,7 +274,7 @@ function createPetWindow() {
     const saved = JSON.parse(readFileSync(path.join(stored, 'pet-window.json'), 'utf8'))
     if (Number.isFinite(saved?.x) && Number.isFinite(saved?.y)) bounds = { ...defaultBounds, x: saved.x, y: saved.y }
   } catch { /* use the safe default */ }
-  bounds = clampPetBounds(bounds)
+  bounds = clampPetBounds(bounds, screen.getDisplayMatching(bounds))
 
   const window = new BrowserWindow({
     ...bounds,
@@ -382,6 +385,8 @@ function handlePetDrag(event, payload = {}) {
 }
 
 function registerDesktopIpc() {
+  desktopFileActions.register(() => ({ mainWindow, applicationOrigin }))
+  desktopHosts.register()
   ipcMain.handle('desktop:write-clipboard-text', (event, value) => {
     assertTrustedIpc(event)
     clipboard.writeText(String(value ?? ''))
@@ -415,7 +420,11 @@ function registerDesktopIpc() {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
       throw new Error('desktop runtime config is only available to the main window')
     }
-    const configPath = ensureDesktopRuntimeConfigFile({ userData: app.getPath('userData') })
+    const configPath = ensureDesktopRuntimeConfigFile({
+      userData: app.getPath('userData'),
+      env: process.env,
+      cwd: app.getAppPath(),
+    })
     const openError = await shell.openPath(configPath)
     if (openError) throw new Error(`unable to open desktop runtime config: ${openError}`)
     return { opened: true }
@@ -428,7 +437,11 @@ function registerDesktopIpc() {
   })
   ipcMain.handle('desktop:install-update', async (event) => {
     assertTrustedIpc(event)
-    if (!updateReady) return { ready: false }
+    if (!updateReady || !desktopUpdateRuntime || desktopUpdateRuntime.downloading
+      || !autoUpdater.installerPath || !autoUpdater.downloadedUpdateHelper?.downloadedFileInfo) {
+      updateReady = false
+      return { ready: false }
+    }
     sendUpdateStatus('installing')
     try {
       await stopBackend()
@@ -471,7 +484,7 @@ function registerDesktopIpc() {
       y: current.y + current.height - layout.windowHeight,
       width: layout.windowWidth,
       height: layout.windowHeight,
-    })
+    }, screen.getDisplayMatching(current))
     window.setBounds(next)
     return layout
   })
@@ -569,6 +582,7 @@ if (hasSingleInstanceLock) {
   })
 
   app.on('before-quit', (event) => {
+    desktopHosts.dispose()
     if (allowQuit || (!backendProcess && !backendServer)) return
     event.preventDefault()
     if (!shutdownPromise) {

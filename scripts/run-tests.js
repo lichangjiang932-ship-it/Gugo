@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { availableParallelism, tmpdir } from 'node:os'
-import { join, normalize } from 'node:path'
+import { availableParallelism, tmpdir, totalmem } from 'node:os'
+import { isAbsolute, join, normalize } from 'node:path'
 import { spawn } from 'node:child_process'
 
 import {
@@ -16,6 +16,8 @@ import {
   writeOfflineEvalJson,
 } from './offlineEvalCli.js'
 import { sanitizeChildEnv } from '../server/utils/sensitiveEnv.js'
+import { runTestProcessQueue } from './testProcessQueue.mjs'
+import { TestSelectorUsageError, validateSelectedTestFiles } from './testSelectors.js'
 
 const rawArgs = process.argv.slice(2)
 let testArgs
@@ -30,6 +32,19 @@ try {
   if (!(error instanceof OfflineEvalUsageError)) throw error
   console.error(`[run-tests] ${error.message}`)
   process.exit(error.exitCode)
+}
+
+const coverageMode = testArgs.includes('--coverage')
+const selectors = testArgs.filter((arg) => !arg.startsWith('-'))
+const nodeArgs = testArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
+let files
+try {
+  files = validateSelectedTestFiles(selectors.length ? selectors.flatMap(resolveSelector) : allTestFiles())
+} catch (error) {
+  const code = error instanceof TestSelectorUsageError ? error.code : 'TEST_SELECTOR_DISCOVERY_FAILED'
+  const message = error instanceof TestSelectorUsageError ? error.message : 'Unable to discover the requested test files'
+  console.error(`[run-tests] ${code}: ${message}`)
+  process.exit(2)
 }
 
 const testDataRoot = mkdtempSync(join(tmpdir(), 'yma-test-run-'))
@@ -53,15 +68,13 @@ const testSetupArgs = [
   './scripts/testEnvironment.mjs',
   ...(offlineEvalMode ? ['--import', './scripts/offlineEvalNetworkGuard.mjs'] : []),
 ]
-const coverageMode = testArgs.includes('--coverage')
-const selectors = testArgs.filter((arg) => !arg.startsWith('-'))
-const nodeArgs = testArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
 const configuredConcurrency = Number(process.env.TEST_CONCURRENCY)
 const defaultConcurrency = Math.max(1, Math.min(4, availableParallelism()))
 const testConcurrency = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
   ? Math.floor(configuredConcurrency)
   : defaultConcurrency
 const DEFAULT_BATCH_TIMEOUT_MS = 20 * 60_000
+const DEFAULT_COVERAGE_TIMEOUT_MS = 40 * 60_000
 const DEFAULT_ISOLATED_TIMEOUT_MS = 3 * 60_000
 const PROCESS_TREE_KILL_GRACE_MS = 5_000
 
@@ -70,20 +83,33 @@ function positiveIntegerEnv(name, fallback) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
-const batchTimeoutMs = positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_BATCH_TIMEOUT_MS)
+const batchTimeoutMs = coverageMode
+  ? positiveIntegerEnv('TEST_COVERAGE_TIMEOUT_MS',
+    positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_COVERAGE_TIMEOUT_MS))
+  : positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_BATCH_TIMEOUT_MS)
 const isolatedTimeoutMs = positiveIntegerEnv('TEST_ISOLATED_TIMEOUT_MS', DEFAULT_ISOLATED_TIMEOUT_MS)
+const isolatedCapacity = Math.max(1, Math.min(2, availableParallelism(), Math.floor(totalmem() / (3 * 1024 ** 3))))
+const isolatedConcurrency = Math.min(isolatedCapacity,
+  positiveIntegerEnv('TEST_ISOLATED_CONCURRENCY', isolatedCapacity))
 const batchNodeArgs = nodeArgs.some((arg) => arg.startsWith('--test-concurrency'))
   ? nodeArgs
   : [`--test-concurrency=${testConcurrency}`, ...nodeArgs]
 
+// Thresholds are a ratchet: raise them as coverage improves, never lower them to
+// make a red run green. These values re-baseline the include set that now also
+// covers `src/pages/**` (~60k lines of UI that had no measurement at all), so
+// they are lower than the previous backend-only numbers on purpose. Measured on
+// that widened set: lines 37.40, branches 60.16, functions 31.48.
 const coverageArgs = coverageMode
   ? [
       '--experimental-test-coverage',
-      `--test-coverage-lines=${process.env.COVERAGE_LINES || '40'}`,
-      `--test-coverage-functions=${process.env.COVERAGE_FUNCTIONS || '35'}`,
+      `--test-coverage-lines=${process.env.COVERAGE_LINES || '37'}`,
+      `--test-coverage-functions=${process.env.COVERAGE_FUNCTIONS || '31'}`,
       `--test-coverage-branches=${process.env.COVERAGE_BRANCHES || '60'}`,
       '--test-coverage-include=server/**/*.js',
       '--test-coverage-include=src/lib/**/*.js',
+      '--test-coverage-include=src/pages/**/*.jsx',
+      '--test-coverage-include=src/pages/**/*.js',
       '--test-coverage-include=shared/**/*.js',
     ]
   : []
@@ -109,18 +135,16 @@ function allTestFiles() {
 }
 
 function resolveSelector(selector) {
+  selector = selector.replaceAll('\\', '/').replace(/^(?:\.\/)+/u, '')
   if (selector === 'i18n') return ['tests/i18n.test.js']
   if (selector === 'offline-eval') return ['tests/offlineCapabilityEval.test.js']
+  if (isAbsolute(selector)) return [selector]
   if (selector.startsWith('tests/')) return [selector]
   if (selector.endsWith('.test.js') || selector.endsWith('.test.jsx')) {
     return [`tests/${selector}`]
   }
   return [`tests/${selector}.test.js`]
 }
-
-const files = selectors.length
-  ? selectors.flatMap(resolveSelector)
-  : allTestFiles()
 
 // These tests load rolldown either through the JSX hook or a Vite test
 // wrapper. On Windows, running many rolldown instances in node:test workers
@@ -158,6 +182,34 @@ function chunkFiles(source, size) {
     chunks.push(source.slice(index, index + size))
   }
   return chunks
+}
+
+// Windows caps a process command line near 32 KiB; POSIX allows far more. The
+// coverage gate hands every selected file to one invocation, and ~936 relative
+// paths sit right at the Windows ceiling, so adding a handful of test files used
+// to end in an opaque ENAMETOOLONG. Say what the limit is and what the options
+// are instead: splitting the selection would check each slice's percentage
+// against the same thresholds (a weaker gate), and merging the files into one
+// process broke test isolation outright.
+const COMMAND_LINE_LIMIT = process.platform === 'win32' ? 32_767 : 2_000_000
+
+function commandLineLength(args) {
+  return args.reduce((total, arg) => total + String(arg).length + 1, 0)
+}
+
+function assertCoverageBatchFitsPlatform(batch) {
+  const projected = commandLineLength([
+    ...testSetupArgs, '--test', ...coverageArgs, ...batchNodeArgs, ...batch,
+  ])
+  if (projected <= COMMAND_LINE_LIMIT) return
+  console.error(`[run-tests] COVERAGE_SELECTION_TOO_LARGE: ${batch.length} files need `
+    + `${projected} characters on one command line, above this platform's limit of ${COMMAND_LINE_LIMIT}.`)
+  console.error('[run-tests] The coverage gate must reach every selected file in one invocation, so it cannot be '
+    + 'split without weakening the thresholds, and running the files in a single process breaks their isolation.')
+  console.error('[run-tests] Run the coverage gate where the limit is larger (Linux CI). To inspect a slice locally, '
+    + 'name test files instead, for example `npm test -- --coverage presentationPromptPolicy`; that reports the '
+    + "slice's own percentages, so it does not satisfy the whole-suite thresholds.")
+  process.exit(2)
 }
 
 function reportProcessError(result, label, timeoutMs) {
@@ -317,6 +369,7 @@ function reportCoverageFailure(result) {
 }
 
 if (batchFiles.length) {
+  if (coverageMode) assertCoverageBatchFitsPlatform(batchFiles)
   const batches = chunkFiles(batchFiles, batchSize)
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index]
@@ -331,15 +384,16 @@ if (batchFiles.length) {
       ...batch,
     ], {
       captureOutput: true,
-      streamOutput: !coverageMode,
+      streamOutput: true,
       timeoutMs: batchTimeoutMs,
     })
-    if (coverageMode) forwardCapturedOutput(result)
     reportProcessError(result, label, batchTimeoutMs)
     console.log(`[run-tests] finished ${label} in ${Date.now() - startedAt}ms; status=${result.status ?? 'none'}`)
-    if ((result.status ?? 1) !== 0) {
+    if (result.error || result.signal || (result.status ?? 1) !== 0 || hasTapFailure(result)
+      || (coverageMode && coverageThresholdFailures(result).length > 0)) {
       failed = true
       const coverageOnlyFailure = coverageMode
+        && !result.error && !result.signal
         && !hasTapFailure(result)
         && coverageThresholdFailures(result).length > 0
       rememberFailure(coverageOnlyFailure
@@ -398,7 +452,8 @@ function forwardCapturedOutput(result) {
   if (result.stderr?.length) process.stderr.write(result.stderr)
 }
 
-for (const file of isolatedFiles) {
+async function runIsolatedTest(file) {
+  const startedAt = Date.now()
   let passed = false
   let lastFailureSummary = null
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -419,7 +474,7 @@ for (const file of isolatedFiles) {
     forwardCapturedOutput(result)
     reportProcessError(result, label, isolatedTimeoutMs)
 
-    if (result.status === 0) {
+    if (!result.error && !result.signal && result.status === 0 && !hasTapFailure(result)) {
       passed = true
       break
     }
@@ -434,6 +489,18 @@ for (const file of isolatedFiles) {
     failed = true
     rememberFailure(lastFailureSummary || `isolated test ${file}; status=failed; exitCode=unknown`)
   }
+  console.log(`[run-tests] finished isolated test ${file} in ${Date.now() - startedAt}ms; status=${passed ? 0 : 1}`)
+}
+
+if (isolatedFiles.length) {
+  const startedAt = Date.now()
+  console.log(`[run-tests] isolated process pool: concurrency=${isolatedConcurrency}; files=${isolatedFiles.length}`)
+  await runTestProcessQueue(isolatedFiles, {
+    concurrency: isolatedConcurrency,
+    isExclusive: (file) => viteWrapperTests.has(normalize(file)) || /MessageRowActivity[.\\/]/u.test(file),
+    run: runIsolatedTest,
+  })
+  console.log(`[run-tests] isolated phase finished in ${Date.now() - startedAt}ms`)
 }
 
 if (offlineEvalMode) {

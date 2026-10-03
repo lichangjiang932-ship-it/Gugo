@@ -83,7 +83,7 @@ test('createPptx 暴露可复现时间与安全的 CJK 字体注入回执', asyn
   assert.equal(JSON.stringify(result.fontInjection).includes('ppt/theme'), false)
 })
 
-test('cover/section 为所有 premium theme 渲染受控 gradient 装饰', async () => {
+test('legacy premium themes keep authored content without imposing decorative templates or chrome', async () => {
   for (const theme of ['noir', 'paper', 'ocean', 'forest']) {
     const result = await createPptx({
       title: `${theme} 视觉测试`,
@@ -96,14 +96,16 @@ test('cover/section 为所有 premium theme 渲染受控 gradient 装饰', async
       ],
     })
     const coverXml = await loadSlideXml(result, 1)
-    assert.equal((coverXml.match(/prst="ellipse"/g) || []).length, 2, `${theme} cover 应有 2 个 vignette 椭圆`)
-    assert.equal((coverXml.match(/rot="1500000"/g) || []).length, 1, `${theme} cover 应有 1 条 25° accent stripe`)
-    assert.ok(countNonTextShapes(coverXml) <= 5, `${theme} cover 背景/线条元素应受控`)
+    assert.match(coverXml, /<a:t>封面<\/a:t>/)
+    assert.doesNotMatch(coverXml, /prst="ellipse"|rot="1500000"/)
+    assert.equal(countNonTextShapes(coverXml), 0, `${theme} must not inject decorative shapes`)
+    assert.doesNotMatch(coverXml, /<a:t>YMA<\/a:t>|01 \/ 02/)
 
     const sectionXml = await loadSlideXml(result, 2)
-    assert.ok((sectionXml.match(/<a:alpha val="30000"\/>/g) || []).length >= 1, `${theme} section 应有 70% 透明数字阴影`)
-    assert.ok((sectionXml.match(/prst="rect"/g) || []).length >= 5, `${theme} section 应含 panel gradient 和双 hairline`)
-    assert.ok(countNonTextShapes(sectionXml) <= 5, `${theme} section 背景/线条元素应受控`)
+    assert.match(sectionXml, /<a:t>章节一<\/a:t>/)
+    assert.match(sectionXml, /<a:t>SECTION<\/a:t>/)
+    assert.equal(countNonTextShapes(sectionXml), 0)
+    assert.doesNotMatch(sectionXml, /CHAPTER 01|02 \/ 02/)
   }
 })
 

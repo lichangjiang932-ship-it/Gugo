@@ -1,10 +1,50 @@
-import { Pin, Save, Trash2, Users, X } from 'lucide-react'
+import { Brain, Pin, Save, Trash2, Users, X } from 'lucide-react'
 
-export default function MemoryEditor({ activeAgentId, agents, editing, onChange, onClose, onDelete, onSave, saving, t, types }) {
+export default function MemoryEditor({
+  activeAgentId,
+  agents,
+  editing,
+  onChange,
+  onClose,
+  onDelete,
+  onInstallSkill,
+  onSave,
+  saving,
+  skillInstallError = '',
+  skillInstalling = false,
+  t,
+  types,
+}) {
   if (!editing) return <div className="flex h-full items-center justify-center text-sm text-ink-fade">{t('memory.selectHint')}</div>
   const update = (patch) => onChange({ ...editing, ...patch })
   return <div className="mx-auto max-w-[720px] space-y-4 px-8 py-6">
     <div className="flex items-center justify-between"><div className="text-sm font-semibold text-ink">{editing.id ? t('memory.editTitle') : t('memory.newTitle')}</div><button type="button" onClick={onClose} className="text-ink-fade hover:text-ink" title={t('memory.close')}><X className="h-4 w-4" /></button></div>
+    {editing.frontmatter?.proposal === 'skill' && (
+      // A skill the experience pipeline proposed. Installing it is the reader's
+      // decision — the same rule that keeps a model from granting itself a
+      // capability anywhere else in this app.
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-accent/30 bg-accent/5 px-3 py-2" data-testid="memory-skill-proposal">
+        <Brain className="h-3.5 w-3.5 shrink-0 text-accent-ink" aria-hidden="true" />
+        <span className="min-w-0 flex-1 text-xs text-ink-soft">{t('memory.skillProposalHint')}</span>
+        {editing.frontmatter.installedSkillId
+          ? <span className="text-xs text-success" data-testid="memory-skill-installed">{t('memory.skillInstalled', { id: editing.frontmatter.installedSkillId })}</span>
+          : <button
+              type="button"
+              onClick={() => onInstallSkill?.(editing)}
+              disabled={skillInstalling || saving || !editing.id}
+              data-testid="memory-skill-install"
+              className="flex h-7 items-center gap-1 rounded-md bg-accent px-3 text-xs text-accent-contrast hover:bg-accent/90 disabled:opacity-50"
+            >
+              <Brain className="h-3 w-3" aria-hidden="true" />
+              {t(skillInstalling ? 'memory.skillInstalling' : 'memory.skillInstall')}
+            </button>}
+      </div>
+    )}
+    {skillInstallError && (
+      <p role="alert" data-testid="memory-skill-error" className="text-xs text-danger">
+        {t('memory.skillInstallFailed', { reason: skillInstallError })}
+      </p>
+    )}
     <div><label className="mb-1.5 block text-xs text-ink-fade">{t('memory.type')}</label><div className="flex gap-1.5">{types.map((type) => <button key={type.id} type="button" onClick={() => update({ type: type.id })} className={`rounded-md border px-3 py-1 text-xs transition-colors ${editing.type === type.id ? 'border-accent bg-accent text-accent-contrast' : 'border-ink/15 bg-paper-2 text-ink-soft hover:border-accent/50'}`} title={type.hint}>{type.label}</button>)}</div></div>
     <Field label={t('memory.titleLabel')}><input value={editing.title} onChange={(event) => update({ title: event.target.value })} placeholder={t('memory.titlePlaceholder')} className="h-9 w-full rounded-md border border-ink/15 bg-paper-2 px-3 text-sm outline-none focus:border-focus" /></Field>
     <Field label={t('memory.bodyLabel')}><textarea value={editing.body} onChange={(event) => update({ body: event.target.value })} rows={10} placeholder={t('memory.bodyPlaceholder')} className="w-full rounded-md border border-ink/15 bg-paper-2 px-3 py-2 font-mono text-sm outline-none focus:border-focus" /><div className="mt-1 text-[10px] text-ink-fade">{t('memory.linkHint')}</div></Field>

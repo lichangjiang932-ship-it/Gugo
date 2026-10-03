@@ -1,5 +1,11 @@
 const translations = {
   "zh": {
+    "skillProposalBadge": "技能候选",
+    "skillProposalHint": "这是经验日志抽象出的技能候选；装成技能后才会在对话里可选。",
+    "skillInstall": "装成技能",
+    "skillInstalling": "正在安装…",
+    "skillInstalled": "已装成技能：{id}",
+    "skillInstallFailed": "装成技能失败：{reason}",
     "title": "记忆中心",
     "subtitle": "长期记住的用户偏好、反馈和项目背景，并注入到每次对话",
     "add": "新增",
@@ -52,6 +58,12 @@ const translations = {
     }
   },
   "en": {
+    "skillProposalBadge": "Skill proposal",
+    "skillProposalHint": "A skill proposed by the experience pipeline. It becomes selectable in a conversation only after you install it.",
+    "skillInstall": "Install as a skill",
+    "skillInstalling": "Installing…",
+    "skillInstalled": "Installed as skill: {id}",
+    "skillInstallFailed": "Could not install the skill: {reason}",
     "title": "Memory",
     "subtitle": "Long-term user preferences, feedback, and project context injected into each conversation",
     "add": "Add",

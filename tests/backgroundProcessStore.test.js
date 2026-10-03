@@ -1,4 +1,4 @@
-import test, { after } from 'node:test'
+import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -23,6 +23,16 @@ const {
   startBackgroundProcess,
   _testing,
 } = await import('../server/services/backgroundProcessStore.js')
+
+const { prepareWindowsTreeKillWorker } = await import('../server/utils/windowsTreeKillRuntime.js')
+
+// Production warms the tree-kill worker before it spawns anything it may later have
+// to kill (see windowsProcessGateRuntime). A kill issued against a cold worker can
+// spend its whole ready budget on a loaded machine, which says something about this
+// setup rather than about the store — so the tests warm it the way the product does.
+before(async () => {
+  if (process.platform === 'win32') await prepareWindowsTreeKillWorker()
+})
 
 const userId = 'bg-user'
 const now = Date.now()

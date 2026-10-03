@@ -17,11 +17,13 @@ import {
 export function runRuntimeConfigStartupPreflight({
   cwd = process.cwd(),
   env = process.env,
+  expectedRuntimeIdentity = null,
+  previousRuntimeEnv = null,
 } = {}) {
   // Resolve and publish only the storage identity before opening SQLite. The
   // complete runtime configuration remains inactive until its pending journal
   // has been reconciled against the migrated audit tables.
-  const storageEnv = applyRuntimeStorageBootstrap({ cwd, env })
+  const storageEnv = applyRuntimeStorageBootstrap({ cwd, env, expectedRuntimeIdentity })
   getDb()
   const recovery = reconcileEvolutionConfigJournal({
     userId: null,
@@ -42,6 +44,6 @@ export function runRuntimeConfigStartupPreflight({
   // application host. This shares the same deep layer contract as activation,
   // while retaining sourcePath so only user runtime.json can enter recovery.
   readRuntimePluginConfigSourceSnapshot({ cwd, env: resolvedRuntimeEnv })
-  const runtimeEnv = applyRuntimeConfig({ cwd, env, resolvedEnv: resolvedRuntimeEnv })
+  const runtimeEnv = applyRuntimeConfig({ cwd, env, resolvedEnv: resolvedRuntimeEnv, previousResolvedEnv: previousRuntimeEnv })
   return Object.freeze({ recovery, runtimeEnv })
 }

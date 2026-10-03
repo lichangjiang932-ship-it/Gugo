@@ -157,6 +157,32 @@ test('preview reducer opens, activates, and closes tabs without losing sibling f
   assert.equal(state.previewArtifact, null)
 })
 
+test('the full preview pane wires direct Markdown reading/source controls and resets them on file-tab switches', async () => {
+  const oldFetch = globalThis.fetch
+  globalThis.fetch = async (url) => new Response(url.includes('second') ? '# Second report' : '# First report')
+  const first = { directFile: { id: 'first-source-tab', filename: 'first.md', type: 'md', path: 'C:\\Work\\first.md', url: '/api/artifacts/first.md' } }
+  const second = { directFile: { id: 'second-source-tab', filename: 'second.md', type: 'md', path: 'C:\\Work\\second.md', url: '/api/artifacts/second.md' } }
+  const h = await renderPane(() => {}, first)
+  try {
+    assert.equal(h.rootEl.querySelector('h1').textContent, 'First report')
+    const sourceButton = [...h.rootEl.querySelectorAll('button')].find((button) => button.textContent === '源码')
+    assert.ok(sourceButton)
+    await act(async () => sourceButton.click())
+    assert.equal(h.rootEl.querySelector('pre').textContent, '# First report')
+    await h.rerender(second)
+    assert.equal(h.rootEl.querySelectorAll('[role="tab"]').length, 2)
+    assert.equal(h.rootEl.querySelector('h1').textContent, 'Second report')
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-file-path"]').title, second.directFile.path)
+    await act(async () => [...h.rootEl.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === 'first.md').click())
+    assert.equal(h.rootEl.querySelector('h1').textContent, 'First report')
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-file-path"]').title, first.directFile.path)
+  } finally {
+    await h.cleanup()
+    h.dom.window.close()
+    globalThis.fetch = oldFetch
+  }
+})
+
 test('preview reducer replaces a verified local file tab when a new receipt points to the same path', () => {
   const original = {
     messageId: 'msg-original',

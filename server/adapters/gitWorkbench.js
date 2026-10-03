@@ -1,6 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
+import {
+  httpError as badReq,
+  MAX_OUTPUT,
+  runFile,
+  workspaceRoot,
+} from './gitCommandRunner.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
@@ -8,27 +13,15 @@ import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 import { assertGitToolPermitted, runAuditedProjectCheckHttp } from './gitWorkbenchPolicy.js'
 import { runProjectCheckTool } from './gitWorkbenchProjectCheck.js'
+import { gitDiffFailure } from './gitWorkbenchDiagnostics.js'
 import {
   changedPathsBetweenGitRevisions,
   runGitWorkspaceChange,
 } from './gitWorkbenchRevisionChanges.js'
 
-const MAX_OUTPUT = 1024 * 1024
-const DEFAULT_TIMEOUT = 60_000
-
 export { runProjectCheckTool }
 
-function badReq(message, statusCode = 400) {
-  const err = new Error(message)
-  err.statusCode = statusCode
-  return err
-}
-
-function workspaceRoot(env = getRuntimeEnv()) {
-  return path.resolve(env.WORKSPACE_ROOT?.trim() || process.cwd())
-}
-
-function getRoot({
+export function getRoot({
   userId = null,
   cwd: rawCwd = null,
   env = getRuntimeEnv(),
@@ -56,7 +49,7 @@ function getRoot({
   return resolved.fullPath
 }
 
-function requireGitEnabled(env = getRuntimeEnv()) {
+export function requireGitEnabled(env = getRuntimeEnv()) {
   if (env.WORKSPACE_GIT_ENABLED !== '1') {
     throw badReq('WORKSPACE_GIT_ENABLED=1 未启用,无法使用 Git 工作台。在项目根目录的 .env 里加上这一行后重启服务。', 403)
   }
@@ -69,41 +62,9 @@ function requireMutationEnabled(env = getRuntimeEnv()) {
   }
 }
 
-// ★ P0:统一从 sanitizeChildEnv 取,自动覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD
-// 老实现只屏蔽 3 个固定 key,换用户配 ANTHROPIC_API_KEY/GITHUB_TOKEN 就漏了
-import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
-function commandEnv() {
-  return sanitizeChildEnv()
-}
+import { assertSelectedFilesAreCommittable } from './gitCommitPathGuard.js'
 
-function runFile(file, args, { cwd = workspaceRoot(), timeout = DEFAULT_TIMEOUT, rejectOnError = true } = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, {
-      cwd,
-      timeout,
-      maxBuffer: MAX_OUTPUT,
-      windowsHide: true,
-      env: commandEnv(),
-    }, (err, stdout, stderr) => {
-      const result = {
-        ok: !err,
-        exitCode: err ? (typeof err.code === 'number' ? err.code : -1) : 0,
-        stdout: String(stdout || ''),
-        stderr: String(stderr || ''),
-        timedOut: !!err?.killed,
-      }
-      if (err && rejectOnError) {
-        const e = badReq(String(stderr || err.message || 'command failed').trim() || 'command failed', err.killed ? 408 : 500)
-        e.result = result
-        reject(e)
-        return
-      }
-      resolve(result)
-    })
-  })
-}
-
-async function runGit(args, opts = {}) {
+export async function runGit(args, opts = {}) {
   return runFile('git', args, opts)
 }
 
@@ -129,7 +90,7 @@ export function npmCommandArgs(scriptName, {
   return { file: 'npm', args: ['run', scriptName] }
 }
 
-function normalizeRepoPath(rawPath) {
+export function normalizeRepoPath(rawPath) {
   if (rawPath == null || rawPath === '') return ''
   if (typeof rawPath !== 'string') throw badReq('path must be a string')
   const p = rawPath.replace(/\\/g, '/').trim()
@@ -198,7 +159,7 @@ async function validateBranchName(rawBranch, cwd) {
   return branch
 }
 
-function clip(text, max = MAX_OUTPUT) {
+export function clip(text, max = MAX_OUTPUT) {
   const value = String(text || '')
   return value.length > max ? value.slice(0, max) + '\n...[truncated]' : value
 }
@@ -230,16 +191,25 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
   if (staged) args.push('--cached')
   if (repoPath) args.push('--', repoPath)
   const diff = await runGit(args, { cwd: root, rejectOnError: false })
+  const context = { cwd: root, path: repoPath || null, staged: Boolean(staged) }
+  if (!diff.ok) {
+    // Outside a repository, --cached can produce "unknown option" instead of
+    // the usual repository diagnostic. Verify that failure before suggesting
+    // a different command; never initialize a repository as a side effect.
+    const repository = await runGit(['rev-parse', '--show-toplevel'], { cwd: root, rejectOnError: false })
+    return { ...context, ...gitDiffFailure(repository.ok ? diff : repository) }
+  }
   const statArgs = ['diff', '--stat', '--no-ext-diff', '--no-color']
   if (staged) statArgs.push('--cached')
   if (repoPath) statArgs.push('--', repoPath)
   const stat = await runGit(statArgs, { cwd: root, rejectOnError: false })
+  if (!stat.ok) return { ...context, ...gitDiffFailure(stat) }
   return {
     ok: diff.ok,
     path: repoPath || null,
     staged: Boolean(staged),
-    stat: clip(stat.stdout || stat.stderr, 80_000),
-    diff: clip(diff.stdout || diff.stderr),
+    stat: clip(stat.stdout, 80_000),
+    diff: clip(diff.stdout),
     exitCode: diff.exitCode,
   }
 }
@@ -278,6 +248,7 @@ export async function gitCommitTool(
   if (msg.length < 3 || msg.length > 200) throw badReq('commit message must be 3-200 characters')
   const statusFiles = await currentStatusFiles(root)
   const selected = validateSelectedFiles(files, statusFiles)
+  assertSelectedFilesAreCommittable(selected)
   await runGit(['add', '-A', '--', ...selected], { cwd: root })
   const hasStaged = await runGit(['diff', '--cached', '--quiet', '--', ...selected], { cwd: root, rejectOnError: false })
   if (hasStaged.exitCode === 0) throw badReq('selected files have no staged changes')

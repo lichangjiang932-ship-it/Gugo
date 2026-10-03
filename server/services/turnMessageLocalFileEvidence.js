@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { TRUNCATED_TOOL_RESULT_METADATA_KEY } from '../utils/toolCallHarness.js'
 import { resolveAuthorizedLocalPath } from './localFileAccessService.js'
+import { listTurnBinaryArtifactCandidates, readTurnBinaryArtifactEvidence } from './turnBinaryArtifactEvidence.js'
 
 export const SOURCE_BEARING_ARTIFACT_TOOLS = new Set([
   'create_docx',
@@ -240,9 +241,11 @@ function extractVerifiedLocalFilesWithReadEvidence(messages, {
   verifiedAt = Date.now(),
   resolvePath = resolveAuthorizedLocalPath,
   statFile = fs.statSync,
+  binaryArtifactEvidence = null,
 } = {}, readEvidenceForCall = completeReadEvidence) {
   const calls = new Map()
   const mutatedAt = new Map()
+  const latestMutationCalls = new Map()
   const receipts = new Map()
   let sequence = 0
 
@@ -301,6 +304,7 @@ function extractVerifiedLocalFilesWithReadEvidence(messages, {
         if (!fullPath) continue
         const key = canonicalLocalPath(fullPath)
         mutatedAt.set(key, sequence)
+        latestMutationCalls.set(key, call.id)
         receipts.delete(key)
       }
       continue
@@ -318,6 +322,20 @@ function extractVerifiedLocalFilesWithReadEvidence(messages, {
     }
   }
 
+  for (const candidate of listTurnBinaryArtifactCandidates(binaryArtifactEvidence, { userId })) {
+    if (baselineToolCallIds.has(candidate.toolCallId)) continue
+    const fullPath = resolveVerifiedLocalPath(candidate.sourcePath, { userId, resolvePath })
+    if (!fullPath) continue
+    const key = canonicalLocalPath(fullPath)
+    if (receipts.has(key) || (latestMutationCalls.has(key) && latestMutationCalls.get(key) !== candidate.toolCallId)) continue
+    const binary = readTurnBinaryArtifactEvidence(binaryArtifactEvidence, { ...candidate, userId, sourcePath: fullPath })
+    if (!binary) continue
+    const receipt = localFileReceipt(fullPath, {
+      statFile: () => ({ isFile: () => true, size: binary.byteLength }),
+      verifiedAt, relatedArtifactIds: binary.relatedArtifactIds,
+    })
+    if (receipt) receipts.set(key, receipt)
+  }
   return normalizedVerifiedLocalFiles([...receipts.values()].slice(-MAX_VERIFIED_LOCAL_FILES))
 }
 

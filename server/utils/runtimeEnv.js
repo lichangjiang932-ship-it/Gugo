@@ -138,18 +138,18 @@ export function resolveRuntimeConfigPaths({ cwd = process.cwd(), env = process.e
   }
 }
 
-export function readRuntimeEnvFile(cwd = process.cwd()) {
+export function readRuntimeEnvFile(cwd = process.cwd(), { warnOnMissingDotEnv = true, env = process.env } = {}) {
   const envPath = path.join(cwd, '.env')
   if (!fs.existsSync(envPath)) {
     // ★ 找不到 .env 时原来是完全静默的 —— 从子目录启动服务(很常见)
     // 会导致所有模型配置凭空消失,而用户看到的只是「没配模型」,
     // 完全想不到是启动目录的问题。至少说一声。
-    if (!missingEnvWarned && !process.env.MODEL_BASE_URL && !process.env.MODEL_PROVIDERS) {
+    if (warnOnMissingDotEnv && !missingEnvWarned && !env.MODEL_BASE_URL && !env.MODEL_PROVIDERS) {
       missingEnvWarned = true
       console.warn(
-        `[env] 未找到 ${envPath} —— 仍可在“设置 → 模型”中保存并使用本地 BYOK Provider；`
-        + 'MODEL_* 环境变量仅用于部署默认配置。'
-        + '\n[env] 如果你希望加载 .env，请确认是从**仓库根目录**启动服务（npm run serve）。',
+        `[env] No .env file found at ${envPath}. This file is optional; a local BYOK provider can be saved in Settings > Models. `
+        + 'MODEL_* environment variables are deployment defaults.'
+        + '\n[env] If you intended to load .env, check the runtime working directory before starting the service (npm run serve).',
       )
     }
     return {}
@@ -176,22 +176,23 @@ export function readRuntimeEnvFile(cwd = process.cwd()) {
   return entries
 }
 
-export function getRuntimeEnv(env = process.env, { cwd = process.cwd(), loadDotEnv = true } = {}) {
+export function getRuntimeEnv(env = process.env, { cwd = process.cwd(), loadDotEnv = true, warnOnMissingDotEnv = true } = {}) {
   const paths = resolveRuntimeConfigPaths({ cwd, env })
   const user = readRuntimeConfigFile(paths.user)
   const project = readRuntimeConfigFile(paths.project)
   const explicit = paths.explicit && ![paths.user, paths.project].includes(paths.explicit)
     ? readRuntimeConfigFile(paths.explicit)
     : {}
-  const dotenv = loadDotEnv && env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd) : {}
+  const dotenv = loadDotEnv && env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd, { env, warnOnMissingDotEnv }) : {}
   return { ...user, ...project, ...explicit, ...dotenv, ...env }
 }
 
 function discoverRuntimeStartupConfigLayers({
   cwd = process.cwd(),
   env = process.env,
+  warnOnMissingDotEnv = true,
 } = {}) {
-  const dotenv = env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd) : {}
+  const dotenv = env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd, { env, warnOnMissingDotEnv }) : {}
   const bootstrapEnv = { ...dotenv, ...env }
   const bootstrapPaths = resolveRuntimeConfigPaths({ cwd, env: bootstrapEnv })
   const project = readRuntimeConfigFile(bootstrapPaths.project)
@@ -249,16 +250,17 @@ export function resolveRuntimeStartupConfigPaths(options = {}) {
  * user runtime.json file. The returned paths are absolute and anchored to the
  * caller-provided cwd so every process-owned service receives one data root.
  */
-export function resolveRuntimeStartupEnvironment({
+export function resolveRuntimeStartupConfiguration({
   cwd = process.cwd(),
   env = process.env,
+  warnOnMissingDotEnv = true,
 } = {}) {
   const {
     dotenv,
     project,
     explicit,
     paths: sourcePaths,
-  } = discoverRuntimeStartupConfigLayers({ cwd, env })
+  } = discoverRuntimeStartupConfigLayers({ cwd, env, warnOnMissingDotEnv })
   const user = readRuntimeConfigFile(sourcePaths.user)
   const selfRelocatingKey = USER_CONFIG_SELF_RELOCATION_KEYS.find((key) => (
     Object.hasOwn(user, key)
@@ -275,13 +277,25 @@ export function resolveRuntimeStartupEnvironment({
     ? path.resolve(cwd, configuredDbPath)
     : path.join(appDataDir, 'app.db')
   const artifactDir = path.resolve(cwd, configuredArtifactDir || '.artifacts')
-  return Object.freeze({
+  const runtimeEnv = Object.freeze({
     ...resolved,
     APP_DATA_DIR: appDataDir,
     APP_DB_PATH: appDbPath,
     ARTIFACT_DIR: artifactDir,
     ...(sourcePaths.explicit ? { APP_CONFIG_PATH: sourcePaths.explicit } : {}),
   })
+  return Object.freeze({
+    runtimeEnv,
+    paths: sourcePaths,
+    precedence: Object.freeze(['user_config', 'project_config', 'explicit_config', '.env', 'environment']),
+    // Values can include credentials. Consumers must project public diagnostics
+    // explicitly instead of serializing runtimeEnv or these configuration layers.
+    layers: Object.freeze({ user_config: user, project_config: project, explicit_config: explicit, '.env': dotenv, environment: env }),
+  })
+}
+
+export function resolveRuntimeStartupEnvironment(options = {}) {
+  return resolveRuntimeStartupConfiguration(options).runtimeEnv
 }
 
 export function assertRuntimeStartupIdentityStable(before, after) {
@@ -303,6 +317,7 @@ export function assertRuntimeStartupIdentityStable(before, after) {
 /** Apply only process storage identity before importing/starting DB consumers. */
 export function applyRuntimeStorageBootstrap(options = {}) {
   const resolved = resolveRuntimeStartupEnvironment(options)
+  if (options.expectedRuntimeIdentity) assertRuntimeStartupIdentityStable(options.expectedRuntimeIdentity, resolved)
   process.env.APP_DATA_DIR = resolved.APP_DATA_DIR
   process.env.APP_DB_PATH = resolved.APP_DB_PATH
   process.env.ARTIFACT_DIR = resolved.ARTIFACT_DIR
@@ -518,8 +533,14 @@ export function applyRuntimeConfig({
   cwd = process.cwd(),
   env = process.env,
   resolvedEnv = null,
+  previousResolvedEnv = null,
 } = {}) {
   const resolved = resolvedEnv || resolveRuntimeStartupEnvironment({ cwd, env })
+  for (const key of Object.keys(previousResolvedEnv || {})) {
+    // A setting removed between CLI turns must not survive in process-global
+    // consumers. Never delete an original launcher/deployment override.
+    if (!Object.hasOwn(env, key) && !Object.hasOwn(resolved, key)) delete process.env[key]
+  }
   for (const [key, value] of Object.entries(resolved)) {
     process.env[key] = String(value)
   }

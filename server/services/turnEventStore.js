@@ -135,7 +135,7 @@ function publishTurnEvent(userId, event) {
   }
 }
 
-function mapRow(row) {
+export function mapPersistedTurnEventRow(row) {
   return row ? parsePersistedTurnEvent({ id: row.id, sessionId: row.session_id, turnId: row.turn_id, sequence: row.sequence, type: row.type, payload: JSON.parse(row.payload_json), createdAt: row.created_at }) : null
 }
 
@@ -345,7 +345,7 @@ export function appendTurnEventsInTransaction(entries = [], db, {
           throw turnCheckpointIdentityConflict()
         }
       }
-      stored.push(mapRow(existing))
+      stored.push(mapPersistedTurnEventRow(existing))
         continue
       }
       const latest = readLatest.get(userId, value.sessionId, value.turnId)
@@ -397,7 +397,7 @@ export function appendTurnEventsInTransaction(entries = [], db, {
         || row.created_at !== value.createdAt) {
         throw turnEventSequenceConflict()
       }
-      const mapped = mapRow(row)
+      const mapped = mapPersistedTurnEventRow(row)
       stored.push(mapped)
       if (inserted.changes === 0) continue
       if (checkpointState !== null) {
@@ -532,7 +532,7 @@ export function listTurnEvents({ userId, sessionId, turnId, after = -1, limit = 
   const db = getDb()
   const events = db.prepare(`SELECT * FROM turn_events
     WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence > ?
-    ORDER BY sequence ASC LIMIT ?`).all(userId, sessionId, turnId, safeAfter, safeLimit).map(mapRow)
+    ORDER BY sequence ASC LIMIT ?`).all(userId, sessionId, turnId, safeAfter, safeLimit).map(mapPersistedTurnEventRow)
   const checkpoint = db.prepare(`SELECT event_sequence FROM turn_checkpoints
     WHERE user_id = ? AND session_id = ? AND turn_id = ?`).get(userId, sessionId, turnId)
   return assertContiguousTurnEvents(events, {
@@ -553,7 +553,7 @@ export function getLastTurnEvent({ userId, sessionId, turnId, type = null }) {
     : getDb().prepare(`SELECT * FROM turn_events
         WHERE user_id = ? AND session_id = ? AND turn_id = ?
         ORDER BY sequence DESC LIMIT 1`).get(userId, sessionId, turnId)
-  return mapRow(row)
+  return mapPersistedTurnEventRow(row)
 }
 
 export function subscribeTurnEvents({ userId, sessionId, turnId }, listener) {

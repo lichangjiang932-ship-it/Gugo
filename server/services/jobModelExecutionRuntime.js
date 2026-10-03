@@ -1,7 +1,7 @@
 import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 
 export async function runDefaultJobModel({
-  messages, signal, userId, usageOwnerId = userId, modelName, modelEnv,
+  messages, signal, userId, usageOwnerId = userId, modelName, modelEnv, maxTokens,
 }) {
   return callBackgroundModel({
     messages,
@@ -9,13 +9,14 @@ export async function runDefaultJobModel({
     userId: modelEnv ? null : userId,
     usageOwnerId,
     modelName,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(modelEnv ? { env: modelEnv } : {}),
   })
 }
 
 export async function runDefaultJobModelWithTools({
   messages, tools, toolChoice, signal, userId, modelName, modelEnv, modelRequestId,
-  onProviderAttempt, usageOwnerId = userId,
+  onProviderAttempt, usageOwnerId = userId, maxTokens,
 }) {
   return callBackgroundModelWithTools({
     messages,
@@ -27,6 +28,7 @@ export async function runDefaultJobModelWithTools({
     modelName,
     modelRequestId,
     onProviderAttempt,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(modelEnv ? { env: modelEnv } : {}),
   })
 }

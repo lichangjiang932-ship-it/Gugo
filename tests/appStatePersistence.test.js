@@ -23,6 +23,7 @@ import {
   writeStateClearEpoch,
 } from '../src/store/appStatePersistence.js'
 import { reduceTaskSettingsState } from '../src/store/reducers/taskSettingsReducer.js'
+import { STREAM_RESUME_DISMISSALS_KEY } from '../src/lib/streamResumeDismissals.js'
 
 function createStorage(entries = []) {
   const values = new Map(entries)
@@ -507,6 +508,7 @@ test('lightweight settings are redacted and bootstrap tolerates blocked localSto
 
 test('sync signals are small, typed, and clearable with local persistence', () => {
   const storage = createStorage([[LEGACY_STATE_STORAGE_KEY, '{}'], [SETTINGS_STORAGE_KEY, '{}']])
+  storage.setItem(STREAM_RESUME_DISMISSALS_KEY, '{"version":1,"entries":[]}')
   publishStateSyncSignal(storage, 'tab-a', 456, 'cleared')
   const signal = readStateSyncSignal(storage.values.get(STATE_SYNC_SIGNAL_KEY))
   assert.equal(signal.source, 'tab-a')

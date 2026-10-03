@@ -24,6 +24,12 @@ import {
 
 const TASK_CHECK_KINDS = new Set(['test', 'lint', 'build', 'check', 'typecheck'])
 const MAX_TARGET_PATHS = 16
+// A chain is only accepted when every segment is a verification of its own, so
+// this bounds the descriptor fan-out of one command rather than a trust
+// boundary. Realistic batches reach five (`lint && typecheck && test && build &&
+// check`), and a chain just above the bound would fall back to the same
+// misclassification this parser exists to avoid.
+const MAX_VERIFICATION_COMMAND_SEGMENTS = 8
 const TRUSTED_VERIFICATION_ENV_VALUES = new Map([
   ['CI', new Set(['1', 'true'])],
   ['NODE_ENV', new Set(['test'])],
@@ -92,11 +98,26 @@ function stripInlineEnvironmentPrefix(segment) {
   }
 }
 
+// Package managers hide the real check behind a launcher, and every command
+// profile is anchored, so an un-stripped launcher turns a genuine check into an
+// unknown command. Only install-free launchers are listed: `npx <bin>`,
+// `npx -y`, `pnpm dlx` and a bare `uv run` may fetch a remote package, so they
+// stay unverified rather than counting as a local check.
+const TOOL_RUNNER_PREFIX = new RegExp(
+  '^(?:'
+  + 'npx\\s+--no-install'
+  + '|pnpm\\s+exec'
+  + '|yarn\\s+exec'
+  + '|poetry\\s+run'
+  + '|pdm\\s+run'
+  + '|uv\\s+run\\s+--no-sync'
+  + ')(?:\\s+|$)',
+  'iu',
+)
+
 function stripToolRunnerPrefix(segment) {
   const value = String(segment || '').trim()
-  const prefix = value.match(
-    /^(?:npx\s+--no-install|pnpm\s+exec|yarn\s+exec)\s+/iu,
-  )
+  const prefix = value.match(TOOL_RUNNER_PREFIX)
   return prefix
     ? { value: value.slice(prefix[0].length).trim(), prefixed: true }
     : { value, prefixed: false }
@@ -400,26 +421,52 @@ function commandPrelude(segment) {
   return null
 }
 
-export function commandCheckDescriptors(command) {
+function withoutDiagnosticDescriptorMerge(command) {
   const value = String(command || '').trim()
+  const suffix = /\s+2>&1$/u.exec(value)
+  if (!suffix) return value
+  const prefix = value.slice(0, suffix.index)
+  let quote = ''
+  for (let index = 0; index < prefix.length; index += 1) {
+    const character = prefix[index]
+    // Avoid guessing cross-shell escaping rules. These remain conservative
+    // non-verdict commands, as do unbalanced quotes and all file redirections.
+    if (character === '^' || character === '`'
+      || (character === '\\' && ['"', "'"].includes(prefix[index + 1]))) return value
+    if (quote) { if (character === quote) quote = '' }
+    else if (character === '"' || character === "'") quote = character
+  }
+  return quote ? value : prefix.trimEnd()
+}
+
+export function commandCheckDescriptors(command) {
+  // Merging stderr into captured stdout does not mutate files or mask the
+  // check's exit status. It must not create a fresh workspace mutation debt.
+  const value = withoutDiagnosticDescriptorMerge(command)
   if (!value || /[|;<>`\r\n]/u.test(value) || /\|\||\$\(/u.test(value)) return []
   const segments = value.split(/\s*&&\s*/u).map((segment) => segment.trim()).filter(Boolean)
   if (segments.length === 0
-    || segments.length > 2
+    || segments.length > MAX_VERIFICATION_COMMAND_SEGMENTS
     || segments.some((segment) => /&/u.test(segment))) return []
   const descriptors = new Map()
   const preludes = []
   let cwdSuffix = ''
   let environmentPrelude = false
-  for (const [index, segment] of segments.entries()) {
-    const prelude = commandPrelude(segment)
-    if (prelude && descriptors.size === 0 && index === 0 && segments.length === 2) {
-      preludes.push(segment)
-      cwdSuffix = prelude.cwdSuffix
-      environmentPrelude = prelude.kind === 'environment'
-      continue
+  for (const segment of segments) {
+    // A `cd`/env prelude may only lead the chain and scopes every check after
+    // it. A prelude that follows a check is not modelled and stays non-verdict.
+    if (descriptors.size === 0) {
+      const prelude = commandPrelude(segment)
+      if (prelude) {
+        preludes.push(segment)
+        cwdSuffix = prelude.cwdSuffix
+        environmentPrelude = prelude.kind === 'environment'
+        continue
+      }
     }
-    if (index !== segments.length - 1 || descriptors.size > 0) return []
+    // Each remaining segment must be a recognized check on its own. One unknown
+    // or mutating segment voids the whole chain, so `npm test && rm -rf x` and
+    // `npm test && del victim.txt` never read as verification.
     const descriptor = commandCheckDescriptor(segment)
     if (!descriptor) return []
     const { kind, coverage, targetPaths = [], verifierFamily: explicitVerifierFamily } = descriptor
@@ -447,8 +494,14 @@ export function isTaskVerificationCommand(command) {
   return commandCheckDescriptors(command).length > 0
 }
 
+function projectCheckWasNotConfigured(call, result) {
+  return call?.name === 'run_project_check' && result?.ok === false && result.executed === false
+    && result.code === 'PROJECT_CHECK_NOT_CONFIGURED' && result.check === call.args?.check
+}
+
 export function taskVerificationKinds(call, result = null) {
   const name = String(call?.name || '').trim()
+  if (projectCheckWasNotConfigured(call, result)) return []
   if (!isTaskVerificationTool(name)) return []
   if (name === 'run_project_check') {
     const kind = normalizeCheckKind(result?.check || call?.args?.check)
@@ -479,6 +532,7 @@ function scopePathWithSuffix(base, suffix) {
 
 export function taskVerificationScopes(call, result) {
   const name = String(call?.name || '').trim()
+  if (projectCheckWasNotConfigured(call, result)) return []
   if (!isTaskVerificationTool(name)) return []
   const cwd = normalizeScopePath(result?.cwd || call?.args?.cwd)
   let descriptors = []

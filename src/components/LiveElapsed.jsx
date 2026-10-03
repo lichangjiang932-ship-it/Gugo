@@ -12,19 +12,21 @@ function formatElapsed(seconds) {
  * does not claim percentage progress; it only proves that the UI is alive and
  * tells the user how long the current phase has been running.
  */
-function LiveElapsed({ className = '' }) {
-  const [seconds, setSeconds] = useState(0)
+function LiveElapsed({ className = '', startedAt, title }) {
+  const [mountedAt] = useState(() => Date.now())
+  const [now, setNow] = useState(() => Date.now())
+  const origin = typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0 ? startedAt : mountedAt
+  const seconds = Math.max(0, Math.floor((now - origin) / 1000))
 
   useEffect(() => {
-    const startedAt = Date.now()
     const timer = window.setInterval(() => {
-      setSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))
+      setNow(Date.now())
     }, 1000)
     return () => window.clearInterval(timer)
   }, [])
 
   return (
-    <span className={className} data-testid="live-elapsed" aria-hidden="true">
+    <span className={className} data-testid="live-elapsed" title={title} aria-hidden="true">
       {formatElapsed(seconds)}
     </span>
   )

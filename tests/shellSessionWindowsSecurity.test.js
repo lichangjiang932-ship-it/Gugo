@@ -57,6 +57,10 @@ after(async () => {
 })
 
 test('Windows logical session gives set /p EOF and remains usable', windowsOnly, async () => {
+  // Warm the logical session first so the timing check measures `set /p` EOF
+  // handling rather than process cold start under a loaded full-suite run.
+  // `first.timedOut` already proves it did not wait for the 5s request timeout.
+  await run('stdin-eof', 'ver > nul')
   const startedAt = Date.now()
   const first = await run(
     'stdin-eof',

@@ -5,6 +5,7 @@ import {
 import { isReadOnlyShellCommand } from './bashGuard.js'
 import { getDynamicTool } from './toolSchemaDynamicRegistry.js'
 import { normalizeToolRiskMetadata } from './toolRiskMetadata.js'
+import { isReadOnlySubagentRequest } from './subagentTaskPolicy.js'
 
 const RISK_LEVEL_BY_CATEGORY = Object.freeze({
   read: 'low',
@@ -30,10 +31,13 @@ function builtinMetadata(category, isConcurrencySafe, overrides = {}) {
 
 function buildBuiltinToolMetadata(codexModelsToolName) {
   return Object.freeze({
+    load_skill: builtinMetadata('read', false),
+    search_tools: builtinMetadata('read', false),
     list_directory: builtinMetadata('read', true),
     web_search: builtinMetadata('read', true),
     fetch_url: builtinMetadata('read', true),
     read_file: builtinMetadata('read', true),
+    read_skill_resource: builtinMetadata('read', true),
     write_file: builtinMetadata('write_local', false),
     edit_file: builtinMetadata('write_local', false),
     bash_exec: builtinMetadata('exec', false),
@@ -49,13 +53,48 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
     }),
     git_status: builtinMetadata('read', true),
     git_diff: builtinMetadata('read', true),
+    git_log: builtinMetadata('read', true),
+    git_blame: builtinMetadata('read', true),
     run_project_check: builtinMetadata('exec', false),
     create_pptx: builtinMetadata('external', false),
     create_docx: builtinMetadata('external', false),
     create_xlsx: builtinMetadata('external', false),
-    Agent: builtinMetadata('read', false),
+    Agent: builtinMetadata('external', false),
     remember: builtinMetadata('external', false),
+    // Appends one episode to the agent's own journal under <workspace>/.agent/,
+    // the same way `remember` writes a memory row: bounded, append-only, and
+    // never touching the user's own source files. Approving each entry would
+    // fire on nearly every turn, which trains the user to click through
+    // approvals — a worse outcome than the write it would be guarding. The file
+    // stays the user's: it is plain markdown they can read, edit or delete.
+    record_experience: builtinMetadata('write_local', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: false,
+      interruptBehavior: 'block',
+      isDestructive: false,
+    }),
     manage_todos: builtinMetadata('external', false),
+    // Goal-plan bookkeeping has no filesystem or network side effects, the state
+    // machine bounds every transition, and a step only becomes `done` when the
+    // host re-verifies evidence against persisted Turn events. Approving each
+    // update would be approval spam with no safety gain, so it is grouped with
+    // the other server-owned local control (`set_deliverables`).
+    goal_plan_status: builtinMetadata('read', true),
+    goal_step_update: builtinMetadata('write_local', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: true,
+      interruptBehavior: 'block',
+      isDestructive: false,
+    }),
+    goal_plan_rewrite: builtinMetadata('write_local', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: false,
+      interruptBehavior: 'block',
+      isDestructive: false,
+    }),
     set_deliverables: builtinMetadata('write_local', false, {
       requiredApproval: false,
       requiresApproval: false,
@@ -102,10 +141,55 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
     file_download: builtinMetadata('write_local', false),
     request_directory: builtinMetadata('external', false),
     sleep_until: builtinMetadata('external', false),
+    // The preview tools work inside the page the reader is already looking at,
+    // on a dev server they started for their own project. Reading that page
+    // changes nothing; starting, clicking and typing inside it are the ordinary
+    // steps of verifying an edit, and asking for a decision before each one would
+    // turn the verification loop into a queue of modals. What actually bounds
+    // them is elsewhere: starting a command answers to the workspace's shell
+    // capability and trust — the same gate run_command passes — and navigation
+    // refuses anything that is not this machine.
+    preview_screenshot: builtinMetadata('read', true),
+    preview_inspect_dom: builtinMetadata('read', true),
+    preview_get_console_logs: builtinMetadata('read', true),
+    preview_start_server: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: true,
+      isDestructive: false,
+    }),
+    preview_stop_server: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: true,
+      isDestructive: false,
+    }),
+    preview_click: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isDestructive: false,
+    }),
+    preview_type: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isDestructive: false,
+    }),
+    // Navigation is the one preview tool with a second gate: an address that is
+    // not on this machine is confirmed per call, by argument, in approvalPolicy —
+    // this declaration covers the local case, which is what the preview is for.
+    preview_navigate: builtinMetadata('external', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isDestructive: false,
+    }),
   })
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
+  'goal_plan_status',
+  'load_skill',
+  'search_tools',
+  'read_skill_resource',
   'read_artifact_source',
   'list_directory',
   'web_search',
@@ -117,6 +201,8 @@ const READ_ONLY_MODE_TOOLS = new Set([
   'lsp',
   'git_status',
   'git_diff',
+  'git_log',
+  'git_blame',
   'image_info',
   'media_probe',
   'pdf_info',
@@ -130,6 +216,7 @@ const READ_ONLY_MODE_TOOLS = new Set([
 ])
 
 const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
+  'read_skill_resource',
   'read_artifact_source',
   'web_search',
   'fetch_url',
@@ -218,6 +305,9 @@ export function createToolSchemaMetadataCatalog(
     }
 
     if (builtin.metadata) {
+      if (name === 'Agent' && isReadOnlySubagentRequest(args)) {
+        return normalizeToolRiskMetadata(builtinMetadata('read', false), { origin: 'builtin', source: 'declared' })
+      }
       // bash_exec retains its exact argv classifier. Other command runners
       // remain exec/high until they have dedicated safety parsers.
       if (name === 'bash_exec' && isReadOnlyShellCommand(args?.command)) {

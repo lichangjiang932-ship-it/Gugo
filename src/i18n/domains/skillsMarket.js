@@ -2,6 +2,7 @@ const translations = {
   "zh": {
     "recommended": "精选",
     "builtInFallback": "完整技能库暂时无法加载，当前仅显示内置技能。",
+    "builtInPptDescription": "按实际要求生成内容完整、可编辑的演示文稿",
     "incompatibleHint": "当前环境无法直接运行此技能；补齐所需 App、MCP 或运行时后才能启用。",
     "pluginSource": "插件来源",
     "plugin": "插件",
@@ -66,6 +67,7 @@ const translations = {
   "en": {
     "recommended": "Featured",
     "builtInFallback": "The complete skill library could not be loaded. Only built-in skills are shown.",
+    "builtInPptDescription": "Create editable presentations from your content, page count, and visual requirements.",
     "incompatibleHint": "This skill cannot run in the current environment. Add its required app, MCP server, or runtime to enable it.",
     "pluginSource": "Plugin source",
     "plugin": "Plugin",

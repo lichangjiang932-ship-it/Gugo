@@ -4,11 +4,14 @@ import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readReleasePolicy, releasePolicyNotes } from './releasePolicy.mjs'
 
 const API_VERSION = '2022-11-28'
 const DEFAULT_API_BASE_URL = 'https://api.github.com'
 const DEFAULT_UPLOADS_BASE_URL = 'https://uploads.github.com'
 const MAX_RELEASE_ASSETS = 128
+const MAX_RELEASE_PAGES = 20
+const RELEASES_PER_PAGE = 100
 const MAX_ASSET_PAGES = 20
 const ASSETS_PER_PAGE = 100
 const MAX_TAG_INDIRECTIONS = 8
@@ -138,17 +141,65 @@ async function getReleaseByTag({ fetchImpl, apiBaseUrl, repository, tag, headers
 }
 
 async function assertDraftReleaseCurrent(options, expectedReleaseId) {
-  const release = await getReleaseByTag(options)
-  if (!release) {
+  // GitHub's tag endpoint may hide drafts. Pin subsequent reads to the ID
+  // returned by draft discovery/creation, never interpret a tag 404 as deletion.
+  const { fetchImpl, apiBaseUrl, repository, tag, headers } = options
+  const response = await requestJson(fetchImpl, `${apiBaseUrl}/repos/${repository}/releases/${expectedReleaseId}`, {
+    headers,
+    expectedStatuses: [200, 404],
+    context: `read draft GitHub Release ${tag} by ID`,
+  })
+  if (response.status === 404) {
     throw new Error(`Draft GitHub Release ${options.tag} no longer exists`)
   }
+  const release = assertRelease(response.data, tag)
   if (release.id !== expectedReleaseId) {
     throw new Error(`GitHub Release ${options.tag} identity changed during publication`)
   }
-  if (!release.draft) {
+  if (!release.draft || release.immutable === true) {
     throw new Error(`Published GitHub Release ${options.tag} already exists and is immutable`)
   }
+  const discovered = await findReleaseForPublication(options)
+  if (!discovered || discovered.id !== expectedReleaseId) {
+    throw new Error(`GitHub Release ${tag} identity changed during publication`)
+  }
   return release
+}
+
+async function findReleaseForPublication(options) {
+  const visible = await getReleaseByTag(options)
+  if (visible && (!visible.draft || visible.immutable === true)) {
+    throw new Error(`Published GitHub Release ${options.tag} already exists and is immutable`)
+  }
+  const { fetchImpl, apiBaseUrl, repository, tag, headers } = options
+  let match = null
+  for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
+    const url = `${apiBaseUrl}/repos/${repository}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`
+    const response = await requestJson(fetchImpl, url, {
+      headers,
+      context: `list GitHub Releases for tag ${tag}`,
+    })
+    if (!Array.isArray(response.data) || response.data.length > RELEASES_PER_PAGE) {
+      throw new Error(`GitHub returned an invalid release list for tag ${tag}`)
+    }
+    for (const candidate of response.data) {
+      if (candidate?.tag_name !== tag) continue
+      const release = assertRelease(candidate, tag)
+      if (!release.draft || release.immutable === true) {
+        throw new Error(`Published GitHub Release ${tag} already exists and is immutable`)
+      }
+      if (match) throw new Error(`GitHub returned multiple releases for tag ${tag}`)
+      match = release
+    }
+    if (response.data.length < RELEASES_PER_PAGE) {
+      if (visible && visible.id !== match?.id) {
+        throw new Error(`GitHub Release ${tag} identity changed during publication`)
+      }
+      return match
+    }
+  }
+  // Finish the bounded scan even after a match: a later page may be ambiguous.
+  throw new Error(`GitHub has too many releases to verify tag ${tag} safely`)
 }
 
 async function createDraftRelease({
@@ -312,20 +363,31 @@ function assertNoUnexpectedAssets(remoteAssets, expectedNames) {
   throw new Error(`Draft GitHub Release contains unexpected assets: ${names}`)
 }
 
-async function publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, headers }) {
+async function publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, commit, headers, releaseNotes }) {
   const response = await requestJson(
     fetchImpl,
     `${apiBaseUrl}/repos/${repository}/releases/${release.id}`,
     {
       method: 'PATCH',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ draft: false, prerelease: false }),
+      body: JSON.stringify({
+        draft: false, prerelease: false,
+        ...(releaseNotes == null ? {} : { name: tag, target_commitish: commit, body: releaseNotes }),
+      }),
       context: `publish draft GitHub Release ${tag}`,
     },
   )
   const published = assertRelease(response.data, tag)
+  if (published.id !== release.id) {
+    throw new Error(`GitHub Release ${tag} identity changed during publication`)
+  }
   if (published.draft || published.prerelease) {
     throw new Error(`GitHub Release ${tag} did not become a stable published release`)
+  }
+  // GitHub may normalize Markdown line endings. The resolved Git tag, not the
+  // advisory target_commitish field (ignored for existing tags), binds source.
+  if (releaseNotes != null && String(published.body || '').replace(/\r\n?/gu, '\n') !== releaseNotes.replace(/\r\n?/gu, '\n')) {
+    throw new Error(`GitHub Release ${tag} publication metadata did not match its declared policy`)
   }
   return published
 }
@@ -336,6 +398,7 @@ export async function publishGitHubRelease({
   commit,
   files,
   token,
+  releaseNotes = null,
   cwd = process.cwd(),
   fetchImpl = globalThis.fetch,
   apiBaseUrl = DEFAULT_API_BASE_URL,
@@ -344,6 +407,9 @@ export async function publishGitHubRelease({
   assertRepository(repository)
   assertReleaseTag(tag)
   assertCommitSha(commit)
+  if (releaseNotes != null && (typeof releaseNotes !== 'string' || !releaseNotes.trim() || releaseNotes.length > 24_000)) {
+    throw new Error('release notes must be a non-empty string no longer than 24000 characters')
+  }
   if (typeof token !== 'string' || !token.trim()) {
     throw new Error('GITHUB_TOKEN is required for GitHub Release publication')
   }
@@ -354,10 +420,7 @@ export async function publishGitHubRelease({
   const tagOptions = { fetchImpl, apiBaseUrl, repository, tag, headers }
   const releaseOptions = { fetchImpl, apiBaseUrl, repository, tag, headers }
   await assertRemoteTagCommit(tagOptions, commit)
-  let release = await getReleaseByTag(releaseOptions)
-  if (release && !release.draft) {
-    throw new Error(`Published GitHub Release ${tag} already exists and is immutable`)
-  }
+  let release = await findReleaseForPublication(releaseOptions)
   release ||= await createDraftRelease({
     fetchImpl,
     apiBaseUrl,
@@ -406,7 +469,7 @@ export async function publishGitHubRelease({
   verifyRemoteAssets(uploadedAssets, assets)
   await assertRemoteTagCommit(tagOptions, commit)
   release = await assertDraftReleaseCurrent(releaseOptions, release.id)
-  release = await publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, headers })
+  release = await publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, commit, headers, releaseNotes })
   return Object.freeze({
     releaseId: release.id,
     tag,
@@ -443,8 +506,14 @@ export function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
+  const policy = readReleasePolicy()
+  if (args.tag !== `v${policy.version}`) throw new Error('Publication tag does not match the declared release policy')
+  const changelog = await fs.readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8')
+  const changes = changelog.match(/^## \[Unreleased\]\r?\n([\s\S]*?)(?=^## \[|$(?![\s\S]))/m)?.[1]?.trim() || ''
+  const releaseNotes = `${releasePolicyNotes(policy)}\n\n${changes}\n\nBuild commit: ${args.commit}`
   const result = await publishGitHubRelease({
     ...args,
+    releaseNotes,
     token: process.env.GITHUB_TOKEN,
   })
   process.stdout.write(`Published ${result.tag} with ${result.assets.length} verified assets through GitHub REST API\n`)

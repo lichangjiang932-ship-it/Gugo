@@ -26,6 +26,9 @@ import {
 } from './turnEnginePolicy.js'
 import { resetManualRetryVerificationBudget } from './turnFailedRetryPolicy.js'
 import { filterAuthorizedDirectoryResolutions } from './turnResolutionRuntime.js'
+import { normalizeTurnApprovalMode } from './turnStartRuntime.js'
+import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
+import { createTurnPublicTimeline } from './turnPublicTimeline.js'
 
 export function checkpointStateForFailedRetry(state, { manualRetry = false } = {}) {
   if (!state || typeof state !== 'object') return state || null
@@ -101,7 +104,7 @@ async function loadTurnExecutionRecovery(runtime, input) {
   }
 }
 
-async function prepareTurnPromptAndTools(runtime, input, recovery) {
+async function prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode, signal) {
   const { deps, executionToolContextRuntime } = runtime
   const { userId, sessionId, turnId, content, agentId, skillIds, skillDefinitions } = input
   const restoredSnapshot = normalizePromptContextSnapshot(
@@ -127,14 +130,32 @@ async function prepareTurnPromptAndTools(runtime, input, recovery) {
       try { logWarn('evolution.canary.resolve', error, recovery.scope) } catch { /* optional */ }
     }
     try {
+      // Optional semantic memory recall. Both calls are best-effort and only
+      // active when embeddings are explicitly configured; a failure degrades to
+      // the lexical path instead of blocking the turn.
+      let memoryQueryVector = null
+      if (typeof deps.prepareMemoryQueryVector === 'function') {
+        try {
+          memoryQueryVector = await deps.prepareMemoryQueryVector({ query: content, env: deps.env, signal })
+        } catch { memoryQueryVector = null }
+      }
       promptContext = await deps.preparePromptContext({
         userId, agentId, skillIds, skillDefinitions, sessionId,
         recentMessages: recovery.storedMessages,
         includeRecentTranscript: false,
         query: content,
+        memoryQueryVector,
+        signal,
         canaryAssignment,
         env: deps.env,
       }) || promptContext
+      if (typeof deps.indexMemoryEmbeddings === 'function') {
+        try {
+          const indexing = deps.indexMemoryEmbeddings({ userId,
+            agentId: promptContext.effectiveAgentId || agentId || null, env: deps.env, signal })
+          if (indexing && typeof indexing.catch === 'function') indexing.catch(() => {})
+        } catch { /* optional memory indexing cannot fail the task */ }
+      }
     } catch (error) {
       if (String(error?.code || '').trim() !== 'TURN_PROMPT_RUNTIME_NOT_CONFIGURED') {
         logWarn('turn.optional_prompt_context', error, recovery.scope)
@@ -176,6 +197,7 @@ async function prepareTurnPromptAndTools(runtime, input, recovery) {
     toolsConfig: input.toolsConfig,
     intentMode: input.intentMode,
     approvalMode: input.approvalMode,
+    configuredApprovalMode,
     resumeResolution: input.resumeContext?.resolution,
     restoredCheckpointState: recovery.restoredCheckpointState,
     fileAccessStatus: recovery.fileAccessStatus,
@@ -211,6 +233,9 @@ function createTurnExecutionState(runtime, input, recovery, prepared) {
       recovery.pendingRecoveryAttempt?.assistantText || restored?.retryAssistantText || '',
     ),
   }
+  state.publicTimeline = createTurnPublicTimeline({ userId: input.userId, sessionId: input.sessionId, turnId: input.turnId },
+    restored, state.streamedAssistantText)
+  if (!state.streamedAssistantText && state.publicTimeline) state.streamedAssistantText = state.publicTimeline.text
   const recordCanaryTerminal = (
     terminalState,
     errorCode = null,
@@ -259,6 +284,7 @@ async function executePreparedTurn(runtime, input, recovery, prepared, signal) {
     commitTurnBoundary: deps.commitTurnBoundary,
     recordCanaryTerminal: execution.recordCanaryTerminal,
     readState: execution.readTerminalState,
+    replayEvents: deps.replayEvents,
   })
   let contextWindow
   try {
@@ -387,7 +413,27 @@ export function createTurnExecutionRuntime({
       return
     }
     const recovery = await loadTurnExecutionRecovery(runtime, input)
-    const prepared = await prepareTurnPromptAndTools(runtime, input, recovery)
-    await executePreparedTurn(runtime, input, recovery, prepared, signal)
+    // Preserve the unscoped observed mode for recovery drift checks. A narrower
+    // executable scope must never rewrite a conflicting stored environment.
+    const configuredApprovalMode = String(deps.readApprovalMode({ userId: input.userId }) || '').trim()
+    const checkpointMode = normalizeTurnApprovalMode(recovery.restoredCheckpointState?.approvalMode)
+    const permissionMode = checkpointMode || normalizeTurnApprovalMode(input.approvalMode)
+      || (PERMISSION_MODES.includes(configuredApprovalMode) ? configuredApprovalMode : null)
+    const run = async () => {
+      try { recovery.fileAccessStatus = deps.readFileAccessStatus({ userId: input.userId }) }
+      catch { recovery.fileAccessStatus = null }
+      const prepared = await prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode, signal)
+      await executePreparedTurn(runtime, input, recovery, prepared, signal)
+    }
+    // Older injected runLoop hosts use off/unattended/all as deployment queue
+    // modes. Keep that contract without treating them as user permission grants.
+    if (!permissionMode || typeof deps.runWithApprovalMode !== 'function') return run()
+    await deps.runWithApprovalMode({
+      ...scope,
+      permissionMode,
+      checkpointMode,
+      restored: recovery.restoredCheckpointState?.turnPermissionContext || null,
+      resuming: Boolean(recovery.checkpoint),
+    }, run)
   }
 }

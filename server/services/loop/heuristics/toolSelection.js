@@ -154,7 +154,7 @@ export function selectJobToolSpecs({
 }
 
 export function localArtifactCandidates(call, result) {
-  if (call?.name === 'write_file' || call?.name === 'file_download') {
+  if (['write_file', 'file_download', 'browser_download'].includes(call?.name)) {
     return [{ path: result?.path || call?.args?.path, scope: result?.scope }]
   }
   if (call?.name === 'image_transform') {

@@ -462,6 +462,15 @@ export function deleteManagedAttachment({ userId, id, env = process.env } = {}) 
   return deleteManagedAttachmentRows([row], { env }) === 1
 }
 
+/** Roll back this invocation's staged upload only; a bound/changed receipt is retained. */
+export function discardUnboundManagedAttachment({ userId, sessionId, id, env = process.env } = {}) {
+  if (!userId || !sessionId) return false
+  const row = getDb().prepare(`SELECT * FROM managed_attachments
+    WHERE id = ? AND user_id = ? AND session_id = ? AND message_id IS NULL`)
+    .get(normalizeAttachmentId(id), userId, sessionId)
+  return row ? deleteManagedAttachmentRows([row], { env, requireSnapshotMatch: true }) === 1 : false
+}
+
 export function resolveManagedAttachmentPath({ userId, rawPath, write = false, env = process.env } = {}) {
   const match = String(rawPath || '').trim().match(/^attachment:\/\/([a-zA-Z0-9][a-zA-Z0-9_-]{7,127})$/)
   if (!match) return null

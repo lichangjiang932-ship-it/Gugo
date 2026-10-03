@@ -1,4 +1,17 @@
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+import { resolveSemanticSummaryPolicy } from '../contextSemanticSummaryPolicy.js'
+import { synchronizePresentationPromptContext } from './presentationPromptContext.js'
+import { withAssistantCommunicationPolicy } from '../../../shared/assistantCommunicationPolicy.js'
+import { messageTextContent } from './userMessageText.js'
+import { completionPolicyAttempts } from './completionPolicy.js'
+import { createPreviewVerification } from '../previewVerification.js'
+
+// Exact legacy host records, not a substring/marker match: quoted examples,
+// user content and other system safety instructions must survive recovery.
+const LEGACY_EXECUTION_SYSTEM_RECORDS = new Set([
+  '[DIRECT EXECUTION REQUIRED] The user asked for concrete work, not instructions for doing it later. Use the available tools now, follow the supplied steps, create or modify the requested deliverable, and verify the result before answering. Do not merely print a script or tell the user to run commands. If execution is genuinely blocked, report the concise blocker; full source is allowed only when the artifact source-delivery policy confirms that the user explicitly requested a code snippet. Keep internal deliberation brief; report the completed result or one concise, specific blocker.',
+  '[EXECUTION EVIDENCE REQUIRED] The previous response did not establish execution evidence for the current modification target, so it was not accepted as completion. Continue until the requested target has concrete mutation evidence, or an inherited successful mutation has been strictly verified. If indispensable information is missing, call request_clarification instead of presenting instructions as a completed result.',
+])
 
 function initializeConversationContext(s) {
   const {
@@ -24,7 +37,7 @@ function initializeConversationContext(s) {
     : s.job?.id && s.step?.id
       ? `job:${s.job.id}:${s.step.id}`
       : null
-  s.semanticSummary = false
+  s.semanticSummary = resolveSemanticSummaryPolicy(s.context.model.semanticSummary, process.env)
   s.outputDirectoryContext = {}
   try {
     s.outputDirectoryContext = {
@@ -46,23 +59,43 @@ function initializeConversationContext(s) {
     : ''
   s.verificationProjectDirectory = configuredRoot || authorizedRoots[0] || ''
   s.verificationProjectDirectories = [...new Set([configuredRoot, ...authorizedRoots].filter(Boolean))]
+  // The preview verifies this conversation's own project, one observation per
+  // edit batch, and obeys that project's .gugo/launch.json about whether to run.
+  s.previewVerification = createPreviewVerification({
+    userId: s.job?.userId || null,
+    sessionId: s.job?.sessionId || s.job?.id || '',
+    workspaceRoot: s.verificationProjectDirectory,
+    signal: s.signal || null,
+  })
   s.requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(s.artifactDelivery.target)
     || s.artifactRevisionMode === 'replace_original'
     || Boolean(String(s.outputDirectoryContext.defaultOutputDirectory || '').trim())
-  s.convo = ensureSafetySystemMessages(
-    Array.isArray(s.restoredState?.messages)
-      ? stripEphemeralToolMediaMessages(s.restoredState.messages)
-      : [...s.messages],
-  )
+  const isRestoredConversation = Array.isArray(s.restoredState?.messages)
+  const messages = isRestoredConversation
+    ? stripEphemeralToolMediaMessages(s.restoredState.messages)
+    : [...s.messages]
+  // initializeArtifacts has already re-evaluated the current chat request.
+  // Do not replay a legacy code-mode obligation after it became answer-only.
+  const discardLegacyExecution = isRestoredConversation && s.job?.origin === 'chat'
+    && s.requiresExecutionEvidence === false && s.requiresPersistedArtifact === false
+    && !s.revisesAdjacentArtifact && s.expectedArtifactTools.size === 0
+  s.convo = ensureSafetySystemMessages(discardLegacyExecution
+    ? messages.filter((message) => message?.role !== 'system'
+        || !LEGACY_EXECUTION_SYSTEM_RECORDS.has(message.content))
+    : messages)
   s.convo = replaceRuntimeCapabilityBlock(s.convo, {
     toolSpecs: s.activeToolSpecs,
     approvalMode: s.approvalMode,
     ...s.outputDirectoryContext,
   })
+  synchronizePresentationPromptContext(s)
+  // A resumed model/compaction request owns its exact recorded prompt digest.
+  // New guidance applies to new turns, never by rewriting an in-flight request.
+  if (!isRestoredConversation) s.convo = withAssistantCommunicationPolicy(s.convo)
   if (s.shouldRestoreExecutionTools
     && s.recoveredPriorLocalTargetPaths.length > 0
     && !s.convo.some((message) => message?.role === 'system'
-      && String(message?.content || '').includes(DYNAMIC_EXECUTION_TARGET_MARKER))) {
+      && messageTextContent(message?.content).includes(DYNAMIC_EXECUTION_TARGET_MARKER))) {
     s.convo.push({
       role: 'system',
       content: [
@@ -73,12 +106,12 @@ function initializeConversationContext(s) {
     })
   }
   s.hasRuntimeMarker = (marker) => s.convo.some((message) => (
-    message?.role === 'system' && String(message?.content || '').includes(marker)
+    message?.role === 'system' && messageTextContent(message?.content).includes(marker)
   ))
   s.representativeReadsInjected = Boolean(
     s.restoredState?.completionGuards?.representativeReadsInjected,
   ) || s.convo.some((message) => message?.role === 'system'
-    && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
+    && messageTextContent(message?.content).includes(DIRECTORY_REVIEW_GUARD_MARKER))
   s.hasSuccessfulRepresentativeRead = successfulReadFileInMessages(s.convo)
 }
 
@@ -197,9 +230,9 @@ function initializeDeliverableSelection(s) {
     s.deliveryArtifactIds = []
     s.deliveryArtifactSelectionArtifactIds = []
   }
-  s.deliverableSelectionRetries = Math.max(
-    0,
-    Number(s.restoredState?.completionGuards?.deliverableSelectionRetries) || 0,
+  s.deliverableSelectionRetries = completionPolicyAttempts(
+    s.restoredState?.completionGuards,
+    'deliverableSelectionRetries',
   )
   s.hasCurrentDeliverableSelection = () => s.deliveryArtifactSelectionExplicit
     && sameArtifactIdList(s.deliveryArtifactSelectionArtifactIds, s.artifactIds)

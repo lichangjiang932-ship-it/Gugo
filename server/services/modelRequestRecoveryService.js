@@ -7,6 +7,7 @@ import {
 import { getTurnCheckpoint } from './turnCheckpointStore.js'
 import { assertValidCompletedModelResponse } from '../utils/modelResponseValidation.js'
 import { lastModelProviderAttemptForClient } from './modelRequestRecoveryProjection.js'
+import { selectModelRequestRecoverySlot } from './modelRequestInvocationSlots.js'
 
 const MAX_RESPONSE_BYTES = 512 * 1024
 const MAX_RECEIPT_BYTES = 64 * 1024
@@ -71,8 +72,7 @@ function boundedModelResponse(value) {
 }
 
 function checkpointInvocation(checkpoint) {
-  const invocation = normalizeModelInvocation(checkpoint?.state?.modelInvocation)
-  return invocation?.status === 'in_flight' ? invocation : null
+  return selectModelRequestRecoverySlot(checkpoint?.state)?.invocation || null
 }
 
 function rawCheckpoint(db, { userId, sessionId, turnId }) {
@@ -141,12 +141,13 @@ function resolutionRow(db, { userId, sessionId, turnId, modelRequestId }) {
   `).get(userId, sessionId, turnId, modelRequestId)
 }
 
-function recordForClient({ checkpoint, invocation, row = null }) {
+function recordForClient({ checkpoint, invocation, row = null, slot = 'main' }) {
   const resolution = row?.resolution || row?.outcome || 'unknown'
   const resolvedAt = row?.resolved_at ?? row?.reconciledAt ?? null
   const lastProviderAttempt = lastModelProviderAttemptForClient(invocation)
   return {
     checkpointSequence: checkpoint.eventSequence,
+    ...(slot === 'compaction' ? { modelRequestSlot: slot } : {}),
     ...identityFromInvocation(invocation),
     ...(lastProviderAttempt ? { lastProviderAttempt } : {}),
     status: resolution === 'completed' || resolution === 'not_sent'
@@ -172,7 +173,8 @@ export async function getPendingModelRequestRecovery({
     sessionId: normalizedSessionId,
     turnId: normalizedTurnId,
   })
-  const invocation = checkpointInvocation(checkpoint)
+  const selected = selectModelRequestRecoverySlot(checkpoint?.state)
+  const invocation = selected?.invocation
   if (!checkpoint || !invocation) return null
   const row = await readResolution({
     userId: ownerId,
@@ -180,7 +182,7 @@ export async function getPendingModelRequestRecovery({
     turnId: normalizedTurnId,
     invocation,
   })
-  return recordForClient({ checkpoint, invocation, row })
+  return recordForClient({ checkpoint, invocation, row, slot: selected.slot })
 }
 
 export function readModelRequestRecoveryResolution({
@@ -319,7 +321,8 @@ export function commitSqliteModelRequestRecoveryResolution({
     if (checkpoint.eventSequence !== checkpointSequence) {
       throw recoveryError('MODEL_REQUEST_RECOVERY_CONFLICT', 'turn checkpoint advanced before confirmation', 409)
     }
-    const invocation = checkpointInvocation(checkpoint)
+    const selected = selectModelRequestRecoverySlot(checkpoint.state)
+    const invocation = selected?.invocation
     if (!invocation) {
       throw recoveryError('MODEL_REQUEST_RECOVERY_CONFLICT', 'model request is no longer in flight', 409)
     }
@@ -375,7 +378,7 @@ export function commitSqliteModelRequestRecoveryResolution({
       turnId: normalizedTurnId,
       modelRequestId: expected.modelRequestId,
     })
-    return recordForClient({ checkpoint, invocation, row: stored })
+    return recordForClient({ checkpoint, invocation, row: stored, slot: selected.slot })
   })
   return transact.immediate()
 }

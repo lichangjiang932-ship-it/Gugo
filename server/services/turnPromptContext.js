@@ -9,9 +9,14 @@ import {
   prepareSkillsForPrompt,
 } from './promptCompiler.js'
 import { prepareMemoryInjectionContext } from './memoryContextService.js'
+import { buildOutputContractBlock } from './outputContractPrompt.js'
+import { goalToolContextForTurn } from './goalPlanPrompt.js'
+import { resolveMemoryEmbeddingSpace } from './memoryEmbeddingService.js'
+import { fingerprintPromptBlocks } from './promptPrefixFingerprint.js'
 import { logWarn } from '../utils/logger.js'
 import { renderRuntimePromptBlocks } from '../plugins/pluginRegistry.js'
 import { readWorkspaceInstructions } from './workspaceInstructions.js'
+import { assertPromptContextActive, prepareBackgroundMemoryQuery, promptMemoryDiagnostics } from './backgroundMemoryQuery.js'
 
 function normalizeIds(values, limit = 32) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((value) => value.trim()).filter(Boolean))]
@@ -24,7 +29,9 @@ function isPromiseLike(value) {
 }
 
 function warnStep(label, error, warn = logWarn) {
-  try { warn('turn.prompt', `${label}: ${error?.message || error}`) } catch { /* optional context */ }
+  const code = /^(?:MEMORY|SQLITE|SKILL|COMPACTION|WORKSPACE)_[A-Z0-9_]{1,70}$/u.test(String(error?.code || ''))
+    ? error.code : 'PROMPT_CONTEXT_UNAVAILABLE'
+  try { warn('turn.prompt', `${label}: ${code}`) } catch { /* optional context */ }
 }
 
 function safeStep(label, fallback, work, warn = logWarn) {
@@ -34,6 +41,26 @@ function safeStep(label, fallback, work, warn = logWarn) {
     warnStep(label, error, warn)
     return fallback
   }
+}
+
+const EMPTY_GOAL_CONTEXT = Object.freeze({ active: false, planId: null, promptBlock: null })
+
+function safeGoalPlan(prepareGoalPlan, ids, warn) {
+  return safeStep('goal plan context failed', EMPTY_GOAL_CONTEXT, () => prepareGoalPlan(ids), warn)
+}
+
+/** A query vector is only comparable inside the space that produced it. */
+function memoryQuerySpaceFor(queryVector, env) {
+  return queryVector ? resolveMemoryEmbeddingSpace(env) : null
+}
+
+function memoryDiagnosticSummary(diagnostics) {
+  return promptMemoryDiagnostics(diagnostics)
+}
+
+function resolvePromptInstructions({ canaryPrompt, readInstructions, userId, env, warn }) {
+  if (canaryPrompt) return { text: canaryPrompt.promptContent.trim() }
+  return safeStep('workspace instructions failed', null, () => readInstructions({ userId, env }), warn)
 }
 
 /**
@@ -48,6 +75,9 @@ export function prepareBackgroundPromptContext({
   skillIds = [],
   skillDefinitions = [],
   query = '',
+  queryVector = null,
+  querySpace,
+  signal = null,
   env = process.env,
 } = {}, dependencies = {}) {
   const prepareSkills = dependencies.prepareSkillsForPrompt || prepareSkillsForPrompt
@@ -76,14 +106,17 @@ export function prepareBackgroundPromptContext({
     catalogSkills: [...catalogSkills, ...preparedSkills],
   }), warn)
   const tokenCap = Number(env.MEMORY_INJECT_TOKEN_CAP || 800)
-  const memory = safeStep('background memory context failed', { text: '', memoryIds: [] }, () => prepareMemory({
+  const memory = safeStep('background memory context failed', { text: '', memoryIds: [], diagnostics: { failed: true } }, () => prepareMemory({
     userId,
     agentId: effectiveAgentId,
     query,
+    queryVector,
+    querySpace: querySpace === undefined ? memoryQuerySpaceFor(queryVector, env) : querySpace,
+    signal,
     tokenCap: Number.isFinite(tokenCap) ? tokenCap : 800,
   }), warn)
   const messages = []
-  const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
+  const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ userId, env }), warn)
   if (instructions?.text) messages.push({ role: 'system', content: instructions.text })
   if (skills?.text) messages.push({ role: 'system', content: skills.text })
   if (memory?.text) messages.push({ role: 'system', content: memory.text })
@@ -92,7 +125,41 @@ export function prepareBackgroundPromptContext({
     effectiveAgentId,
     skillIds: preparedSkills.map((skill) => String(skill.id)),
     memoryIds: Array.isArray(memory?.memoryIds) ? memory.memoryIds : [],
+    ...(memory?.diagnostics ? { memoryDiagnostics: memoryDiagnosticSummary(memory.diagnostics) } : {}),
   }
+}
+
+function renderPromptMessages({ identity, ishiki, outputContract, skills, instructions, sessions, memory, goalPlan, runtimePrompts, warn }) {
+  const blocks = []
+  for (const block of [identity, ishiki, outputContract, skills, instructions]) {
+    if (block?.text) blocks.push({ role: 'system', content: block.text, __gugoPromptStability: 'stable' })
+  }
+  if (sessions?.text) blocks.push({ role: 'system', content: sessions.text })
+  // Memory and the plan remain in the volatile tail, after stable instructions.
+  if (memory.text) blocks.push({ role: 'system', content: memory.text })
+  if (goalPlan?.promptBlock) blocks.push({ role: 'system', content: goalPlan.promptBlock })
+  for (const error of runtimePrompts.errors || []) {
+    try {
+      warn('turn.prompt', `runtime plugin prompt omitted: ${error.pluginId}/${error.id} (${error.code})`)
+    } catch { /* optional context */ }
+  }
+  for (const block of runtimePrompts.blocks || []) {
+    blocks.push({ role: 'system',
+      content: `# Runtime Plugin Context: ${block.id}\nSource: ${block.pluginId}\n\n${block.text}` })
+  }
+  return blocks
+}
+
+/** Async semantic recall for fresh background tasks; retain the synchronous preparation API. */
+export async function prepareBackgroundPromptContextAsync(input = {}, dependencies = {}) {
+  const query = await prepareBackgroundMemoryQuery(input, dependencies)
+  assertPromptContextActive(input.signal)
+  const context = prepareBackgroundPromptContext({ ...input, env: query.env,
+    queryVector: query.queryVector, querySpace: query.querySpace }, dependencies)
+  assertPromptContextActive(input.signal)
+  return { ...context, memoryDiagnostics: {
+    ...promptMemoryDiagnostics(context.memoryDiagnostics), embedding: query.embedding,
+  } }
 }
 
 export function prepareTurnPromptContext({
@@ -106,6 +173,8 @@ export function prepareTurnPromptContext({
   compactionArchivePort,
   query = '',
   canaryAssignment = null,
+  memoryQueryVector = null,
+  signal = null,
   env = process.env,
 } = {}, dependencies = {}) {
   const readAgent = dependencies.getAgent || getAgent
@@ -113,6 +182,7 @@ export function prepareTurnPromptContext({
   const prepareSkills = dependencies.prepareSkillsForPrompt || prepareSkillsForPrompt
   const prepareSkillCatalog = dependencies.prepareSkillCatalogForPrompt || prepareSkillCatalogForPrompt
   const prepareMemory = dependencies.prepareMemoryInjectionContext || prepareMemoryInjectionContext
+  const prepareGoalPlan = dependencies.goalToolContextForTurn || goalToolContextForTurn
   const renderPluginPrompts = dependencies.renderRuntimePromptBlocks || renderRuntimePromptBlocks
   const buildSessions = dependencies.buildSessionsBlock || buildSessionsBlock
   const warn = dependencies.logWarn || logWarn
@@ -144,11 +214,12 @@ export function prepareTurnPromptContext({
     && canaryAssignment.promptContent.trim()
     ? canaryAssignment
     : null
-  const instructions = canaryPrompt
-    ? { text: canaryPrompt.promptContent.trim() }
-    : safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
+  const instructions = resolvePromptInstructions({ canaryPrompt, readInstructions, userId, env, warn })
   const identity = safeStep('identity block failed', null, () => buildIdentityBlock({ agent }), warn)
   const ishiki = safeStep('ishiki block failed', null, () => buildIshikiBlock({ agent }), warn)
+  // The response contract is static and always present, so it is part of the
+  // stable prefix: the model is told the same shape on every turn.
+  const outputContract = safeStep('output contract block failed', null, () => buildOutputContractBlock(), warn)
   const skills = safeStep('skills block failed', null, () => buildSkillsBlockFromPrepared({
     userId,
     agentId: effectiveAgentId,
@@ -164,10 +235,13 @@ export function prepareTurnPromptContext({
   }), warn)
 
   const tokenCap = Number(env.MEMORY_INJECT_TOKEN_CAP || 800)
-  const memory = safeStep('memory context failed', { text: '', memoryIds: [] }, () => prepareMemory({
+  const memory = safeStep('memory context failed', { text: '', memoryIds: [], diagnostics: { failed: true } }, () => prepareMemory({
     userId,
     agentId: effectiveAgentId,
     query,
+    queryVector: memoryQueryVector,
+    querySpace: memoryQuerySpaceFor(memoryQueryVector, env),
+    signal,
     tokenCap: Number.isFinite(tokenCap) ? tokenCap : 800,
   }), warn)
   const runtimePrompts = safeStep(
@@ -181,39 +255,23 @@ export function prepareTurnPromptContext({
     }),
     warn,
   )
+  const goalPlan = safeGoalPlan(prepareGoalPlan, { userId, sessionId }, warn)
   const finalize = (resolvedSessions) => {
-    const blocks = []
-    for (const block of [identity, ishiki, skills, resolvedSessions]) {
-      if (block?.text) blocks.push({ role: 'system', content: block.text })
-    }
-    if (memory.text) blocks.push({ role: 'system', content: memory.text })
-    for (const error of runtimePrompts.errors || []) {
-      try {
-        warn(
-          'turn.prompt',
-          `runtime plugin prompt omitted: ${error.pluginId}/${error.id} (${error.code})`,
-        )
-      } catch { /* optional context */ }
-    }
-    for (const block of runtimePrompts.blocks || []) {
-      blocks.push({
-        role: 'system',
-        content: `# Runtime Plugin Context: ${block.id}\nSource: ${block.pluginId}\n\n${block.text}`,
-      })
-    }
-    // Keep the four compiled blocks as one stable prefix. Workspace instructions
-    // may change independently while a task is running, so placing them before
-    // identity would invalidate the provider-side prefix cache for every block.
-    if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
-
+    const blocks = renderPromptMessages({ identity, ishiki, outputContract, skills, instructions, sessions: resolvedSessions,
+      memory, goalPlan, runtimePrompts, warn })
+    // Stable prefix = identity + ishiki + output contract + skills + instructions (pushed first).
+    const promptFingerprints = fingerprintPromptBlocks({ blocks, stableBlocks: [identity, ishiki, outputContract, skills, instructions] })
     return {
       messages: blocks,
       effectiveAgentId,
       skillIds: preparedSkills.map((skill) => String(skill.id)),
       memoryIds: memory.memoryIds,
+      ...(memory.diagnostics ? { memoryDiagnostics: memoryDiagnosticSummary(memory.diagnostics) } : {}),
+      promptFingerprints,
       pluginPromptBlockIds: (runtimePrompts.blocks || []).map((block) => `${block.pluginId}:${block.id}`),
       compactionArchiveId: resolvedSessions?.sources?.archiveId || null,
       compactionBoundary: resolvedSessions?.sources?.compactionBoundary || null,
+      goalPlanId: goalPlan?.planId || null,
       canaryAssignment: canaryPrompt ? {
         id: canaryPrompt.id,
         releaseId: canaryPrompt.releaseId,

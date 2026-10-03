@@ -1,0 +1,34 @@
+{
+  "tasks": [
+    {
+      "id": "starter-counter-repair",
+      "prompt": "Fix the defect in src/counter.js so the documented completed-item count is correct for mixed and empty inputs. Preserve the exported API and run the provided project checks.",
+      "workspace": "./fixtures/counter-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [
+        { "script": "./verifiers/counter-repair.mjs" }
+      ]
+    },
+    {
+      "id": "starter-config-hardening",
+      "prompt": "Harden src/config.js against prototype-pollution keys while preserving ordinary own configuration values. Do not change the exported function name. Run the provided project checks.",
+      "workspace": "./fixtures/config-hardening",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [
+        { "script": "./verifiers/config-hardening.mjs" }
+      ]
+    },
+    {
+      "id": "starter-report-repair",
+      "prompt": "Repair src/report.js so it returns the correct total, arithmetic mean, and highest record without mutating its input. Keep the current return shape and run the provided project checks.",
+      "workspace": "./fixtures/report-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [
+        { "script": "./verifiers/report-repair.mjs" }
+      ]
+    }
+  ]
+}

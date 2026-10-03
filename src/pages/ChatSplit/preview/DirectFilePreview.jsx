@@ -2,22 +2,30 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
-import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
+import { DOCX_PREVIEW_OPTIONS, buildDocxSrcdoc } from '../../../lib/docxPreview.js'
+import { DocxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
+import PptxFilePreview from './PptxFilePreview.jsx'
 import { InteractiveHtmlFilePreview } from './HtmlFilePreview.jsx'
 import { NativePreviewRenderer, WorkbookPreview } from './NativePreviewRenderers.jsx'
 import { OpenOriginalLink, PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
-import { previewRendererRegistry } from './previewRendererRegistry.js'
+import { BUILTIN_PREVIEW_RENDERER_OWNER, previewRendererRegistry } from './previewRendererRegistry.js'
 import { withPreviewRetry } from './previewUrl.js'
+import { canViewDirectFileSource } from '../../../lib/directFileSource.js'
+import DirectFileSource from './DirectFileSource.jsx'
 
 export { DirectHtmlUrlPreview } from './HtmlFilePreview.jsx'
 
 function directFilePreviewIdentity(file = {}, url = '') {
-  return [file.id, file.filename, file.title, file.type, file.mimeType, file.path, url]
+  return [file.id, file.filename, file.title, file.type, file.mimeType, file.path, url,
+    file.previewRevision, file.revision, file.updatedAt, file.digest, file.contentDigest, file.sha256, file.lastModified]
     .map((value) => String(value || ''))
     .join('\u0000')
 }
 
 export default function DirectFilePreview(props) {
+  if (props.view === 'source' && canViewDirectFileSource(props.file)) {
+    return <DirectFileSource key={directFilePreviewIdentity(props.file, props.url)} {...props} />
+  }
   return <DirectFilePreviewRequest key={directFilePreviewIdentity(props.file, props.url)} {...props} />
 }
 
@@ -64,19 +72,92 @@ function DirectFilePreviewRequest({ file, url, t }) {
   />
   const descriptor = previewRendererRegistry.resolve(preview?.kind) || previewRendererRegistry.resolve('unsupported')
   const Renderer = descriptor.component
-  return <Renderer preview={preview} file={file} url={url} t={t} />
+  return <Renderer preview={preview} file={file} url={url} t={t} onReload={() => setRetryAttempt((value) => value + 1)} />
 }
 
 function HtmlPreviewRenderer({ file, t, url }) {
   return <InteractiveHtmlFilePreview key={`html:${url}`} file={file} url={url} t={t} />
 }
 
-function DocxFileRenderer({ preview }) {
-  return <DocxPreview blocks={preview.blocks || []} title={preview.title} />
+function DocxFileRenderer({ preview, file, url, t }) {
+  // Keyed like DirectFilePreviewRequest: the loading state is derived from
+  // whether the current url has produced a result yet, so the effect never
+  // writes state synchronously.
+  const requestKey = String(url || '')
+  const [docxState, setDocxState] = useState({ key: '', status: 'ready', html: '', error: '' })
+  const current = docxState.key === requestKey ? docxState : null
+  useEffect(() => {
+    if (!requestKey) return undefined
+    let cancelled = false
+    const render = async () => {
+      const body = document.createElement('div')
+      const styles = document.createElement('div')
+      const response = await fetch(requestKey)
+      if (!response?.ok) throw new Error(`HTTP ${response?.status || 0}`)
+      // Read bytes, not a Blob: docx-preview hands the package to JSZip, which
+      // prefers an ArrayBuffer/Uint8Array. A Blob would force JSZip through
+      // FileReader, which fails whenever the Blob and the document come from
+      // different realms (browser shell vs. embedded preview host).
+      const bytes = await response.arrayBuffer()
+      // Imported lazily: the preview panel is not on the startup path, and the
+      // renderer is only needed for an actual docx.
+      const { renderAsync } = await import('docx-preview')
+      await renderAsync(bytes, body, styles, DOCX_PREVIEW_OPTIONS)
+      if (cancelled) return
+      setDocxState({
+        key: requestKey,
+        status: 'ready',
+        html: buildDocxSrcdoc({
+          bodyHtml: body.innerHTML,
+          // textContent, not innerHTML: docx-preview fills the style container
+          // with a <style> element, and nesting that inside our own <style>
+          // turns the rules into text.
+          styleText: styles.textContent || '',
+          title: file?.filename || preview?.title || '',
+        }),
+        error: '',
+      })
+    }
+    render().catch((cause) => {
+      if (!cancelled) {
+        setDocxState({ key: requestKey, status: 'error', html: '', error: cause?.message || String(cause) })
+      }
+    })
+    return () => { cancelled = true }
+  }, [requestKey, file?.filename, preview?.title])
+
+  if (!requestKey) {
+    return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} />
+  }
+  if (!current) {
+    return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.docxRendering')} />
+  }
+  if (current.status === 'ready') {
+    return (
+      <iframe
+        data-testid="docx-layout-frame"
+        // Empty sandbox: no scripts, no same-origin, no forms, no downloads.
+        sandbox=""
+        srcDoc={current.html}
+        title={file?.filename || preview?.title || 'document'}
+        className="h-full w-full border-0 bg-paper"
+      />
+    )
+  }
+  // Never lose the document because the faithful renderer failed: fall back to
+  // the extracted blocks and say so.
+  return (
+    <div className="flex h-full flex-col overflow-auto">
+      <p className="px-4 pt-3 text-xs text-ink-fade" data-testid="docx-render-degraded">
+        {t('chatPreview.docxRenderingFallback')}
+      </p>
+      <DocxPreview blocks={preview?.blocks || []} title={preview?.title} />
+    </div>
+  )
 }
 
-function PptxFileRenderer({ preview }) {
-  return <PptxPreview content={preview.content || ''} />
+function PptxFileRenderer(props) {
+  return <PptxFilePreview {...props} />
 }
 
 function WorkbookFileRenderer({ preview }) {
@@ -104,7 +185,10 @@ function UnsupportedFileRenderer({ file, t, url }) {
   />
 }
 
-const builtInPreviewRendererCleanups = [
+// Built-ins live with the registry. Keep the previous renderer available while
+// HMR asynchronously loads a replacement (or if that load fails); registerOwned
+// atomically replaces this owner's entry when the new module is ready.
+const builtInPreviewRenderers = [
   ['image', { component: NativePreviewRenderer }],
   ['pdf', { component: NativePreviewRenderer }],
   ['audio', { component: NativePreviewRenderer }],
@@ -120,10 +204,8 @@ const builtInPreviewRendererCleanups = [
   ['code', { component: SourceFileRenderer, needsFetch: true }],
   ['text', { component: SourceFileRenderer, needsFetch: true }],
   ['unsupported', { component: UnsupportedFileRenderer }],
-].map(([kind, descriptor]) => previewRendererRegistry.register(kind, descriptor))
+]
 
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    for (const unregister of builtInPreviewRendererCleanups) unregister()
-  })
+for (const [kind, descriptor] of builtInPreviewRenderers) {
+  previewRendererRegistry.registerOwned(BUILTIN_PREVIEW_RENDERER_OWNER, kind, descriptor)
 }

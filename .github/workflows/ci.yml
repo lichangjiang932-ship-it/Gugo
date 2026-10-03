@@ -116,6 +116,9 @@ jobs:
   coverage:
     name: coverage gate
     runs-on: ubuntu-latest
+    # One instrumented process covers the entire suite, not a normal 100-file
+    # batch. Keep a finite outer bound with room for setup and isolated UI tests.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -128,6 +131,7 @@ jobs:
       - name: Enforce coverage thresholds
         env:
           TEST_CONCURRENCY: 1
+          TEST_COVERAGE_TIMEOUT_MS: 2400000
         run: npm run test:coverage
 
   dependency-audit:

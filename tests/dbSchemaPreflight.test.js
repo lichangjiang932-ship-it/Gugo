@@ -431,6 +431,10 @@ test('current-version databases with a missing critical column, index, or autoin
       label: 'missing-column',
       mutate(db) {
         db.exec(`
+          -- Remove dependent triggers so the fixture can construct the missing
+          -- column. The preflight must still detect it without repairing data.
+          DROP TRIGGER memory_search_insert_pending;
+          DROP TRIGGER memory_search_update_pending;
           DROP INDEX idx_memories_user_agent;
           ALTER TABLE memories DROP COLUMN agent_id;
         `)
@@ -541,6 +545,29 @@ test('current-version databases with a missing critical column, index, or autoin
         weakenDlqAutoincrement(db)
       },
       expectedMissing: 'autoincrement-primary-key:agent_event_subscription_dlq.dlq_id',
+    },
+    {
+      label: 'missing-transcript-recovery-fences',
+      mutate(db) {
+        db.exec('DROP TABLE session_transcript_recovery_fences')
+      },
+      expectedMissing: 'table-shape:session_transcript_recovery_fences',
+    },
+    {
+      label: 'malformed-transcript-recovery-fences',
+      mutate(db) {
+        db.exec(`
+          DROP TABLE session_transcript_recovery_fences;
+          CREATE TABLE session_transcript_recovery_fences (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            session_id TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE,
+            turn_id TEXT NOT NULL,
+            suppressed_through_sequence INTEGER NOT NULL,
+            PRIMARY KEY (user_id, session_id, turn_id)
+          );
+        `)
+      },
+      expectedMissing: 'constraints:session_transcript_recovery_fences',
     },
   ]
 
@@ -762,6 +789,11 @@ test('fresh and v5→v6, v27→v28, and v29→v30 fixtures converge idempotently
       version: 5,
       mutate(db) {
         db.exec(`
+          -- These derived v120 objects did not exist in a v5 database.
+          DROP TRIGGER memory_search_insert_pending;
+          DROP TRIGGER memory_search_update_pending;
+          DROP TABLE memory_search_pending;
+          DROP TABLE memory_search_index;
           DROP INDEX idx_memories_user_agent;
           ALTER TABLE memories DROP COLUMN agent_id;
         `)

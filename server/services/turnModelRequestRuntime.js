@@ -84,6 +84,18 @@ export function createTurnModelRequestRunner({
     const modelRequest = chatOnlyMode
       ? { ...request, tools: [], toolChoice: 'none' }
       : request
+    // Summaries operate on text evidence, not the user's next multimodal
+    // request. They must not consume its first attachment or recovery event.
+    if (modelRequest.requestPurpose === 'context_summary') {
+      return runModel({
+        ...modelRequest, tools: [], toolChoice: 'none',
+        userId: modelRuntimeEnv ? null : userId, usageOwnerId: userId,
+        modelName: modelName || undefined,
+        modelProviderId: modelRuntimeEnv ? undefined : (modelProviderId || undefined),
+        env: modelRuntimeEnv || env,
+        onTextDelta: undefined, onReasoningDelta: undefined, onToolCallReady: undefined,
+      })
+    }
     if (recoveryAttempt) {
       const attempt = recoveryAttempt
       recoveryAttempt = null

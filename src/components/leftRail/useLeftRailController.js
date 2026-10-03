@@ -10,6 +10,7 @@ const LOGIN_ERROR_I18N_KEYS = Object.freeze({
   AUTH_EMAIL_INVALID: 'leftRailLogin.emailInvalid',
   AUTH_SEND_CODE_RATE_LIMITED: 'leftRailLogin.sendCodeRateLimited',
   AUTH_SEND_CODE_FAILED: 'leftRailLogin.sendCodeFailed',
+  AUTH_MAIL_NOT_CONFIGURED: 'leftRailLogin.mailNotConfigured',
   AUTH_CODE_INVALID_OR_EXPIRED: 'leftRailLogin.codeInvalidOrExpired',
   AUTH_CODE_ATTEMPTS_EXCEEDED: 'leftRailLogin.codeAttemptsExceeded',
   AUTH_CODE_INVALID: 'leftRailLogin.codeInvalid',
@@ -99,7 +100,7 @@ export default function useLeftRailController({ authMode, dispatch, location, na
     event.preventDefault(); updateLogin({ loading: true, message: '' })
     try {
       const data = login.mode === 'password' ? await loginWithPassword({ email: login.email, password: login.password }) : await verifyLoginCode({ email: login.email, code: login.code })
-      dispatch({ type: 'LOGIN', payload: { name: data.user.email.split('@')[0], email: data.user.email, avatar: null } })
+      dispatch({ type: 'LOGIN', payload: { id: data.user.id, name: data.user.email.split('@')[0], email: data.user.email, avatar: null } })
       const defaultPath = settingsPathAfterLogin(data.user)
       navigate(data.user.hasPassword === false ? defaultPath : (login.target || defaultPath))
       setLogin(EMPTY_LOGIN)

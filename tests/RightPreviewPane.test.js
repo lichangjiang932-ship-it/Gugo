@@ -13,6 +13,7 @@ const viteServer = await createServer({
 })
 
 await viteServer.ssrLoadModule('/tests/unit/RightPreviewPane.test.jsx')
+await viteServer.ssrLoadModule('/tests/unit/PreviewPaneLayout.test.jsx')
 await viteServer.ssrLoadModule('/tests/unit/LocalFilesChatAction.test.jsx')
 
 after(async () => {

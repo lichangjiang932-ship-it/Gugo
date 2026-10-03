@@ -18,14 +18,25 @@ test('skill helpers resolve imported skills supplied at runtime', () => {
   assert.equal(getSkillEffectiveConfig('writer', {}, importedSkills).enabled, true)
 })
 
-test('ppt skill prompt appends a topic-specific presentation blueprint', () => {
+test('ppt skill prompt appends the actual user request instead of a preset blueprint', () => {
+  const userPrompt = '帮我做一个关于 DeepSeek V4 Pro 的 ppt5页，要求高级感，内容充实'
   const prompt = getSkillSystemPrompt('ppt', {}, [], {
-    userPrompt: '帮我做一个关于 DeepSeek V4 Pro 的 ppt5页，要求高级感，内容充实',
+    userPrompt,
   })
 
-  assert.match(prompt, /Template library planner/)
-  assert.match(prompt, /Selected template: technology/)
-  assert.match(prompt, /Strict slide count: 5/)
+  assert.ok(prompt.endsWith(userPrompt))
+  assert.match(prompt, /User presentation request/)
+  assert.doesNotMatch(prompt, /Template library planner|Selected template|Strict slide count/)
+})
+
+test('custom presentation instructions stay unchanged and the user request is not rewritten', () => {
+  const custom = 'Use the supplied school vocabulary and a quiet chalkboard style; never add business KPIs.'
+  const userPrompt = '请做20页正文，不要封面，使用我提供的原文。'
+  const prompt = getSkillSystemPrompt('ppt', { ppt: { systemPrompt: custom } }, [], {
+    userPrompt, split: true,
+  })
+  assert.equal(prompt.base, custom)
+  assert.equal(prompt.perTurn, `\n\n## User presentation request\n${userPrompt}`)
 })
 
 test('legacy presentation ids resolve the canonical ppt prompt and planner', () => {

@@ -1,12 +1,9 @@
-import { listUserToolSpecs } from '../mcp/mcpManager.js'
-import { listRegisteredBrowserToolSpecs } from './browserTools.js'
 import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
 import { listEnabledIntegrationToolNames } from './integrationsStore.js'
 import {
   getBuiltinSpec,
   getDynamicToolSpecRegistrationId,
   inheritDynamicToolSpecRegistration,
-  listAllSpecs,
   matchesDynamicToolRegistration,
 } from './toolRegistry.js'
 import { getUserToolPermissions } from '../db.js'
@@ -18,6 +15,7 @@ import {
 } from './codexAppServerTool.js'
 import { isCodexAppServerModelCatalogAvailable } from './codexAppServerRuntime.js'
 import { normalizeDirectoryAuthorizationResolutions } from './turnResolutionRuntime.js'
+import { discoverTurnToolResources, SKILL_RESOURCE_TOOL_NAME } from './turnToolResourceDiscovery.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -43,7 +41,7 @@ const LOCAL_TASK_TOOL_NAMES = new Set([
   'grep_code', 'find_symbol', 'list_imports', 'lsp', 'run_code', 'run_project_check', 'run_test', 'docker_exec',
   'git_status', 'git_diff', 'git_write', 'git_commit', 'git_push', 'git_rollback',
   'request_directory', 'file_download', 'rewind_files', 'set_deliverables',
-  'manage_todos', 'request_clarification', 'reflect', 'Agent', 'sleep_until',
+  'load_skill', 'manage_todos', 'request_clarification', 'reflect', 'Agent', 'sleep_until',
   'create_pptx', 'create_docx', 'create_xlsx', 'create_pdf', 'create_html_app', 'render_pdf_pages',
   'generate_image', 'image_info', 'image_transform', 'media_probe', 'media_transform',
   'pdf_info', 'pdf_text', 'pdf_transform', 'archive_create', 'archive_list', 'archive_extract',
@@ -87,10 +85,11 @@ function toolName(spec) {
   return String(spec?.function?.name || '')
 }
 
-// When no workspace/local-path authority is active, the model receives only
-// controls that can ask for that authority or safely manage the current turn.
-// Everything else is restored from the real persisted access state below.
+// Local tools require workspace/path authority. Turn controls and standalone
+// web research do not; their independent execution policies still apply.
 const WORKSPACE_INDEPENDENT_CONTROL_TOOLS = new Set([
+  'load_skill',
+  'search_tools',
   'manage_todos',
   'read_artifact_source',
   'reflect',
@@ -100,6 +99,7 @@ const WORKSPACE_INDEPENDENT_CONTROL_TOOLS = new Set([
   'sleep_until',
 ])
 const WORKSPACE_INDEPENDENT_CONNECTOR_TOOLS = new Set(CONNECTOR_TOOL_NAMES)
+const WORKSPACE_INDEPENDENT_WEB_TOOLS = new Set(['web_search', 'fetch_url'])
 const DIRECTORY_READ_TOOLS = new Set([
   'list_directory', 'grep_code', 'find_symbol', 'list_imports',
 ])
@@ -199,6 +199,9 @@ function workspaceToolVisible(spec, capabilities, {
   if (SHELL_TOOLS.has(name)) return capabilities.shell || capabilities.shellRequestable
   if (GIT_READ_TOOLS.has(name)) return capabilities.git
   if (GIT_WRITE_TOOLS.has(name)) return capabilities.gitWrite
+  // Standalone web research retains turn, URL and approval policies without filesystem authority.
+  if (WORKSPACE_INDEPENDENT_WEB_TOOLS.has(name)) return true
+  if (name === SKILL_RESOURCE_TOOL_NAME) return true
   // Non-local dynamic capability providers and connected apps own their own
   // capability and approval boundaries; workspace grants are unrelated.
   const dynamicState = dynamicToolSpecRegistrationState(spec, { userId })
@@ -268,6 +271,7 @@ export function resolveTurnToolPolicy({ prompt = '', messages = [], skillIds = [
       includeMcp: true,
       explicitMcp: true,
       includeAllConnectors: true,
+      includeRuntimePlugins: true,
       connectorProviders: new Set(CONNECTOR_PROVIDERS),
       historicalTools: used,
     }
@@ -286,8 +290,8 @@ export function resolveTurnToolPolicy({ prompt = '', messages = [], skillIds = [
   const includeMcp = explicitMcp
     || [...used].some((name) => name.startsWith('mcp__'))
   const includeBrowser = browserSkill
-    || /(?:浏览器|打开.{0,20}(?:网页|网站|链接)|访问.{0,20}(?:网页|网站|链接)|点击.{0,20}(?:页面|按钮)|(?:填写|填入).{0,20}(?:表单|网页)|网页截图)/i.test(text)
-    || /\b(?:browser|navigate|open (?:the )?(?:site|website|url|link)|click (?:the )?(?:page|button)|fill (?:the )?(?:form|page)|page screenshot)\b/i.test(text)
+    || /(?:浏览器|打开.{0,20}(?:网页|网站|链接)|访问.{0,20}(?:网页|网站|链接)|点击.{0,20}(?:页面|按钮)|(?:填写|填入).{0,20}(?:表单|网页)|(?:上传|选择).{0,30}(?:文件|附件).{0,30}(?:网页|网站|表单)|(?:文件|附件).{0,30}(?:上传|选择).{0,30}(?:网页|网站|表单)|(?:网页|网站|表单).{0,30}(?:上传|选择).{0,30}(?:文件|附件)|网页截图)/i.test(text)
+    || /\b(?:browser|navigate|open (?:the )?(?:site|website|url|link)|click (?:the )?(?:page|button)|fill (?:the )?(?:form|page)|upload (?:a |the )?(?:file|attachment)(?: to (?:the )?(?:site|website|form|page))?|page screenshot)\b/i.test(text)
     || [...used].some((name) => name.startsWith('browser_'))
   const includeWeb = webSkill
     || /https?:\/\//i.test(text)
@@ -341,6 +345,7 @@ export function resolveTurnToolPolicy({ prompt = '', messages = [], skillIds = [
     includeGit: /(?:\bgit\b|提交|推送|版本库)/i.test(text) || [...used].some((name) => name.startsWith('git_')),
     includeDocker: /(?:\bdocker\b|\bcontainer\b|容器)/i.test(text) || used.has('docker_exec'),
     includeWait: /(?:等待|定时|到.{0,12}时间)|\b(?:wait|sleep|until)\b/i.test(text) || used.has('sleep_until'),
+    includeRuntimePlugins: /(?:运行时插件|插件工具)|\b(?:runtime plugin|plugin tool)s?\b/i.test(text),
   }
 }
 
@@ -361,12 +366,26 @@ function serializeToolPolicy(policy) {
     includeBrowser: policy.includeBrowser === true,
     includeMcp: policy.includeMcp === true,
     includeAllConnectors: policy.includeAllConnectors === true,
+    includeRuntimePlugins: policy.includeRuntimePlugins === true,
     connectorProviders: [...(policy.connectorProviders || [])].sort(),
     artifactKinds: [...(policy.artifactKinds || [])].sort(),
     includeGit: policy.includeGit === true,
     includeDocker: policy.includeDocker === true,
     includeWait: policy.includeWait === true,
   }
+}
+
+function intentToolVisible(name, policy, spec) {
+  if (policy.legacyFullCatalog || policy.historicalTools?.has(name)) return true
+  if (name.startsWith('browser_')) return policy.includeBrowser === true
+  const provider = connectorProvider(name)
+  if (provider) {
+    return policy.includeAllConnectors === true || policy.connectorProviders?.has(provider) === true
+  }
+  if (name.startsWith('mcp__')) return policy.explicitMcp === true
+  // Runtime-plugin schemas stay deferred unless the user explicitly requests plugin tools.
+  if (getDynamicToolSpecRegistrationId(spec)) return policy.includeRuntimePlugins === true
+  return true
 }
 
 export function normalizeServerToolsConfig(value) {
@@ -510,40 +529,14 @@ export async function resolveTurnToolSpecs({
   messages = [],
   skillIds = [],
   onDecision = null,
+  onDeferredSpecs = null,
 } = {}) {
   const policy = resolveTurnToolPolicy({ prompt, messages, skillIds })
-  const discoveryIssues = []
-  let mcpSpecs = []
-  try {
-    const result = await listUserToolSpecs(userId)
-    mcpSpecs = Array.isArray(result?.specs) ? result.specs : []
-  } catch {
-    // Optional MCP discovery must not block the chat turn.
-    discoveryIssues.push({ source: 'mcp', reason: 'discovery_failed' })
-  }
-  let browserSpecs = []
-  try {
-    browserSpecs = listRegisteredBrowserToolSpecs()
-  } catch {
-    discoveryIssues.push({ source: 'browser', reason: 'discovery_failed' })
-  }
-  let runtimeSpecs = []
-  try {
-    // listUserToolSpecs above connects any enabled MCP servers first. Read the
-    // canonical registry afterwards so every reversible runtime contribution
-    // (including global and user-scoped plugin tools) reaches the real turn.
-    // Builtins remain caller-owned through baseSpecs; only dynamic entries are
-    // merged here so narrow catalog consumers do not unexpectedly expand.
-    runtimeSpecs = listAllSpecs({ userId })
-      .filter((entry) => entry?.origin === 'plugin')
-      .map((entry) => entry?.tool)
-      .filter(Boolean)
-  } catch {
-    discoveryIssues.push({ source: 'runtime_registry', reason: 'discovery_failed' })
-  }
+  const { mcpSpecs, browserSpecs, runtimeSpecs, skillResourceSpec, discoveryIssues } =
+    await discoverTurnToolResources({ userId, skillIds })
   const merged = new Map()
   const deliveryControlSpec = getBuiltinSpec('set_deliverables')
-  for (const spec of [...baseSpecs, deliveryControlSpec, ...mcpSpecs, ...browserSpecs, ...runtimeSpecs]) {
+  for (const spec of [...baseSpecs, deliveryControlSpec, skillResourceSpec, ...mcpSpecs, ...browserSpecs, ...runtimeSpecs]) {
     const name = String(spec?.function?.name || '')
     if (name === 'lsp' && !hasConfiguredLspProvider()) continue
     if (name) merged.set(name, spec)
@@ -566,12 +559,15 @@ export async function resolveTurnToolSpecs({
   }
   const readySpecs = [...merged.values()].filter((spec) => {
     const name = toolName(spec)
+    if (name === SKILL_RESOURCE_TOOL_NAME && !skillResourceSpec) {
+      return exclude(name, 'skill_resource_not_selected')
+    }
     if (connectorNames.has(name)) {
       if (!enabledConnectorNames.has(name)) return exclude(name, 'integration_disabled')
     }
     return true
   })
-  const visibleSpecs = projectToolSpecsForRuntimePolicy(readySpecs, {
+  const eligibleSpecs = projectToolSpecsForRuntimePolicy(readySpecs, {
     userId,
     toolsConfig,
     permissionMode,
@@ -579,9 +575,16 @@ export async function resolveTurnToolSpecs({
     userToolPermissions,
     onExcluded: ({ name, reason, stage }) => exclude(name, reason, stage),
   })
-  const resolvedSpecs = visibleSpecs
+  const deferredSpecs = eligibleSpecs
     .map(canonicalizeToolSpec)
     .sort((left, right) => String(left?.function?.name || '').localeCompare(String(right?.function?.name || ''), 'en'))
+  if (typeof onDeferredSpecs === 'function') {
+    try { onDeferredSpecs(deferredSpecs) } catch { /* discovery diagnostics must not block the turn */ }
+  }
+  const resolvedSpecs = deferredSpecs.filter((spec) => {
+    const name = toolName(spec)
+    return intentToolVisible(name, policy, spec) || exclude(name, 'intent_not_selected', 'intent')
+  })
   const resolvedNames = new Set(resolvedSpecs.map(toolName))
   emitToolDecision(onDecision, {
     version: 1,

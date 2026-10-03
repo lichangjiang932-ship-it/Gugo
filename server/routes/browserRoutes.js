@@ -2,17 +2,12 @@ import { readJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
 import { isIntegrationEnabled } from '../services/integrationsStore.js'
 import { assertBrowserAppUrlAccess, assertBrowserSessionAppAccess, listConnectedBrowserApps } from '../services/connectorService.js'
+import { executeBrowserTool } from '../services/browserToolExecutor.js'
 import {
-  browserClick,
   browserConsole,
   browserOpenUrl,
-  browserPress,
   browserScreenshot,
-  browserSelect,
-  browserSnapshot,
   browserState,
-  browserType,
-  browserWait,
   closeBrowserSession,
 } from '../adapters/browserAutomation.js'
 
@@ -23,11 +18,18 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
+function sendBrowserError(res, status, code, message, retryable = false) {
+  return sendJson(res, status, {
+    ok: false,
+    error: { code, message, retryable },
+  })
+}
+
 export async function handleBrowserRequest(req, res) {
   const userId = authenticateRequest(req)
-  if (!userId) return sendJson(res, 401, { ok: false, error: '请先登录' })
+  if (!userId) return sendBrowserError(res, 401, 'AUTH_REQUIRED', '请先登录')
   if (!isIntegrationEnabled({ userId, provider: 'browser', defaultEnabled: true })) {
-    return sendJson(res, 403, { ok: false, error: 'Browser is disabled in Access' })
+    return sendBrowserError(res, 403, 'BROWSER_DISABLED', 'Browser is disabled in Access')
   }
   const pathname = new URL(req.url, 'http://localhost').pathname
   try {
@@ -40,7 +42,9 @@ export async function handleBrowserRequest(req, res) {
     if (req.method === 'POST' && pathname === '/api/browser/close') {
       return sendJson(res, 200, { ok: true, closed: closeBrowserSession(userId) })
     }
-    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: '仅支持 POST' })
+    if (req.method !== 'POST') {
+      return sendBrowserError(res, 405, 'METHOD_NOT_ALLOWED', '仅支持 POST')
+    }
     const body = await readJson(req)
     if (pathname === '/api/browser/open' || pathname === '/api/browser/navigate') {
       const connectedApp = assertBrowserAppUrlAccess({ userId, url: body.url })
@@ -48,36 +52,89 @@ export async function handleBrowserRequest(req, res) {
       return sendJson(res, 200, { ok: true, result: await browserOpenUrl({ userId, url: body.url, headed: persistent }) })
     }
     await assertBrowserSessionAppAccess({ userId })
-    if (pathname === '/api/browser/snapshot') return sendJson(res, 200, { ok: true, result: await browserSnapshot({ userId, maxText: body.maxText }) })
+    if (pathname === '/api/browser/tabs') {
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_tabs', body, { userId }),
+      })
+    }
+    if (pathname === '/api/browser/switch-tab') {
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_switch_tab', body, { userId }),
+      })
+    }
+    if (pathname === '/api/browser/frames') {
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_frames', body, { userId }),
+      })
+    }
+    if (pathname === '/api/browser/switch-frame') {
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_switch_frame', body, { userId }),
+      })
+    }
+    if (pathname === '/api/browser/snapshot') {
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_snapshot', body, { userId }),
+      })
+    }
     if (pathname === '/api/browser/console') return sendJson(res, 200, { ok: true, result: await browserConsole({ userId, clear: body.clear }) })
     if (pathname === '/api/browser/click') {
-      const result = await browserClick({ userId, target: body.target })
-      if (result?.url) assertBrowserAppUrlAccess({ userId, url: result.url })
-      return sendJson(res, 200, { ok: true, result })
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_click', body, { userId }),
+      })
     }
     if (pathname === '/api/browser/type') {
-      const result = await browserType({ userId, target: body.target, text: body.text, submit: body.submit })
-      await assertBrowserSessionAppAccess({ userId })
-      return sendJson(res, 200, { ok: true, result })
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_type', body, { userId }),
+      })
+    }
+    if (pathname === '/api/browser/upload-file') {
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_upload_file', body, { userId }),
+      })
+    }
+    if (pathname === '/api/browser/download') {
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_download', body, { userId }),
+      })
     }
     if (pathname === '/api/browser/select') {
-      const result = await browserSelect({ userId, target: body.target, value: body.value })
-      if (result?.url) assertBrowserAppUrlAccess({ userId, url: result.url })
-      return sendJson(res, 200, { ok: true, result })
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_select', body, { userId }),
+      })
     }
     if (pathname === '/api/browser/press') {
-      const result = await browserPress({ userId, target: body.target, key: body.key })
-      if (result?.url) assertBrowserAppUrlAccess({ userId, url: result.url })
-      return sendJson(res, 200, { ok: true, result })
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_press', body, { userId }),
+      })
     }
     if (pathname === '/api/browser/wait') {
-      const result = await browserWait({ userId, ms: body.ms, target: body.target })
-      await assertBrowserSessionAppAccess({ userId })
-      return sendJson(res, 200, { ok: true, result })
+      return sendJson(res, 200, {
+        ok: true,
+        result: await executeBrowserTool('browser_wait', body, { userId }),
+      })
     }
     if (pathname === '/api/browser/screenshot') return sendJson(res, 200, { ok: true, result: await browserScreenshot({ userId, fullPage: body.fullPage }) })
-    return sendJson(res, 404, { ok: false, error: '未知 Browser 路由' })
+    return sendBrowserError(res, 404, 'BROWSER_ROUTE_NOT_FOUND', '未知 Browser 路由')
   } catch (error) {
-    return sendJson(res, error?.statusCode || 400, { ok: false, error: error?.message || String(error) })
+    const status = error?.statusCode || 400
+    return sendBrowserError(
+      res,
+      status,
+      String(error?.code || 'BROWSER_REQUEST_FAILED'),
+      error?.message || String(error),
+      error?.retryable ?? status >= 500,
+    )
   }
 }

@@ -12,7 +12,6 @@ import { createPreviewTabState } from './preview/previewTabs.js'
 import usePreviewPaneState, {
   DEFAULT_PREVIEW_PANE_WIDTH,
   MIN_PREVIEW_PANE_WIDTH,
-  previewPaneMaxWidth,
 } from './preview/usePreviewPaneState.js'
 
 export default function RightPreviewPane({
@@ -34,6 +33,7 @@ export default function RightPreviewPane({
       : null
   })
   const returnFocusRef = useRef(initialReturnFocus)
+  const restoreChatInteractionRef = useRef(null)
   const focusActiveTabRef = useRef(false)
   const fallbackTabState = createPreviewTabState(artifact)
   const tabState = Array.isArray(previewTabs) && previewTabs.length > 0
@@ -56,7 +56,11 @@ export default function RightPreviewPane({
   }, [artifact])
 
   const restoreTriggerFocus = useCallback(() => {
-    const target = returnFocusRef.current
+    const original = returnFocusRef.current
+    const chat = paneRef.current?.closest('[data-chat-main-area]')?.querySelector('.chat-main-pane')
+    const target = original?.isConnected ? original
+      : chat?.querySelector('[data-testid="chat-composer-surface"] textarea:not(:disabled)')
+        || chat?.querySelector('textarea:not(:disabled)')
     if (!target?.isConnected || typeof target.focus !== 'function') return
     try {
       target.focus({ preventScroll: true })
@@ -66,11 +70,44 @@ export default function RightPreviewPane({
   }, [])
 
   const closePane = useCallback(() => {
+    restoreChatInteractionRef.current?.()
     restoreTriggerFocus()
     onClose?.()
   }, [onClose, restoreTriggerFocus])
 
-  const pane = usePreviewPaneState({ artifact: activeArtifact, onClose: closePane })
+  const pane = usePreviewPaneState({ artifact: activeArtifact, onClose: closePane, paneRef })
+
+  useEffect(() => {
+    if (!pane.overlay) return
+    const activeElement = document.activeElement
+    const main = paneRef.current?.closest('[data-chat-main-area]')
+    const targets = [main?.querySelector('.chat-main-pane'),
+      pane.maximized ? main?.parentElement?.querySelector(':scope > .left-rail') : null]
+      .filter(Boolean).map((element) => ({ element, hadInert: element.hasAttribute('inert'), ariaHidden: element.getAttribute('aria-hidden') }))
+    for (const { element } of targets) {
+      element.setAttribute('inert', '')
+      element.setAttribute('aria-hidden', 'true')
+    }
+    let restored = false
+    const restore = () => {
+      if (restored) return
+      restored = true
+      for (const { element, hadInert, ariaHidden } of targets) {
+        if (!hadInert) element.removeAttribute('inert')
+        if (ariaHidden == null) element.removeAttribute('aria-hidden')
+        else element.setAttribute('aria-hidden', ariaHidden)
+      }
+      if (restoreChatInteractionRef.current === restore) restoreChatInteractionRef.current = null
+    }
+    restoreChatInteractionRef.current = restore
+    if (!paneRef.current?.contains(activeElement)) {
+      if (activeElement && activeElement !== document.body && typeof activeElement.focus === 'function') {
+        returnFocusRef.current = activeElement
+      }
+      paneRef.current?.querySelector('[data-testid="preview-back-to-chat"]')?.focus({ preventScroll: true })
+    }
+    return restore
+  }, [pane.overlay, pane.maximized])
 
   const selectTab = useCallback((tabId) => {
     onActivateTab?.(tabId)
@@ -82,8 +119,12 @@ export default function RightPreviewPane({
       return
     }
     focusActiveTabRef.current = tabState.tabs.length > 1
+    if (tabState.tabs.length === 1) {
+      restoreChatInteractionRef.current?.()
+      restoreTriggerFocus()
+    }
     onCloseTab(tabId)
-  }, [closePane, onCloseTab, tabState.tabs.length])
+  }, [closePane, onCloseTab, restoreTriggerFocus, tabState.tabs.length])
 
   useEffect(() => {
     if (!focusActiveTabRef.current || !activeTab) return
@@ -105,6 +146,7 @@ export default function RightPreviewPane({
         tabs={tabState.tabs}
         activeId={activeTab.id}
         maximized={pane.maximized}
+        focused={pane.overlay}
         setMaximized={pane.setMaximized}
         onSelectTab={selectTab}
         onCloseTab={closeTab}
@@ -112,7 +154,7 @@ export default function RightPreviewPane({
         t={t}
       />
       {activeArtifact.directFile ? (
-        <DirectFileContent file={activeArtifact.directFile} t={t} />
+        <DirectFileContent file={activeArtifact.directFile} pane={pane} t={t} />
       ) : activeArtifact.preview ? (
         <PreviewContent preview={activeArtifact.preview} content={activeArtifact.content} pane={pane} onMessage={onMessage} t={t} />
       ) : (
@@ -122,7 +164,7 @@ export default function RightPreviewPane({
   )
 }
 
-function DirectFileContent({ file, t }) {
+function DirectFileContent({ file, pane, t }) {
   const filename = String(file?.filename || file?.title || 'artifact')
   const extension = String(filename.split('.').pop() || '').toLowerCase()
   const rawType = String(file?.type || extension || 'file').toLowerCase()
@@ -131,9 +173,9 @@ function DirectFileContent({ file, t }) {
   const previewUrl = withArtifactPreviewMode(downloadUrl)
   return (
     <>
-      <DirectFileToolbar filename={filename} type={type} url={downloadUrl} t={t} />
+      <DirectFileToolbar filename={filename} type={type} file={file} url={downloadUrl} view={pane.view} setView={pane.setView} submenuFlipped={pane.overlay} t={t} />
       <div className="chat-direct-file-content min-h-0 flex-1 overflow-hidden" data-testid="direct-file-content">
-        {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} t={t} /> : (
+        {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} view={pane.view} t={t} /> : (
           <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">
             <FileText className="h-10 w-10 text-ink-fade" />
             <p className="max-w-xs text-sm font-medium text-ink-soft">{filename}</p>
@@ -149,7 +191,7 @@ function PreviewContent({ preview, content, pane, onMessage, t }) {
   return (
     <>
       <PreviewToolbar preview={preview} content={content} view={pane.view} setView={pane.setView} exports={exports} t={t} />
-      <div data-testid="preview-scroll-region" className="chat-preview-scroll-region min-h-0 flex-1 overflow-hidden overscroll-contain"><PreviewBody preview={preview} content={content} view={pane.view} /></div>
+      <div data-testid="preview-scroll-region" className="chat-preview-scroll-region min-h-0 flex-1 overflow-hidden overscroll-contain"><PreviewBody preview={preview} content={content} view={pane.view} t={t} /></div>
     </>
   )
 }
@@ -157,12 +199,14 @@ function PreviewContent({ preview, content, pane, onMessage, t }) {
 function PreviewShell({ children, onClose, pane, paneRef, shellKey, t, testId }) {
   return (
     <AnimatePresence>
-      <motion.div key="preview-backdrop" data-testid="preview-backdrop" aria-hidden="true" onClick={onClose} className="chat-preview-backdrop fixed inset-0 z-30" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }} />
+      <motion.div key="preview-backdrop" data-testid="preview-backdrop" data-preview-overlay={pane.overlay} aria-hidden="true" onClick={onClose} className="chat-preview-backdrop absolute inset-0 z-30" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }} />
       <motion.aside
         ref={paneRef}
         key={shellKey}
         data-testid={testId}
         data-artifact-surface="preview"
+        data-preview-layout={pane.maximized ? 'maximized' : pane.focused ? 'focused' : 'split'}
+        aria-label={t('chatPreview.preview')}
         onTouchStart={pane.handleTouchStart}
         onTouchMove={pane.handleTouchMove}
         onTouchEnd={pane.handleTouchEnd}
@@ -170,10 +214,10 @@ function PreviewShell({ children, onClose, pane, paneRef, shellKey, t, testId })
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: 32, opacity: 0 }}
         transition={{ duration: 0.2, ease: 'easeOut' }}
-        style={pane.maximized ? undefined : { width: `${pane.paneWidth}px` }}
-        className={`chat-preview-pane ${pane.maximized ? 'chat-preview-pane-maximized fixed inset-0 w-screen' : 'relative shrink-0'} z-40 flex h-full min-w-0 flex-col overflow-hidden border-l border-ink/10 bg-paper`}
+        style={pane.overlay ? undefined : { width: `${pane.paneWidth}px` }}
+        className={`chat-preview-pane ${pane.maximized ? 'chat-preview-pane-maximized fixed inset-0 w-screen' : pane.focused ? 'chat-preview-pane-focused absolute inset-0 w-full' : 'relative shrink-0'} z-40 flex h-full min-w-0 flex-col overflow-hidden border-l border-ink/10 bg-paper`}
       >
-        {!pane.maximized && (
+        {!pane.overlay && (
           <div
             role="separator"
             tabIndex={0}
@@ -181,7 +225,7 @@ function PreviewShell({ children, onClose, pane, paneRef, shellKey, t, testId })
             aria-label={t('chatPreview.resize')}
             aria-orientation="vertical"
             aria-valuemin={MIN_PREVIEW_PANE_WIDTH}
-            aria-valuemax={previewPaneMaxWidth()}
+            aria-valuemax={pane.maxPaneWidth}
             aria-valuenow={pane.paneWidth}
             onPointerDown={pane.startResize}
             onKeyDown={pane.resizeWithKeyboard}

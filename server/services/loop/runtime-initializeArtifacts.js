@@ -1,3 +1,9 @@
+import { isToolFreeResponseRequest, normalizeChatTurnIntentMode } from '../../utils/executionIntent.js'
+import { restoreCompletionPolicyState } from './completionPolicy.js'
+import { initializeGoalToolVisibility } from './runtime-initializeGoalTools.js'
+import { userMessageText } from './userMessageText.js'
+import { getSubagentExecutionPolicy } from '../subagentExecutionPolicy.js'
+
 function initializeArtifactContracts(s) {
   const {
     SERVER_TOOL_SPECS,
@@ -11,6 +17,10 @@ function initializeArtifactContracts(s) {
   s.restoredState = s.restored?.state && typeof s.restored.state === 'object'
     ? s.restored.state
     : s.restored && typeof s.restored === 'object' ? s.restored : null
+  // One versioned restore for every completion-policy counter. Legacy
+  // checkpoints (no version) upgrade with explicit zero defaults; an unknown
+  // future version fails closed instead of silently resetting retry counts.
+  s.completionPolicyState = restoreCompletionPolicyState(s.restoredState?.completionGuards)
   s.successfulExpectedPathWriteObserved = Boolean(
     s.restoredState?.completionGuards?.successfulExpectedPathWriteObserved,
   )
@@ -18,6 +28,7 @@ function initializeArtifactContracts(s) {
     patchOnlyWorkspaceIntent: s.patchOnlyWorkspaceIntent,
     independentImageCreationRequested: s.independentImageCreationRequested,
     hasSuccessfulExpectedPathWrite: () => s.successfulExpectedPathWriteObserved,
+    locale: s.locale,
   }).validate
   s.restoredDisabledToolNames = Array.isArray(s.restoredState?.completionGuards?.disabledToolNames)
     ? s.restoredState.completionGuards.disabledToolNames
@@ -25,6 +36,7 @@ function initializeArtifactContracts(s) {
   s.disabledToolGuard = createDisabledToolGuard({
     toolsConfig: s.toolsConfig,
     restoredDisabledToolNames: s.restoredDisabledToolNames,
+    locale: s.locale,
   })
   s.disabledToolNames = s.disabledToolGuard.disabledToolNames
   s.disabledToolValidationError = s.disabledToolGuard.validate
@@ -74,6 +86,8 @@ function initializeArtifactContracts(s) {
       : new Set(restoredAuthorized)
     s.authorizedArtifactTools.clear()
     s.expectedArtifactTools.clear()
+    s.skillArtifactTools.clear()
+    s.requestedArtifactTools.clear()
     for (const name of restoredAuthorized) s.authorizedArtifactTools.add(name)
     for (const name of restoredRequired) {
       if (s.artifactDeliveryStep && restoredAuthorized.has(name)) s.expectedArtifactTools.add(name)
@@ -145,19 +159,21 @@ function initializeExecutionIntent(s) {
     shouldRequireExecution,
   } = s.d
   s.generatedWorkflowStep = ['plan', 'verify', 'finalize'].includes(String(s.step?.kind || ''))
-  s.executionIntentText = String(
-    s.job?.userPrompt
-      || (s.generatedWorkflowStep ? s.job?.prompt : s.currentUserMessage?.content)
-      || s.job?.prompt
-      || '',
-  )
-  s.explicitReadOnlyConstraint = hasEffectiveReadOnlyBoundary(
+  s.executionIntentText = userMessageText(s.job?.userPrompt)
+    || (s.generatedWorkflowStep ? userMessageText(s.job?.prompt) : s.currentUserText)
+    || userMessageText(s.job?.prompt)
+  if (s.job?.origin === 'chat') {
+    s.intentMode = normalizeChatTurnIntentMode(s.intentMode, s.executionIntentText)
+  }
+  const inheritedPolicy = getSubagentExecutionPolicy(s.approvalContext, { userId: s.job?.userId || null })
+  s.explicitReadOnlyConstraint = inheritedPolicy?.readOnly === true || hasEffectiveReadOnlyBoundary(
     s.executionIntentText,
     s.previousUserPrompt,
   )
   s.explicitReadOnlyValidationError = createExplicitReadOnlyGuard({
     enabled: s.explicitReadOnlyConstraint,
     userId: s.job?.userId || null,
+    locale: s.locale,
   }).validate
   s.enforceExecutionIntent = s.executionGuardMode !== 'read_only_exploration'
   s.recoveredPriorLocalTargets = recoverPriorLocalMutationTargets(
@@ -214,7 +230,8 @@ function initializeExecutionIntent(s) {
     || s.inheritedLocalMutationContinuation
     || s.inheritedCapabilityChallenge
   )
-  s.textDeliverableOnly = isTextDeliverableRequest(s.executionIntentText)
+  s.textDeliverableOnly = !s.requiresPersistedArtifact
+    && isTextDeliverableRequest(s.executionIntentText)
   s.mutationExecutionRequested = !s.textDeliverableOnly && (
     s.requiresPersistedArtifact
     || (s.directExecutionRequested && (
@@ -223,6 +240,22 @@ function initializeExecutionIntent(s) {
       || s.inheritedCapabilityChallenge
     ))
   )
+}
+
+function restoreDynamicSkills(s) {
+  const initialSkillIds = (Array.isArray(s.job?.skillIds) ? s.job.skillIds : [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => id && id.length <= 128)
+  const restoredSkillIds = (Array.isArray(s.restoredState?.completionGuards?.dynamicallyLoadedSkillIds)
+    ? s.restoredState.completionGuards.dynamicallyLoadedSkillIds
+    : [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => id && id.length <= 128
+      && s.d.hasRuntimeSkillActivationBlock(s.restoredState?.messages, id))
+    .slice(0, s.d.MAX_DYNAMIC_SKILLS_PER_TURN)
+  s.dynamicallyLoadedSkillIds = new Set(restoredSkillIds)
+  s.loadedSkillIds = new Set([...initialSkillIds, ...restoredSkillIds])
+  s.job = { ...s.job, skillIds: [...s.loadedSkillIds] }
 }
 
 function restoreDynamicExecutionTools(s) {
@@ -244,13 +277,24 @@ function restoreDynamicExecutionTools(s) {
       && message.tool_calls.some((call) => DYNAMIC_MUTATION_TOOL_NAMES.has(String(
         call?.function?.name || call?.name || '',
       ).trim())))
+  const deferredToolNames = new Set(
+    s.eligibleFallbackToolSpecs.map(toolNameFromSpec).filter(Boolean),
+  )
   s.restoredDynamicToolNames = new Set(
     (Array.isArray(s.restoredState?.completionGuards?.dynamicallyMountedToolNames)
       ? s.restoredState.completionGuards.dynamicallyMountedToolNames
       : []).map((name) => String(name || '').trim())
-      .filter((name) => DYNAMIC_EXECUTION_TOOL_NAMES.has(name)),
+      .filter((name) => name && name !== 'search_tools' && deferredToolNames.has(name))
+      .slice(0, 64),
   )
   s.dynamicallyMountedToolNames = new Set(s.restoredDynamicToolNames)
+  if (s.restoredDynamicToolNames.size > 0) {
+    s.activeToolSpecs = restoreNamedToolSpecs(
+      s.activeToolSpecs,
+      s.eligibleFallbackToolSpecs,
+      s.restoredDynamicToolNames,
+    )
+  }
   s.dynamicExecutionRecoverySignatures = new Set()
   s.capabilityMode = resolveChatCapabilityMode({
     prompt: s.intentText,
@@ -273,7 +317,7 @@ function restoreDynamicExecutionTools(s) {
     s.activeToolSpecs = restoreNamedToolSpecs(
       s.activeToolSpecs,
       s.eligibleFallbackToolSpecs,
-      new Set([...DYNAMIC_EXECUTION_TOOL_NAMES, ...s.restoredDynamicToolNames]),
+      DYNAMIC_EXECUTION_TOOL_NAMES,
     )
     for (const spec of s.activeToolSpecs) {
       const name = toolNameFromSpec(spec)
@@ -392,6 +436,8 @@ function installCapabilityDecision(s) {
       selectedTools,
       dynamicallyMountedTools: [...s.dynamicallyMountedToolNames]
         .sort().slice(0, MAX_CAPABILITY_TOOL_NAMES),
+      dynamicallyLoadedSkills: [...s.dynamicallyLoadedSkillIds]
+        .sort().slice(0, s.d.MAX_DYNAMIC_SKILLS_PER_TURN),
       excludedTools,
       discoveryIssues: Array.isArray(s.toolResolutionDecision?.discoveryIssues)
         ? s.toolResolutionDecision.discoveryIssues
@@ -408,10 +454,25 @@ function installCapabilityDecision(s) {
 }
 
 export async function initializeArtifacts(s) {
+  s.explicitToolFree = isToolFreeResponseRequest(userMessageText(s.job?.userPrompt)
+    || s.currentUserText || userMessageText(s.job?.prompt))
   initializeArtifactContracts(s)
+  if (s.explicitToolFree) {
+    s.authorizedArtifactTools.clear()
+    s.expectedArtifactTools.clear()
+    s.stepArtifactTools.clear()
+    s.requiresPersistedArtifact = false
+    s.revisesAdjacentArtifact = false
+  }
   initializeArtifactToolVisibility(s)
   initializeExecutionIntent(s)
+  restoreDynamicSkills(s)
   restoreDynamicExecutionTools(s)
+  initializeGoalToolVisibility(s)
+  if (s.explicitToolFree) {
+    s.activeToolSpecs = []
+    s.availableVerificationToolNames = []
+  }
   installCapabilityDecision(s)
   return { kind: 'next' }
 }

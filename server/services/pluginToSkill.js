@@ -1,165 +1,108 @@
 /**
- * server/services/pluginToSkill.js
- *
- * 把 type='skill-bundle' 的 plugin 安装为 skillStore 中的 skill。
- *
- * 设计原则（沿用 plugin loader 风格）：
- *  - 纯函数式入口，所有失败都包装成 { ok:false, reason:string }，不抛错
- *  - 严格只读 plugin 目录，禁 ..、绝对路径、symlink 跳出
- *  - 只读 plugin 目录下的 skill.json + prompts/*（递归，但限定后缀），不执行任何代码
+ * Import a skill-bundle without executing its code. Every file is read through
+ * the existing handle-bound plugin reader using the original plugin root.
  */
-
-import fs from 'node:fs'
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getPlugin } from '../plugins/pluginRegistry.js'
+import { readPluginEntryFile } from '../plugins/pluginEntryFile.js'
 import { validateSkillPack, installValidatedSkillPack } from './skillImport.js'
 
 const ALLOWED_EXTS = new Set(['.md', '.txt', '.json'])
 const MAX_FILES = 64
-const MAX_FILE_BYTES = 256 * 1024 // 256KB 单文件上限，防御性
+const MAX_DIRECTORIES = 256
+const MAX_FILE_BYTES = 256 * 1024
 
-/**
- * 判断 child 是否真的位于 parent 目录内（解析 symlink 后）。
- * realpathSync 在路径不存在时会抛错，调用方需自己捕获。
- */
-function ensureInside(parent, child) {
-  const realParent = fs.realpathSync(parent)
-  const realChild = fs.realpathSync(child)
-  if (realChild === realParent) return true
-  return realChild.startsWith(realParent + path.sep)
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino
 }
 
-/**
- * 递归收集 dir 下所有允许后缀文件，返回 { ok, files, reason }。
- * 路径以 `relRoot` 为根做相对化，符合 skillImport 的 files map 形态。
- */
-function collectFiles(rootDir, relRoot = '') {
+function sourceError(message) {
+  return Object.assign(new Error(message), { code: 'PLUGIN_SKILL_SCOPE_INVALID' })
+}
+
+async function directoryIdentity(pluginRoot, directory) {
+  const stat = await fs.lstat(directory, { bigint: true })
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw sourceError('路径越界或目录联接不可用')
+  }
+  const canonical = await fs.realpath(directory)
+  const relative = path.relative(pluginRoot, canonical)
+  if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) {
+    throw sourceError('路径越界：技能资源不在插件目录内')
+  }
+  return stat
+}
+
+async function readSkillFile(pluginRoot, entryPath) {
+  const { bytes } = await readPluginEntryFile({
+    rootDir: pluginRoot,
+    entryPath,
+    maxBytes: MAX_FILE_BYTES,
+  })
+  return bytes.toString('utf8')
+}
+
+async function collectPromptFiles(pluginRoot) {
   const files = {}
-  const stack = [{ abs: rootDir, rel: relRoot }]
-  let count = 0
-
+  const stack = [{ abs: path.join(pluginRoot, 'prompts'), rel: 'prompts' }]
+  let directories = 0
   while (stack.length) {
+    if (++directories > MAX_DIRECTORIES) throw sourceError('plugin 目录数超限')
     const { abs, rel } = stack.pop()
-    let entries
-    try {
-      entries = fs.readdirSync(abs, { withFileTypes: true })
-    } catch (err) {
-      return { ok: false, reason: `读取目录失败: ${err.message}` }
-    }
-    for (const ent of entries) {
-      const entAbs = path.join(abs, ent.name)
-      const entRel = rel ? `${rel}/${ent.name}` : ent.name
-
-      // 路径越界守卫
-      try {
-        if (!ensureInside(rootDir, entAbs)) {
-          return { ok: false, reason: `路径越界: ${entRel}` }
-        }
-      } catch (err) {
-        return { ok: false, reason: `路径解析失败 ${entRel}: ${err.message}` }
-      }
-
-      if (ent.isDirectory()) {
-        stack.push({ abs: entAbs, rel: entRel })
-        continue
-      }
-      if (!ent.isFile()) continue // 跳过 symlink/socket 等
-      const ext = path.extname(ent.name).toLowerCase()
-      if (!ALLOWED_EXTS.has(ext)) continue
-
-      let stat
-      try {
-        stat = fs.statSync(entAbs)
-      } catch (err) {
-        return { ok: false, reason: `stat 失败 ${entRel}: ${err.message}` }
-      }
-      if (stat.size > MAX_FILE_BYTES) {
-        return { ok: false, reason: `文件过大 ${entRel} (>${MAX_FILE_BYTES}B)` }
-      }
-      let content
-      try {
-        content = fs.readFileSync(entAbs, 'utf8')
-      } catch (err) {
-        return { ok: false, reason: `读文件失败 ${entRel}: ${err.message}` }
-      }
-      files[entRel] = content
-      count += 1
-      if (count > MAX_FILES) {
-        return { ok: false, reason: `plugin 文件数超限 (>${MAX_FILES})` }
+    const before = await directoryIdentity(pluginRoot, abs)
+    const entries = await fs.readdir(abs, { withFileTypes: true })
+    const after = await directoryIdentity(pluginRoot, abs)
+    if (!sameIdentity(before, after)) throw sourceError('技能目录在读取期间发生变化')
+    for (const entry of entries) {
+      const entryPath = path.join(abs, entry.name)
+      const relativePath = rel + '/' + entry.name
+      if (entry.isSymbolicLink()) throw sourceError('路径越界或符号链接不可用: ' + relativePath)
+      if (entry.isDirectory()) {
+        stack.push({ abs: entryPath, rel: relativePath })
+      } else if (entry.isFile() && ALLOWED_EXTS.has(path.extname(entry.name).toLowerCase())) {
+        if (Object.keys(files).length >= MAX_FILES) throw sourceError('plugin 文件数超限')
+        files[relativePath] = await readSkillFile(pluginRoot, entryPath)
       }
     }
   }
-  return { ok: true, files }
+  return files
 }
 
-/**
- * 把一个 skill-bundle plugin 安装为 skillStore 的 skill。
- *
- * @param {{ pluginId: string, userId: string, existingIds?: string[] }} opts
- * @returns {{ ok: true, skill: object } | { ok: false, reason: string }}
- */
-export function installPluginAsSkill({ pluginId, userId, existingIds = [] } = {}) {
-  if (!pluginId || typeof pluginId !== 'string') {
-    return { ok: false, reason: '缺少 pluginId' }
-  }
-  if (!userId || typeof userId !== 'string') {
-    return { ok: false, reason: '缺少 userId' }
-  }
-
+/** Filesystem failures stay data errors; no partial skill is installed. */
+export async function installPluginAsSkill({ pluginId, userId, existingIds = [] } = {}) {
+  if (!pluginId || typeof pluginId !== 'string') return { ok: false, reason: '缺少 pluginId' }
+  if (!userId || typeof userId !== 'string') return { ok: false, reason: '缺少 userId' }
   const plugin = getPlugin(pluginId)
-  if (!plugin) {
-    return { ok: false, reason: `plugin not found: ${pluginId}` }
-  }
+  if (!plugin) return { ok: false, reason: 'plugin not found: ' + pluginId }
   if (plugin.type !== 'skill-bundle') {
-    return { ok: false, reason: `plugin 类型必须是 skill-bundle (got ${plugin.type})` }
+    return { ok: false, reason: 'plugin 类型必须是 skill-bundle (got ' + plugin.type + ')' }
   }
   if (!plugin.rootDir || typeof plugin.rootDir !== 'string') {
     return { ok: false, reason: 'plugin 缺少 rootDir' }
   }
 
-  let pluginDirReal
   try {
-    pluginDirReal = fs.realpathSync(plugin.rootDir)
-  } catch (err) {
-    return { ok: false, reason: `plugin 目录不可访问: ${err.message}` }
-  }
-
-  // 必备文件：skill.json + prompts/system.md
-  const skillJsonAbs = path.join(pluginDirReal, 'skill.json')
-  const systemMdAbs = path.join(pluginDirReal, 'prompts', 'system.md')
-  if (!fs.existsSync(skillJsonAbs)) {
-    return { ok: false, reason: 'plugin 缺少 skill.json' }
-  }
-  if (!fs.existsSync(systemMdAbs)) {
-    return { ok: false, reason: 'plugin 缺少 prompts/system.md' }
-  }
-
-  // 收集 skill.json + prompts/ 下所有允许后缀文件
-  const files = {}
-
-  try {
-    files['skill.json'] = fs.readFileSync(skillJsonAbs, 'utf8')
-  } catch (err) {
-    return { ok: false, reason: `读 skill.json 失败: ${err.message}` }
-  }
-
-  const promptsDir = path.join(pluginDirReal, 'prompts')
-  if (fs.existsSync(promptsDir) && fs.statSync(promptsDir).isDirectory()) {
-    const collected = collectFiles(promptsDir, 'prompts')
-    if (!collected.ok) return collected
-    Object.assign(files, collected.files)
-  }
-
-  if (!files['prompts/system.md']) {
-    return { ok: false, reason: 'prompts/system.md 收集失败' }
-  }
-
-  const validation = validateSkillPack(files)
-  if (!validation.ok) return validation
-
-  try {
+    // Do not realpath away a replaced root before the handle-bound reader can
+    // reject it. The loader-owned original path is the authority boundary.
+    const pluginRoot = path.resolve(plugin.rootDir)
+    const rootIdentity = await directoryIdentity(pluginRoot, pluginRoot)
+    const files = {
+      'skill.json': await readSkillFile(pluginRoot, path.join(pluginRoot, 'skill.json')),
+      ...await collectPromptFiles(pluginRoot),
+    }
+    const finalRootIdentity = await directoryIdentity(pluginRoot, pluginRoot)
+    if (!sameIdentity(rootIdentity, finalRootIdentity)) {
+      throw sourceError('插件目录在读取期间发生变化')
+    }
+    const validation = validateSkillPack(files)
+    if (!validation.ok) return validation
     return installValidatedSkillPack({ files, existingIds, userId })
-  } catch (err) {
-    return { ok: false, reason: `安装失败: ${err.message}` }
+  } catch (error) {
+    return {
+      ok: false,
+      reason: '技能包读取或安装失败: ' + (error?.message || String(error)),
+      ...(error?.code ? { code: error.code } : {}),
+    }
   }
 }

@@ -1,5 +1,6 @@
 import { getDb } from '../db.js'
 import { assertManagedArtifactMutationAllowed } from './userDataClearGuard.js'
+import { artifactPreviewIdentity } from './artifactPreviewIdentity.js'
 
 function mapArtifact(row) {
   return row ? {
@@ -12,6 +13,7 @@ function mapArtifact(row) {
     url: row.url,
     filename: row.filename,
     createdAt: row.created_at,
+    ...artifactPreviewIdentity({ type: row.type, filename: row.filename }),
   } : null
 }
 

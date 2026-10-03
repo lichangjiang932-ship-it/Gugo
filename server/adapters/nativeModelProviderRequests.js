@@ -1,3 +1,6 @@
+import { anthropicCacheHeaders, anthropicPromptCacheControl, canonicalizeModelToolSet } from './modelRequestCache.js'
+import { geminiReplayParts, providerReplayContext } from './providerReplayState.js'
+
 function json(value, fallback = {}) {
   if (value && typeof value === 'object') return value
   try { return JSON.parse(String(value || '')) } catch { return fallback }
@@ -16,7 +19,12 @@ function mergeAdjacent(messages = []) {
   const merged = []
   for (const message of messages) {
     const previous = merged.at(-1)
-    if (previous?.role === message.role) previous.content.push(...message.content)
+    // A controlBoundary message keeps its own turn so an in-position runtime
+    // control message is never folded into an adjacent functionResponse list.
+    const mergeable = previous?.role === message.role
+      && previous.controlBoundary !== true
+      && message.controlBoundary !== true
+    if (mergeable) previous.content.push(...message.content)
     else merged.push({ ...message, content: [...message.content] })
   }
   return merged
@@ -24,6 +32,15 @@ function mergeAdjacent(messages = []) {
 
 function openAiParts(content) {
   return Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }]
+}
+
+/** Text payload of an OpenAI-compatible message, including typed-content arrays. */
+function messageText(content) {
+  return openAiParts(content)
+    .filter((part) => part?.type === 'text')
+    .map((part) => String(part.text ?? ''))
+    .filter(Boolean)
+    .join('\n')
 }
 
 function jsonSafeToolResult(content) {
@@ -77,40 +94,81 @@ function anthropicPart(part) {
   return null
 }
 
-function anthropicMessages(messages = []) {
+// SDK ContentBlockParam explicitly permits these cache targets. Thinking and
+// redacted-thinking/signature state are not cacheable text blocks.
+const ANTHROPIC_CACHEABLE_BLOCK_TYPES = new Set(['text', 'image', 'document', 'tool_use', 'tool_result'])
+
+function cacheSafeSource(source) {
+  if (Array.isArray(source)) return source.every(cacheSafeSource)
+  if (!source || typeof source !== 'object') return true
+  return !['thinking', 'redacted_thinking'].includes(source.type) && source.thought !== true
+    && !Object.hasOwn(source, 'signature') && !Object.hasOwn(source, 'thoughtSignature')
+}
+
+function anthropicMessages(messages = [], { trackCacheTargets = false } = {}) {
   const system = []
   const out = []
+  const cacheableBlocks = new WeakSet()
+  let stableSystemPrefix = true
+  let lastStableSystemIndex = -1
+  const track = (block, source) => {
+    if (trackCacheTargets && block && cacheSafeSource(source)
+        && ANTHROPIC_CACHEABLE_BLOCK_TYPES.has(block.type)
+        && (block.type !== 'text' || block.text.trim())) cacheableBlocks.add(block)
+    return block
+  }
+  let leadingSystem = true
+  const appendRuntimeControl = (text, source) => {
+    // Anthropic has no mid-conversation system slot and enforces strict
+    // user/assistant alternation. Keep the runtime control message in position
+    // by appending a text block to the current user turn, so guidance still
+    // arrives immediately after the tool result it applies to.
+    const previous = out.at(-1)
+    const block = track({ type: 'text', text }, source)
+    if (previous?.role === 'user') previous.content.push(block)
+    else out.push({ role: 'user', content: [block] })
+  }
   for (const message of messages) {
     if (message?.role === 'system') {
-      const text = openAiParts(message.content).filter((part) => part?.type === 'text').map((part) => part.text).join('\n')
-      if (text) system.push(text)
+      const text = messageText(message.content)
+      if (!text) continue
+      if (leadingSystem) {
+        const block = track({ type: 'text', text }, message.content)
+        system.push(block)
+        stableSystemPrefix &&= message.__gugoPromptStability === 'stable' && cacheableBlocks.has(block)
+        if (stableSystemPrefix) lastStableSystemIndex = system.length - 1
+      } else appendRuntimeControl(text, message.content)
       continue
     }
+    leadingSystem = false
     if (message?.role === 'tool') {
       out.push({
         role: 'user',
-        content: [{
+        content: [track({
           type: 'tool_result',
           tool_use_id: String(message.tool_call_id || ''),
           content: serializeToolResult(message.content),
-        }],
+        }, message)],
       })
       continue
     }
-    const content = openAiParts(message?.content).map(anthropicPart).filter(Boolean)
+    const content = openAiParts(message?.content).map((part) => track(anthropicPart(part), part)).filter(Boolean)
     if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
       for (const call of message.tool_calls) {
-        content.push({
+        content.push(track({
           type: 'tool_use',
           id: String(call?.id || ''),
           name: String(call?.function?.name || ''),
           input: json(call?.function?.arguments, {}),
-        })
+        }, call))
       }
     }
     if (content.length) out.push({ role: message?.role === 'assistant' ? 'assistant' : 'user', content })
   }
-  return { system: system.join('\n\n'), messages: mergeAdjacent(out) }
+  return {
+    system: trackCacheTargets && system.length ? system : system.map((block) => block.text).join('\n\n'),
+    messages: mergeAdjacent(out), cacheableBlocks, lastStableSystemIndex,
+  }
 }
 
 function anthropicToolChoice(toolChoice) {
@@ -121,8 +179,39 @@ function anthropicToolChoice(toolChoice) {
   return { type: 'auto' }
 }
 
-function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, profile }) {
-  const converted = anthropicMessages(messages)
+function applyAnthropicCacheControl(body, converted, cacheControl, lastBaseToolIndex) {
+  if (!cacheControl) return false
+  let applied = false
+  if (Array.isArray(body.system)) {
+    const lastIndex = body.system.findLastIndex((block) => converted.cacheableBlocks.has(block))
+    body.system = body.system.map((block, index) => {
+      if (index !== lastIndex && index !== converted.lastStableSystemIndex) return block
+      applied = true
+      return { ...block, cache_control: cacheControl }
+    })
+  }
+  if (body.tools?.length) {
+    // Dynamic tools are appended after the base set. Keep the base breakpoint
+    // identical when they appear; an all-dynamic catalog has no earlier anchor.
+    const index = lastBaseToolIndex >= 0 ? lastBaseToolIndex : body.tools.length - 1
+    body.tools[index].cache_control = cacheControl
+    applied = true
+  }
+  for (let messageIndex = body.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const content = body.messages[messageIndex].content
+    for (let blockIndex = content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = content[blockIndex]
+      if (!converted.cacheableBlocks.has(block)) continue
+      content[blockIndex] = { ...block, cache_control: cacheControl }
+      return true
+    }
+  }
+  return applied
+}
+
+function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, profile, env, lastBaseToolIndex }) {
+  const cacheControl = anthropicPromptCacheControl(env)
+  const converted = anthropicMessages(messages, { trackCacheTargets: !!cacheControl })
   const headers = {
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
@@ -145,9 +234,11 @@ function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, pr
     }))
     body.tool_choice = anthropicToolChoice(toolChoice)
   }
+  const cacheApplied = applyAnthropicCacheControl(body, converted, cacheControl, lastBaseToolIndex)
+  const wireHeaders = cacheApplied ? anthropicCacheHeaders(headers, cacheControl, profile) : headers
   const base = normalizeBase(config.baseUrl)
   const url = /\/v1\/messages$/i.test(base) ? base : `${base.replace(/\/v1$/i, '')}/v1/messages`
-  return { url, init: { method: 'POST', headers, body: JSON.stringify(body) } }
+  return { url, init: { method: 'POST', headers: wireHeaders, body: JSON.stringify(body) } }
 }
 
 function geminiPart(part) {
@@ -163,22 +254,41 @@ function geminiPart(part) {
   return null
 }
 
-function geminiMessages(messages = []) {
+function geminiMessages(messages = [], replayContext = null) {
   const system = []
   const out = []
   const toolNames = new Map()
+  let leadingSystem = true
   for (const message of messages) {
+    const replayParts = message?.role === 'assistant' ? geminiReplayParts(message, replayContext) : null
     if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
-      for (const call of message.tool_calls) toolNames.set(call.id, call.function?.name || '')
+      const nativeCalls = replayParts?.filter((part) => part.functionCall) || []
+      for (const [index, call] of message.tool_calls.entries()) toolNames.set(call.id, {
+        name: call.function?.name || '', nativeId: nativeCalls[index]?.functionCall?.id,
+      })
     }
     if (message?.role === 'system') {
-      const text = openAiParts(message.content).filter((part) => part?.type === 'text').map((part) => part.text).join('\n')
-      if (text) system.push(text)
+      const text = messageText(message.content)
+      if (!text) continue
+      if (leadingSystem) {
+        system.push(text)
+        continue
+      }
+      // Gemini has one top-level systemInstruction. Keep runtime control
+      // messages in position as their own user turn, and do not fold them into
+      // an adjacent functionResponse part list.
+      out.push({ role: 'user', content: [{ text }], controlBoundary: true })
       continue
     }
+    leadingSystem = false
     if (message?.role === 'tool') {
-      const name = message.name || toolNames.get(message.tool_call_id) || 'tool'
-      out.push({ role: 'user', content: [{ functionResponse: { name, response: geminiToolResult(message.content) } }] })
+      const reference = toolNames.get(message.tool_call_id)
+      const name = message.name || reference?.name || 'tool'
+      out.push({ role: 'user', content: [{ functionResponse: { name, ...(reference?.nativeId ? { id: reference.nativeId } : {}), response: geminiToolResult(message.content) } }] })
+      continue
+    }
+    if (replayParts) {
+      out.push({ role: 'model', content: replayParts })
       continue
     }
     const content = openAiParts(message?.content).map(geminiPart).filter(Boolean)
@@ -202,7 +312,7 @@ function geminiToolMode(toolChoice) {
 }
 
 function buildGeminiRequest({ config, messages, stream, tools, toolChoice, profile }) {
-  const converted = geminiMessages(messages)
+  const converted = geminiMessages(messages, providerReplayContext({ config, profile }))
   const headers = { 'Content-Type': 'application/json', ...(config?.headers || {}) }
   if (config?.apiKey && !headers['x-goog-api-key'] && !headers.Authorization) headers['x-goog-api-key'] = config.apiKey
   const body = {
@@ -237,7 +347,8 @@ function buildGeminiRequest({ config, messages, stream, tools, toolChoice, profi
 }
 
 export function buildBuiltInNativeProviderRequest(args = {}) {
-  if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(args)
-  if (args.profile?.kind === 'gemini') return buildGeminiRequest(args)
+  const prepared = { ...args, ...canonicalizeModelToolSet(args.tools) }
+  if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(prepared)
+  if (args.profile?.kind === 'gemini') return buildGeminiRequest(prepared)
   throw new Error(`Unsupported native provider kind: ${args.profile?.kind || 'unknown'}`)
 }

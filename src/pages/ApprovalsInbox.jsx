@@ -4,6 +4,7 @@ import { RefreshCw, ShieldAlert, Check, X, Pencil, Terminal, FilePen, FileText, 
 import AppLayout from '../components/AppLayout.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { decideApproval, fetchApprovals, subscribeToApprovalEvents } from '../lib/approvalClient'
+import { approvalDecisionNoticeKey, approvalErrorKey } from '../lib/approvalErrorPresentation.js'
 
 const RISK_TONE = {
   high: { dot: 'bg-danger', text: 'text-danger', border: 'border-danger/40' },
@@ -44,8 +45,8 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
     let parsed
     try {
       parsed = JSON.parse(draft)
-    } catch (err) {
-      setJsonError(err.message)
+    } catch {
+      setJsonError(t('approvals.errors.invalidArguments'))
       return
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -176,7 +177,7 @@ export default function ApprovalsInbox() {
       setApprovals(list)
       setError(null)
     } catch (err) {
-      setError(err.message)
+      setError(approvalErrorKey(err))
     } finally {
       setLoading(false)
     }
@@ -206,11 +207,11 @@ export default function ApprovalsInbox() {
     const snapshot = approvals
     setApprovals((prev) => prev.filter((a) => a.id !== id))
     try {
-      await decideApproval(id, decision, args)
-      setError(null)
+      const result = await decideApproval(id, decision, args)
+      setError(approvalDecisionNoticeKey(result))
     } catch (err) {
       setApprovals(snapshot)
-      setError(err.message)
+      setError(approvalErrorKey(err))
     } finally {
       setBusyId(null)
     }
@@ -254,7 +255,7 @@ export default function ApprovalsInbox() {
 
         {error && (
           <div className="mb-4 px-4 py-2.5 border border-dashed border-accent/60 rounded-md font-semibold text-sm text-accent-ink">
-            {error}
+            {t(error)}
           </div>
         )}
 

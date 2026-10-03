@@ -1,5 +1,6 @@
 import { normalizeTaskGrants } from '../utils/taskGrants.js'
 import { mapJobAutoRetry } from './jobAutoRetryPersistence.js'
+import { artifactPreviewIdentity } from './artifactPreviewIdentity.js'
 
 function parseJson(value, fallback = null) {
   if (value == null || value === '') return fallback
@@ -73,5 +74,6 @@ export function mapArtifact(row) {
     url: row.url,
     filename: row.filename,
     createdAt: row.created_at,
+    ...artifactPreviewIdentity({ type: row.type, filename: row.filename }),
   }
 }

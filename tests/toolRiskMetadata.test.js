@@ -46,7 +46,15 @@ test('explicit read-only metadata is preserved', () => {
 
 test('every builtin spec carries a complete explicit risk declaration', () => {
   const names = listBuiltinNames()
-  assert.equal(names.length, 58)
+  // A count guard, not a frozen list: any new built-in tool must be declared
+  // here with complete risk metadata before it can ship. The count moved 66 → 67
+  // when `record_experience` was added (write_local, exclusive, approval-free
+  // bookkeeping into the workspace's own .agent/ journal), and 67 → 75 with the
+  // preview family: three read-only page reads (screenshot, DOM, console) and
+  // five that act inside the reader's own dev server (start, stop, click, type,
+  // navigate). See the declarations in toolSchemaMetadata for why those five
+  // carry no per-call approval.
+  assert.equal(names.length, 75)
   for (const name of names) {
     const spec = getBuiltinSpec(name)
     assert.ok(spec?.metadata, `${name} metadata`)
@@ -56,6 +64,30 @@ test('every builtin spec carries a complete explicit risk declaration', () => {
     assert.equal(typeof spec.metadata.isConcurrencySafe, 'boolean', `${name} concurrency`)
     assert.equal(getToolMetadata(name).source, 'declared', `${name} source`)
   }
+})
+
+test('skill and tool discovery controls are read-only and never grant execution approval', () => {
+  for (const name of ['load_skill', 'search_tools']) {
+    const metadata = getToolMetadata(name)
+    assert.equal(metadata.source, 'declared')
+    assert.equal(metadata.riskClass, 'read')
+    assert.equal(metadata.requiredApproval, false)
+    assert.equal(metadata.isReadOnly, true)
+    assert.equal(metadata.isDestructive, false)
+    assert.equal(metadata.isConcurrencySafe, false)
+  }
+})
+
+test('selected skill resources declare read-only risk without execution authority', () => {
+  const metadata = getToolMetadata('read_skill_resource')
+  assert.equal(metadata.source, 'declared')
+  assert.equal(metadata.riskClass, 'read')
+  assert.equal(metadata.riskLevel, 'low')
+  assert.equal(metadata.isReadOnly, true)
+  assert.equal(metadata.requiredApproval, false)
+  assert.equal(metadata.isConcurrencySafe, true)
+  assert.equal(metadata.isDestructive, false)
+  assert.ok(resolveSpecsForMode('plan').some((entry) => entry.name === 'read_skill_resource'))
 })
 
 test('run_code is approval-gated, exclusive, cancellable, and non-resumable', () => {
@@ -186,4 +218,31 @@ test('plan mode hides dynamic external tools from the model catalog', () => {
   } finally {
     unregisterDynamicTool('plan_visible_external')
   }
+})
+
+test('goal-plan tools are declared instead of falling back to approval-required external risk', () => {
+  // Regression: without declared metadata these resolved to the unknown-tool
+  // fallback (category `external`, requiredApproval true, isDestructive true),
+  // so simply reading the agent's own plan needed a user approval card.
+  const status = getToolMetadata('goal_plan_status')
+  assert.equal(status.source, 'declared')
+  assert.equal(status.category, 'read')
+  assert.equal(status.requiredApproval, false)
+  assert.equal(status.isReadOnly, true)
+  assert.equal(status.isDestructive, false)
+
+  for (const name of ['goal_step_update', 'goal_plan_rewrite']) {
+    const metadata = getToolMetadata(name)
+    assert.equal(metadata.source, 'declared', `${name} source`)
+    assert.equal(metadata.category, 'write_local', `${name} category`)
+    assert.equal(metadata.requiredApproval, false, `${name} must not need approval for plan bookkeeping`)
+    assert.equal(metadata.isReadOnly, false, `${name} still counts as a mutation`)
+    assert.equal(metadata.isDestructive, false, `${name} has no destructive side effect`)
+  }
+
+  // Read-only mode keeps the read tool and drops the two that mutate the plan.
+  const readOnlyNames = resolveSpecsForMode('plan').map((entry) => entry.name)
+  assert.ok(readOnlyNames.includes('goal_plan_status'))
+  assert.ok(!readOnlyNames.includes('goal_step_update'))
+  assert.ok(!readOnlyNames.includes('goal_plan_rewrite'))
 })

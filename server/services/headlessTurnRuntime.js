@@ -4,9 +4,13 @@ import { randomUUID } from 'node:crypto'
 import { bootstrapAuth, resolveAuthMode } from '../adapters/authAccount.js'
 import { getTurnEngine } from './turnEngineHost.js'
 import { decideApproval } from './approvalStore.js'
+import { getApprovalMode } from './approvalSettingsStore.js'
 import { releaseApproval } from './approvalGate.js'
 import { turnEventForClient } from './turnEventStore.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { resolveHeadlessApprovalDecision } from './headlessApprovalChannel.js'
+import { createHeadlessTurnInteractions } from './headlessTurnInteractions.js'
+import { startHeadlessWithAttachments } from './headlessAttachmentStart.js'
 
 const PERMISSION_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
 const STOP_EVENT_TYPES = new Set([
@@ -40,7 +44,7 @@ function normalizeMode(value) {
   return mode
 }
 
-function configureWorkspace(rawCwd, env = process.env) {
+function configureWorkspace(rawCwd, env = process.env, { explicit = false } = {}) {
   const cwd = path.resolve(String(rawCwd || process.cwd()))
   let stat
   try {
@@ -59,6 +63,10 @@ function configureWorkspace(rawCwd, env = process.env) {
     WORKSPACE_ROOT: cwd,
     WORKSPACE_FS_ENABLED: env.WORKSPACE_FS_ENABLED ?? '1',
     WORKSPACE_SHARED_TRUSTED: '1',
+    // An explicit --cwd also decides the turn's project directory (and thus
+    // which project instructions apply), instead of letting a configured
+    // default output directory take over the workspace role.
+    GUGO_CLI_WORKSPACE_ROOT: explicit ? cwd : '',
   }
   Object.assign(env, workspaceEnv)
   if (env !== process.env) Object.assign(process.env, workspaceEnv)
@@ -137,12 +145,6 @@ async function resolveResumeSessionId({ persistenceAdapter, userId, turnId }) {
   return normalizedSessionId
 }
 
-function normalizeApprovalDecision(value) {
-  const decision = typeof value === 'string' ? value : value?.decision
-  if (decision === 'approve' || decision === 'deny') return decision
-  return 'deny'
-}
-
 function completedEventSucceeded(event) {
   return isSuccessfulTurnCompletedEvent(event)
 }
@@ -171,10 +173,18 @@ function normalizeHeadlessTurnInput(input = {}) {
     prompt: '', model: null, modelProviderId: null, mode: null,
     cwd: process.cwd(), workspaceCwd: null, sessionId: null, resumeTurnId: null,
     token: '', interactive: false, onEvent: () => {}, onApproval: null,
+    onDirectoryRequest: null, onSideEffectRecovery: null,
     onToken: () => {}, onDiagnostic: () => {}, signal: null, env: process.env,
     ...input,
   }
   const { signal, model, modelProviderId, mode, resumeTurnId } = options
+  if (options.attachmentRequests !== undefined && (!Array.isArray(options.attachmentRequests)
+    || options.attachmentRequests.length > 8 || options.attachmentRequests.some((request) => (
+      !request || typeof request.path !== 'string' || !request.path.trim() || !['auto', 'image'].includes(request.kind || 'auto')
+    )))) throw new HeadlessTurnError('CLI_ATTACHMENT_INVALID', 'attachments require at most eight explicit file requests', 2)
+  if (resumeTurnId && options.attachmentRequests?.length) {
+    throw new HeadlessTurnError('CLI_RESUME_ATTACHMENT_CONFLICT', 'attachments cannot be combined with resume', 2)
+  }
   if (signal !== null && signal !== undefined && (
     typeof signal?.aborted !== 'boolean'
     || typeof signal?.addEventListener !== 'function'
@@ -225,7 +235,9 @@ function normalizeHeadlessTurnInput(input = {}) {
 async function prepareHeadlessTurn(input, dependencies) {
   const executionEnv = Object.isExtensible(input.env) ? input.env : { ...input.env }
   const configure = dependencies.configureWorkspace || configureWorkspace
-  const workspace = configure(input.workspaceCwd || input.cwd, executionEnv)
+  const workspace = configure(input.workspaceCwd || input.cwd, executionEnv, {
+    explicit: input.workspaceExplicit === true,
+  })
   const authenticate = dependencies.bootstrapAuth || bootstrapAuth
   const auth = await authenticate({ token: input.token, env: executionEnv })
   if (!auth?.authenticated || !auth?.user?.id) {
@@ -237,6 +249,18 @@ async function prepareHeadlessTurn(input, dependencies) {
   }
   if (auth.token && auth.token !== input.token) await input.onToken(auth.token)
   const userId = auth.user.id
+  if (!input.resumeTurnId && input.modeExplicit === false) {
+    const savedMode = await (dependencies.readApprovalMode || getApprovalMode)({ userId })
+    if (!PERMISSION_MODES.has(savedMode)) {
+      throw new HeadlessTurnError('CLI_PERMISSION_MODE_UNAVAILABLE', 'the saved account permission mode is unavailable')
+    }
+    // Default CLI behavior stays normal; an already saved read-only restriction
+    // must still apply. Broader account settings require an explicit CLI choice.
+    input = { ...input, permissionMode: savedMode === 'plan' ? 'plan' : 'normal' }
+    if (savedMode === 'plan') {
+      await input.onDiagnostic('[permissions] using saved plan mode; choose --mode explicitly for a different per-turn mode.')
+    }
+  }
   const authMode = auth.mode || resolveAuthMode(executionEnv)
   const turnId = String(input.resumeTurnId || dependencies.idFactory?.() || randomUUID())
   const engine = dependencies.engine || await (dependencies.getEngine || getTurnEngine)()
@@ -276,6 +300,7 @@ async function prepareHeadlessTurn(input, dependencies) {
     decide: dependencies.decideApproval || decideApproval,
     release: dependencies.releaseApproval || releaseApproval,
     subscribeEvents: dependencies.subscribeEvents || null,
+    interactionPorts: dependencies.interactionPorts || null,
     wait: dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   }
 }
@@ -283,6 +308,7 @@ async function prepareHeadlessTurn(input, dependencies) {
 function createHeadlessEventController(runtime) {
   const { input, scope } = runtime
   const state = {
+    closed: false,
     handledApprovalIds: new Set(),
     pendingApprovalTasks: new Set(),
     cursor: -1,
@@ -297,20 +323,21 @@ function createHeadlessEventController(runtime) {
     const approvalId = String(event?.payload?.approvalId || '')
     if (!approvalId || state.handledApprovalIds.has(approvalId)) return
     state.handledApprovalIds.add(approvalId)
-    let decision = 'deny'
-    if (input.interactive && typeof input.onApproval === 'function') {
-      try {
-        decision = normalizeApprovalDecision(await input.onApproval(event))
-      } catch (error) {
-        input.onDiagnostic(`approval prompt failed; denied ${approvalId}: ${error?.message || error}`)
-      }
-    }
+    const { decision, decidedBy } = await resolveHeadlessApprovalDecision({
+      interactive: input.interactive,
+      onApproval: input.onApproval,
+      onDiagnostic: input.onDiagnostic,
+      event,
+      approvalId,
+      userId: scope.userId,
+    })
+    if (state.closed) return
     try {
       await runtime.decide({
         userId: scope.userId,
         id: approvalId,
         decision,
-        decidedBy: scope.userId,
+        decidedBy,
       })
     } finally {
       await runtime.release(approvalId)
@@ -324,7 +351,7 @@ function createHeadlessEventController(runtime) {
     state.pendingApprovalTasks.add(task)
   }
   const deliver = (event) => {
-    if (!event || !Number.isInteger(event.sequence) || event.sequence <= state.cursor) return
+    if (state.closed || !event || !Number.isInteger(event.sequence) || event.sequence <= state.cursor) return
     state.cursor = event.sequence
     state.lastEvent = event
     input.onEvent(turnEventForClient(event))
@@ -368,15 +395,25 @@ function createHeadlessEventController(runtime) {
   }
 }
 
-async function startOrRecoverHeadlessTurn(runtime, controller) {
+async function startOrRecoverHeadlessTurn(runtime, controller, interactions) {
   const { input, scope } = runtime
   if (input.resumeTurnId) {
     await controller.drainPersistedEvents()
     await Promise.all([...controller.state.pendingApprovalTasks])
+    // Existing pauses/unknown effects must be shown before retryRecovery can
+    // clear their recovery state or schedule any continuation.
+    if (interactions.canHandle(controller.state.lastEvent)) {
+      return { terminal: false, paused: true, locallyActive: false }
+    }
     if (runtime.resumeTurn) {
+      const previousSequence = controller.state.lastEvent?.sequence
       const resumedTurn = await runtime.resumeTurn({
         ...scope, authMode: runtime.authMode, retryRecovery: true,
       })
+      if (controller.state.lastEvent?.sequence === previousSequence
+        && !['completed', 'failed', 'cancelled', 'paused', 'blocked'].includes(resumedTurn?.status)) {
+        controller.state.lastEvent = null
+      }
       return {
         turn: resumedTurn,
         terminal: ['completed', 'failed', 'cancelled'].includes(resumedTurn?.status),
@@ -386,16 +423,24 @@ async function startOrRecoverHeadlessTurn(runtime, controller) {
     }
     return runtime.recoverTurn({ ...scope, authMode: runtime.authMode })
   }
-  const content = String(input.prompt || '').trim()
+  const content = String(input.prompt || '').trim() || (input.attachmentRequests?.length ? '请分析附件内容。' : '')
   if (!content) throw new HeadlessTurnError('PROMPT_REQUIRED', 'prompt is required', 2)
-  await runtime.startTurn({
-    ...scope,
-    content,
-    modelName: input.normalizedModel,
-    modelProviderId: input.normalizedModelProviderId,
-    intentMode: input.permissionMode === 'plan' ? 'answer' : 'auto',
-    approvalMode: input.permissionMode,
-    authMode: runtime.authMode,
+  await startHeadlessWithAttachments(runtime, {
+      ...scope,
+      content,
+      sessionWorkspaceMode: 'create-only',
+      // Chat pins its execution cwd even without a user project selection.
+      // Only an explicit selection becomes a new session's project metadata.
+      ...((input.sessionWorkspaceExplicit ?? input.workspaceExplicit) === true ? {
+        workspacePath: typeof runtime.workspace === 'string'
+          ? runtime.workspace
+          : runtime.workspace?.cwd || input.workspaceCwd || input.cwd,
+      } : {}),
+      modelName: input.normalizedModel,
+      modelProviderId: input.normalizedModelProviderId,
+      intentMode: input.permissionMode === 'plan' ? 'answer' : 'auto',
+      approvalMode: input.permissionMode,
+      authMode: runtime.authMode,
   })
   controller.state.turnReadyForCancellation = true
   if (controller.state.cancellationRequested) controller.requestCancellation()
@@ -403,10 +448,9 @@ async function startOrRecoverHeadlessTurn(runtime, controller) {
 }
 
 async function waitForHeadlessTurn(runtime, controller, recoveryOutcome) {
-  const { input, scope } = runtime
+  const { scope } = runtime
   const { state } = controller
-  while (input.resumeTurnId
-    && recoveryOutcome
+  while (recoveryOutcome
     && !recoveryOutcome.terminal
     && !recoveryOutcome.paused
     && recoveryOutcome.locallyActive === false
@@ -430,21 +474,27 @@ async function waitForHeadlessTurn(runtime, controller, recoveryOutcome) {
     )
   while (!engineWaitSettled && !STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
     await controller.drainPersistedEvents()
-    await Promise.all([...state.pendingApprovalTasks])
+    await Promise.race([engineWait, Promise.all([...state.pendingApprovalTasks])])
     controller.throwCancellationError()
     if (engineWaitSettled || STOP_EVENT_TYPES.has(state.lastEvent?.type)) break
     await Promise.race([engineWait, runtime.wait(250)])
   }
   if (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) await engineWait
-  if (engineWaitSettled && engineWaitError) throw engineWaitError
   controller.throwCancellationError()
   await controller.drainPersistedEvents()
-  await Promise.all([...state.pendingApprovalTasks])
+  if (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
+    await Promise.race([engineWait, Promise.all([...state.pendingApprovalTasks])])
+  }
   await controller.drainPersistedEvents()
-  while (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
-    await runtime.wait(250)
-    await controller.drainPersistedEvents()
-    controller.throwCancellationError()
+  if (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
+    // The local execution handle has settled and its writes have been drained.
+    // A stale owner must not invent a durable failure, nor leave the CLI polling
+    // forever. Remote-owner resume waits stay in the recovery loop above.
+    if (engineWaitError) throw engineWaitError
+    throw new HeadlessTurnError(
+      'TURN_TERMINAL_EVENT_MISSING',
+      `turn execution ended without a persisted terminal event: ${scope.turnId}`,
+    )
   }
   if (state.cancellationTask) await state.cancellationTask
   controller.throwCancellationError()
@@ -460,6 +510,9 @@ async function waitForHeadlessTurn(runtime, controller, recoveryOutcome) {
 
 async function executeHeadlessTurn(runtime) {
   const controller = createHeadlessEventController(runtime)
+  const interactions = createHeadlessTurnInteractions({
+    input: runtime.input, scope: runtime.scope, ports: runtime.interactionPorts, workspace: runtime.workspace,
+  })
   let unsubscribe = () => {}
   let removeAbortListener = () => {}
   try {
@@ -480,11 +533,43 @@ async function executeHeadlessTurn(runtime) {
       }
       unsubscribe = subscribed
     }
-    const recoveryOutcome = await startOrRecoverHeadlessTurn(runtime, controller)
-    return await waitForHeadlessTurn(runtime, controller, recoveryOutcome)
+    let recoveryOutcome = await startOrRecoverHeadlessTurn(runtime, controller, interactions)
+    while (true) {
+      const result = await waitForHeadlessTurn(runtime, controller, recoveryOutcome)
+      if (!interactions.canHandle(result.lastEvent)) return result
+      if (!runtime.resumeTurn) {
+        throw new HeadlessTurnError('CLI_INTERACTIVE_RESUME_UNSUPPORTED', 'This runtime cannot continue the current turn interactively.')
+      }
+      // Finish the old execution handle and its recovery-state writes before
+      // recording a user decision or resuming the exact same durable turn.
+      await runtime.waitForTurn(runtime.scope)
+      const resume = await interactions.prepareResume(result.lastEvent)
+      if (!resume || runtime.input.signal?.aborted) {
+        if (controller.state.cancellationTask) await controller.state.cancellationTask
+        controller.throwCancellationError()
+        await controller.drainPersistedEvents()
+        return { ...resultForLastEvent({ ...runtime.scope, lastEvent: controller.state.lastEvent }), workspace: runtime.workspace }
+      }
+      controller.state.lastEvent = null
+      const resumedTurn = await runtime.resumeTurn({ ...runtime.scope, authMode: runtime.authMode, ...resume })
+      recoveryOutcome = {
+        turn: resumedTurn, terminal: ['completed', 'failed', 'cancelled'].includes(resumedTurn?.status),
+        paused: resumedTurn?.status === 'paused', locallyActive: false,
+      }
+      await controller.drainPersistedEvents()
+    }
   } finally {
     removeAbortListener()
-    await unsubscribe()
+    try {
+      if (controller.state.cancellationTask) {
+        await controller.state.cancellationTask
+        controller.throwCancellationError()
+        await controller.drainPersistedEvents()
+      }
+    } finally {
+      controller.state.closed = true
+      await unsubscribe()
+    }
   }
 }
 

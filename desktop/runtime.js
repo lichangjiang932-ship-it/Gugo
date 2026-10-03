@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { validateRuntimeStoragePath } from '../server/utils/runtimeStoragePath.js'
 import {
   RUNTIME_CONFIG_RECOVERY_MODE,
   RUNTIME_CONFIG_RECOVERY_PROTOCOL_VERSION,
@@ -90,28 +91,35 @@ export function resolveDesktopPort(value) {
     : DEFAULT_DESKTOP_PORT
 }
 
-export function resolveDesktopDataPaths(userData) {
-  const dataDir = path.resolve(String(userData || ''), 'server-data')
+export function resolveDesktopDataPaths(userData, { env = {}, cwd = process.cwd() } = {}) {
+  const configuredDataDir = validateRuntimeStoragePath(env.APP_DATA_DIR, { key: 'APP_DATA_DIR' })
+  const configuredDbPath = validateRuntimeStoragePath(env.APP_DB_PATH, { key: 'APP_DB_PATH' })
+  const configuredArtifacts = validateRuntimeStoragePath(env.ARTIFACT_DIR, { key: 'ARTIFACT_DIR' })
+  const dataDir = configuredDataDir
+    ? path.resolve(cwd, configuredDataDir)
+    : path.resolve(String(userData || ''), 'server-data')
   return {
     dataDir,
-    database: path.join(dataDir, 'app.db'),
-    artifacts: path.join(dataDir, 'artifacts'),
+    database: configuredDbPath ? path.resolve(cwd, configuredDbPath) : path.join(dataDir, 'app.db'),
+    artifacts: configuredArtifacts ? path.resolve(cwd, configuredArtifacts) : path.join(dataDir, 'artifacts'),
   }
 }
 
-export function resolveDesktopRuntimeConfigPath(userData) {
+export function resolveDesktopRuntimeConfigPath(userData, options = {}) {
   const basePath = String(userData || '').trim()
   if (!basePath) throw new TypeError('desktop user data path is required')
-  return path.join(resolveDesktopDataPaths(basePath).dataDir, 'runtime.json')
+  return path.join(resolveDesktopDataPaths(basePath, options).dataDir, 'runtime.json')
 }
 
 export function ensureDesktopRuntimeConfigFile({
   userData,
+  env = {},
+  cwd = process.cwd(),
   mkdirSync = fs.mkdirSync,
   writeFileSync = fs.writeFileSync,
   lstatSync = fs.lstatSync,
 } = {}) {
-  const configPath = resolveDesktopRuntimeConfigPath(userData)
+  const configPath = resolveDesktopRuntimeConfigPath(userData, { env, cwd })
   mkdirSync(path.dirname(configPath), { recursive: true })
   try {
     writeFileSync(configPath, '{\n  "env": {}\n}\n', {

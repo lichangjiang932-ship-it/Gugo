@@ -178,7 +178,7 @@ test('resume never replays a side-effecting call left in executing state', async
   let toolResult = null
   const savedStates = []
 
-  const result = await runToolsLoop({
+  await assert.rejects(runToolsLoop({
     job: { id: 'resume-write-job', userId: alice },
     step: { id: 'resume-write-step' },
     messages: [],
@@ -192,13 +192,9 @@ test('resume never replays a side-effecting call left in executing state', async
       executeCount += 1
       return { ok: true }
     },
-    runModel: async ({ messages }) => {
-      toolResult = JSON.parse(messages.find((message) => message.role === 'tool').content)
-      return { content: 'verify before continuing', toolCalls: [] }
-    },
-  })
-
-  assert.equal(result.text, 'verify before continuing')
+    onToolCompleted: async ({ result }) => { toolResult = result },
+    runModel: async () => { assert.fail('an uncertain write cannot request model wrap-up') },
+  }), (error) => error?.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN' && error.unsafeToReplay === true)
   assert.equal(executeCount, 0)
   assert.equal(toolResult.code, 'tool_execution_outcome_unknown')
   assert.equal(toolResult.requiresUserVerification, true)
@@ -230,7 +226,7 @@ test('resume never replays run_code left in executing state', async () => {
   let toolResult = null
   const savedStates = []
 
-  const result = await runToolsLoop({
+  await assert.rejects(runToolsLoop({
     job: { id: 'resume-run-code-job', userId: alice },
     step: { id: 'resume-run-code-step' },
     messages: [],
@@ -244,13 +240,9 @@ test('resume never replays run_code left in executing state', async () => {
       executeCount += 1
       return { ok: true, value: 42 }
     },
-    runModel: async ({ messages }) => {
-      toolResult = JSON.parse(messages.find((message) => message.role === 'tool').content)
-      return { content: 'The prior code execution outcome must be verified.', toolCalls: [] }
-    },
-  })
-
-  assert.equal(result.text, 'The prior code execution outcome must be verified.')
+    onToolCompleted: async ({ result }) => { toolResult = result },
+    runModel: async () => { assert.fail('uncertain code execution cannot request model wrap-up') },
+  }), (error) => error?.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN' && error.unsafeToReplay === true)
   assert.equal(executeCount, 0)
   assert.equal(toolResult.code, 'tool_execution_outcome_unknown')
   assert.equal(toolResult.requiresUserVerification, true)
@@ -597,6 +589,7 @@ test('an executing connector checkpoint switched to plan is denied before idempo
   }
   let executeCalls = 0
   let deniedResult = null
+  const modelRequests = []
   const executeTool = async () => {
     executeCalls += 1
     return { ok: true }
@@ -619,16 +612,20 @@ test('an executing connector checkpoint switched to plan is denied before idempo
         return { state: checkpoint }
       },
       executeTool,
+      onToolCompleted: async ({ result }) => { deniedResult = result },
+      // A plan-mode refusal is a tool result the model reads and works around,
+      // as in Claude Code — but the connector write itself must never run.
       runModel: async ({ messages }) => {
-        deniedResult = JSON.parse(messages.find((message) => (
-          message.role === 'tool' && message.tool_call_id === toolCallId
-        )).content)
-        return { content: 'connector write remained blocked in plan mode', toolCalls: [] }
+        modelRequests.push(messages)
+        return { content: 'Plan: create the issue after leaving plan mode.', toolCalls: [] }
       },
     })
 
-    assert.equal(result.text, 'connector write remained blocked in plan mode')
     assert.equal(executeCalls, 0)
+    assert.equal(modelRequests.length, 1)
+    const toolMessage = modelRequests[0].find((message) => message.role === 'tool' && message.tool_call_id === toolCallId)
+    assert.match(String(toolMessage?.content || ''), /policy_denied_plan_mode/)
+    assert.notEqual(result.code, 'policy_denied_plan_mode', 'the refusal no longer ends the turn')
     assert.equal(deniedResult.policyDenied, true)
     assert.equal(deniedResult.permissionMode, 'plan')
     assert.match(deniedResult.error, /工具存在/)

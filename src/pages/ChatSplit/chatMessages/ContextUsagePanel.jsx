@@ -1,4 +1,5 @@
 import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
+import RequestCacheUsage from './RequestCacheUsage.jsx'
 
 function compactTokens(value) {
   const tokens = Math.max(0, Number(value) || 0)
@@ -78,6 +79,7 @@ export default function ContextUsagePanel({
         <UsageRow color="bg-accent" label={t('chat.contextUsage.tools')} value={toolTokens} />
         <UsageRow color="bg-ink/60" label={t('chat.contextUsage.messagePayload')} value={conversationTokens} />
       </div>
+      <RequestCacheUsage usage={contextUsage.modelUsage} t={t} />
       {cumulativeTokens !== null && (
         <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-ink/10 pt-2 text-xs leading-4">
           <span className="text-ink-soft">{t('chat.contextUsage.cumulativeUsage')}</span>

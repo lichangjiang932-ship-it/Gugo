@@ -31,6 +31,8 @@ import {
 import { htmlPreviewRemoteImageOrigins } from '../services/htmlPreviewRemoteImagePolicy.js'
 import { selectNativeDirectory } from '../services/nativeDirectoryPickerService.js'
 import { isLoopbackRequest } from '../utils/loopbackRequest.js'
+import { grantTurnDirectory } from '../services/turnDirectoryInteractionService.js'
+import { resolveDesktopFileTarget } from '../services/desktopFileTargetService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -275,6 +277,15 @@ function serveReceiptFile(req, res, url, userId, match) {
 }
 
 async function handleLocalFileManagement(req, res, { url, userId, cwd, env, nativeDirectoryPicker }) {
+  if (req.method === 'POST' && url.pathname === '/api/local-files/desktop-target') {
+    res.setHeader('Cache-Control', 'no-store')
+    if (!isLoopbackRequest(req)) {
+      return sendJson(res, 403, { ok: false, error: { code: 'LOCAL_ONLY', message: 'Desktop file actions require the service host.' } })
+    }
+    const request = await readJson(req)
+    const result = resolveDesktopFileTarget({ userId, request, secret: process.env.GUGO_DESKTOP_BRIDGE_SECRET })
+    return sendJson(res, 200, { ok: true, ...result })
+  }
   const previewRevokeMatch = req.method === 'DELETE'
     ? url.pathname.match(/^\/api\/local-files\/previews\/([^/]+)\/?$/)
     : null
@@ -326,6 +337,14 @@ async function handleLocalFileManagement(req, res, { url, userId, cwd, env, nati
         bypassConfirmation: body.bypassConfirmation, cwd, env,
       }),
     })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/grants/turn') {
+    const body = await readJson(req)
+    const result = grantTurnDirectory({
+      userId, sessionId: body.sessionId, turnId: body.turnId, pausedSequence: body.pausedSequence,
+      rootPath: body.path, accessMode: body.accessMode, scope: body.scope,
+    })
+    return sendJson(res, 200, { ok: true, ...result })
   }
   if (req.method === 'POST' && url.pathname === '/api/local-files/grants') {
     const body = await readJson(req)

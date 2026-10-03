@@ -1,16 +1,6 @@
-export const LOOP_RUNTIME_CONTRACT_ERROR_CODE = 'LOOP_RUNTIME_CONTRACT_VIOLATION'
+import { inspectRuntimeDependencies } from './dependencyBagContract.js'
 
-const CORE_DEPENDENCY_SCHEMA = Object.freeze({
-  createCheckpointBarrier: 'function',
-  createJobBudget: 'function',
-  createSteeringController: 'function',
-  createToolLoopGuard: 'function',
-  executeServerTool: 'function',
-  normalizeCompactionRecovery: 'function',
-  normalizeToolCalls: 'function',
-  resolveIterationWindow: 'function',
-  runModelStep: 'function',
-})
+export const LOOP_RUNTIME_CONTRACT_ERROR_CODE = 'LOOP_RUNTIME_CONTRACT_VIOLATION'
 
 const STAGE_SCHEMAS = Object.freeze({
   'execute-tool-calls': Object.freeze({
@@ -51,6 +41,23 @@ function matchesType(value, expectedType) {
   return typeof value === expectedType
 }
 
+function contractError(stage, { missingFields = [], invalidFields = [], unexpectedFields = [], expectedKinds = {} } = {}) {
+  const details = [
+    missingFields.length ? `missing ${missingFields.join(', ')}` : '',
+    invalidFields.length ? `invalid ${invalidFields.join(', ')}` : '',
+    unexpectedFields.length ? `unexpected ${unexpectedFields.join(', ')}` : '',
+  ].filter(Boolean).join('; ')
+  const error = new Error(`Loop runtime contract violation in ${stage}: ${details}`)
+  error.name = 'LoopRuntimeContractError'
+  error.code = LOOP_RUNTIME_CONTRACT_ERROR_CODE
+  error.stage = stage
+  error.missingFields = missingFields
+  error.invalidFields = invalidFields
+  error.unexpectedFields = unexpectedFields
+  error.expectedKinds = expectedKinds
+  return error
+}
+
 function assertSchema(value, stage, schema) {
   const missingFields = []
   const invalidFields = []
@@ -60,22 +67,19 @@ function assertSchema(value, stage, schema) {
     else if (!matchesType(fieldValue, expectedType)) invalidFields.push(path)
   }
   if (missingFields.length === 0 && invalidFields.length === 0) return
-
-  const details = [
-    missingFields.length ? `missing ${missingFields.join(', ')}` : '',
-    invalidFields.length ? `invalid ${invalidFields.join(', ')}` : '',
-  ].filter(Boolean).join('; ')
-  const error = new Error(`Loop runtime contract violation in ${stage}: ${details}`)
-  error.name = 'LoopRuntimeContractError'
-  error.code = LOOP_RUNTIME_CONTRACT_ERROR_CODE
-  error.stage = stage
-  error.missingFields = missingFields
-  error.invalidFields = invalidFields
-  throw error
+  throw contractError(stage, { missingFields, invalidFields })
 }
 
+/**
+ * Validate the complete loop dependency bag, not just a bootstrap subset.
+ * Every symbol the phases consume must be present with its expected kind, and
+ * the bag must not carry unknown keys. Fails before any phase, model call or
+ * tool execution can start.
+ */
 export function assertRuntimeDependencies(dependencies) {
-  assertSchema(dependencies, 'runtime-dependencies', CORE_DEPENDENCY_SCHEMA)
+  const inspection = inspectRuntimeDependencies(dependencies)
+  if (inspection.ok) return
+  throw contractError(inspection.stage, inspection)
 }
 
 export function assertRuntimeStage(state, stage) {

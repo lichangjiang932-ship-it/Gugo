@@ -1,5 +1,8 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
+import { emitContextPreparation } from './runtimeContextDiagnostics.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
+import { MODEL_PROVIDER_STOP_REASON_ERROR_CODE } from '../../../shared/modelProviderStopDiagnostic.js'
 
 function modelPhaseUsage(result) {
   const usage = result?.usage
@@ -23,6 +26,7 @@ async function prepareModelRequestIteration(s) {
     i.steeringLeaseId = claimed.leaseId
     s.appendSteeringMessages(claimed.messages)
   }
+  s.completionDeferredForSteering = false
   i.modelResult = undefined
   i.responseTextPublished = false
   i.finalAnswerEvidenceReviewDigest = s.hasCurrentFinalAnswerEvidenceReview()
@@ -33,6 +37,14 @@ async function prepareModelRequestIteration(s) {
   s.activeToolSpecs = filterCurrentDynamicToolSpecs(s.activeToolSpecs, {
     userId: s.job?.userId || null,
   })
+  // Capture the base tool set once per turn. Later activations (skills, MCP,
+  // search_tools) are marked dynamic for the request so they append to the
+  // provider tool block instead of reordering it. See canonicalizeModelTools.
+  if (!(s.baseToolNames instanceof Set)) {
+    s.baseToolNames = new Set(
+      s.activeToolSpecs.map((spec) => toolNameFromSpec(spec)).filter(Boolean),
+    )
+  }
   const modelMayRequestMutation = s.activeToolSpecs.some((spec) => {
     const name = toolNameFromSpec(spec)
     if (!name || name === 'set_deliverables') return false
@@ -46,12 +58,54 @@ async function prepareModelRequestIteration(s) {
   return { hasCurrentAnswerReview, modelMayRequestMutation }
 }
 
-function normalizeCompatibilityToolCalls(result, extractTextToolCalls) {
+function compatibilityToolNameAllowlist(s) {
+  const specs = Array.isArray(s.activeToolSpecs) ? s.activeToolSpecs : []
+  const names = []
+  for (const spec of specs) {
+    const name = s.d.toolNameFromSpec(spec)
+    if (name) names.push(name)
+  }
+  return names
+}
+
+function normalizeCompatibilityToolCalls(result, extractTextToolCalls, salvageBareJsonToolCall, allowedToolNames) {
+  if (result?.nativeContent === true || result?.providerReplay) return result
   if (Array.isArray(result?.toolCalls) && result.toolCalls.length > 0) return result
   const compatibilityCall = extractTextToolCalls(result?.content)
-  return compatibilityCall.detected
-    ? { ...result, content: compatibilityCall.content, toolCalls: compatibilityCall.toolCalls }
+  if (compatibilityCall.detected) {
+    return { ...result, content: compatibilityCall.content, toolCalls: compatibilityCall.toolCalls }
+  }
+  const salvaged = salvageBareJsonToolCall(result?.content, { allowedToolNames })
+  return salvaged.detected
+    ? { ...result, content: salvaged.content, toolCalls: salvaged.toolCalls }
     : result
+}
+
+async function requireNativeRepresentativeRead(s, i, returnedToolCalls) {
+  if (!(i.modelResult?.nativeContent || i.modelResult?.providerReplay)
+    || !s.requiresRepresentativeRead || s.hasSuccessfulRepresentativeRead || returnedToolCalls.length > 0) return null
+  if (i.modelResult.content) s.convo.push(modelAssistantHistoryMessage(i.modelResult.content, i.modelResult))
+  s.modelInvocation = null
+  s.restoredModelInvocation = null
+  if (s.iter + 1 >= s.maxIters) {
+    const result = await s.finishIncomplete({
+      text: s.locale === 'zh' ? '项目审查尚未完成：还没有成功读取代表性文件。' : 'Project review is incomplete: representative files have not been read successfully.',
+      reason: 'directory_review_evidence_missing', code: 'DIRECTORY_REVIEW_EVIDENCE_MISSING',
+      missingRequirements: ['representative_file_read'], steeringLeaseId: i.steeringLeaseId,
+    })
+    return result.deferredForSteering ? { kind: 'continue' } : { kind: 'return', value: result }
+  }
+  s.representativeReadsInjected = true
+  s.convo.push({ role: 'system', content: [
+    s.d.DIRECTORY_REVIEW_GUARD_MARKER,
+    'A directory listing is discovery evidence only; no representative file has been read successfully.',
+    'Use a real native read_file function call before completing this review. Do not claim completion from the listing.',
+    `Representative read arguments (data): ${JSON.stringify(s.representativeReadCalls.map((call) => call.function?.arguments || '{}'))}`,
+  ].join(' ') })
+  await s.persistTurn({ boundary: 'native-directory-review-evidence' })
+  await s.steeringController.acknowledge(i.steeringLeaseId)
+  i.steeringLeaseId = null
+  return { kind: 'continue' }
 }
 
 async function executeModelRequestRound(s, context) {
@@ -60,12 +114,26 @@ async function executeModelRequestRound(s, context) {
     DIRECTORY_REVIEW_GUARD_MARKER,
     extractTextToolCalls,
     mergeCompactionRecovery,
+    salvageBareJsonToolCall,
     sourceHandoffViolation,
   } = s.d
   let streamedText = false
+  // Base tools keep their stable name order; tools activated after turn start
+  // are appended so an append does not reorder the cached prefix.
+  const modelTools = s.baseToolNames instanceof Set
+    ? s.activeToolSpecs.map((spec) => {
+      const name = s.d.toolNameFromSpec(spec)
+      return name && s.baseToolNames.has(name) ? spec : { ...spec, __gugoDynamicTool: true }
+    })
+    : s.activeToolSpecs
+  if (s.signal?.aborted) {
+    throw s.signal.reason instanceof Error ? s.signal.reason
+      : Object.assign(new Error('Turn cancelled'), { name: 'AbortError' })
+  }
+  await emitContextPreparation(s, modelTools)
   const request = await s.callTrackedModel({
     messages: s.convo,
-    tools: s.activeToolSpecs,
+    tools: modelTools,
     ...(s.needsDeliverableSelection()
       ? { toolChoice: { type: 'function', function: { name: 'set_deliverables' } } }
       : s.forcedArtifactRequestPending()
@@ -74,6 +142,7 @@ async function executeModelRequestRound(s, context) {
     consumeBudget: (cost) => s.budget.consume(cost),
     onTextDelta: async (text, metadata = {}) => {
       if (!text || s.requiresSourceHandoffProtection) return
+      if (s.requiresRepresentativeRead && !s.hasSuccessfulRepresentativeRead) return
       if (!s.hasRequiredArtifacts() && !s.codeSnippetRequested) return
       if (s.requiresExecutionEvidence && !s.hasRequiredExecutionEvidence()) return
       if (context.modelMayRequestMutation || !context.hasCurrentAnswerReview()) return
@@ -90,8 +159,15 @@ async function executeModelRequestRound(s, context) {
   })
   s.convo.splice(0, s.convo.length, ...request.messages)
   s.recovery = mergeCompactionRecovery(s.recovery, request.recovery)
-  i.modelResult = normalizeCompatibilityToolCalls(request.response, extractTextToolCalls)
+  i.modelResult = normalizeCompatibilityToolCalls(
+    request.response,
+    extractTextToolCalls,
+    salvageBareJsonToolCall,
+    compatibilityToolNameAllowlist(s),
+  )
   const returnedToolCalls = Array.isArray(i.modelResult?.toolCalls) ? i.modelResult.toolCalls : []
+  const representativeRead = await requireNativeRepresentativeRead(s, i, returnedToolCalls)
+  if (representativeRead) return representativeRead
   if (s.requiresRepresentativeRead
     && !s.hasSuccessfulRepresentativeRead
     && !s.representativeReadsInjected
@@ -199,10 +275,12 @@ async function finishReasoningRunaway(s, error) {
 
 async function handleModelRequestFailure(s, error, context) {
   const i = s.iteration
-  const { extractTextToolCalls } = s.d
+  const { extractTextToolCalls, salvageBareJsonToolCall } = s.d
   const recoverableModelResult = normalizeCompatibilityToolCalls(
     error?.partialModelResult,
     extractTextToolCalls,
+    salvageBareJsonToolCall,
+    compatibilityToolNameAllowlist(s),
   )
   const recoverableToolCalls = Array.isArray(recoverableModelResult?.toolCalls)
     ? recoverableModelResult.toolCalls
@@ -238,7 +316,8 @@ async function handleModelRequestFailure(s, error, context) {
     if (typeof s.releaseSteering === 'function') await s.releaseSteering(i.steeringLeaseId)
     i.steeringLeaseId = null
   }
-  if (error?.name === 'AbortError' || s.iter === 0) throw error
+  if (error?.name === 'AbortError' || s.iter === 0 || error?.code === MODEL_PROVIDER_STOP_REASON_ERROR_CODE
+    || error?.unsafeToReplay === true || error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN') throw error
   const terminal = await s.finishTerminalResult(s.partialResultFallback.apply({
     text: '',
     artifactIds: s.artifactIds,
@@ -247,6 +326,7 @@ async function handleModelRequestFailure(s, error, context) {
     code: error?.code || 'MODEL_CALL_INTERRUPTED',
     reason: error?.message || String(error),
     recovery: s.recovery,
+    ...(error.modelRequestDiagnostics ? { modelRequestDiagnostics: error.modelRequestDiagnostics } : {}),
   }), {
     steeringLeaseId: i.steeringLeaseId,
     appendTextToConversation: false,
@@ -258,8 +338,7 @@ async function handleModelRequestFailure(s, error, context) {
 export async function runModelRequest(s) {
   const context = await prepareModelRequestIteration(s)
   try {
-    await executeModelRequestRound(s, context)
-    return { kind: 'next' }
+    return await executeModelRequestRound(s, context) || { kind: 'next' }
   } catch (error) {
     return handleModelRequestFailure(s, error, context)
   }

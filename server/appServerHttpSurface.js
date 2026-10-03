@@ -40,18 +40,28 @@ function send(res, statusCode, body, headers = {}) {
 
 export function serveStatic(req, res, staticDir) {
   const url = new URL(req.url, 'http://localhost')
-  const decodedPath = decodeURIComponent(url.pathname)
+  let decodedPath
+  try {
+    decodedPath = decodeURIComponent(url.pathname)
+  } catch {
+    // A malformed percent escape must be a 400, not an unhandled throw.
+    send(res, 400, 'Bad Request', { 'Content-Type': 'text/plain; charset=utf-8' })
+    return
+  }
   const requested = decodedPath === '/' ? '/index.html' : decodedPath
-  const filePath = path.normalize(path.join(staticDir, requested))
-
-  if (!filePath.startsWith(staticDir)) {
+  const root = path.resolve(staticDir)
+  // Containment is decided on the resolved relative path: a plain `startsWith`
+  // also accepts a sibling directory such as `<root>-backup`.
+  const filePath = path.resolve(root, requested.replace(/^[\\/]+/u, ''))
+  const relative = path.relative(root, filePath)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
     send(res, 403, 'Forbidden', { 'Content-Type': 'text/plain; charset=utf-8' })
     return
   }
 
   const finalPath = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
     ? filePath
-    : path.join(staticDir, 'index.html')
+    : path.join(root, 'index.html')
   const ext = path.extname(finalPath)
   const headers = {
     'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',

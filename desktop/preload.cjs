@@ -4,6 +4,9 @@ const UPDATE_STATUS_CHANNEL = 'desktop:update-status'
 const PET_STATE_CHANNEL = 'desktop:pet-state'
 const PET_VISIBILITY_CHANNEL = 'desktop:pet-visibility'
 const PET_DRAG_CANCEL_CHANNEL = 'desktop:pet-drag-cancel'
+const BROWSER_UPDATED_CHANNEL = 'desktop:browser-updated'
+const TERMINAL_DATA_CHANNEL = 'desktop:terminal-data'
+const TERMINAL_EXIT_CHANNEL = 'desktop:terminal-exit'
 
 contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   isDesktop: true,
@@ -17,6 +20,9 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   }),
   getVersion: () => ipcRenderer.invoke('desktop:get-version'),
   openConfigFile: () => ipcRenderer.invoke('desktop:open-config-file'),
+  fileAction: ({ action, reference, authToken } = {}) => ipcRenderer.invoke('desktop:file-action', {
+    action, reference, authToken,
+  }),
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
   setPetVisible: (visible) => ipcRenderer.invoke('desktop:set-pet-visible', visible === true),
@@ -31,6 +37,50 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   getPetState: () => ipcRenderer.invoke('desktop:get-pet-state'),
   hidePet: () => ipcRenderer.invoke('desktop:hide-pet'),
   showPetMenu: () => ipcRenderer.invoke('desktop:show-pet-menu'),
+  // A real shell in the desktop app. The main process owns the pty; the panel only
+  // sends keystrokes and receives output.
+  terminal: Object.freeze({
+    start: (options) => ipcRenderer.invoke('desktop:terminal-start', options || {}),
+    write: (id, data) => ipcRenderer.invoke('desktop:terminal-write', { id, data: String(data ?? '') }),
+    resize: (id, cols, rows) => ipcRenderer.invoke('desktop:terminal-resize', { id, cols, rows }),
+    kill: (id) => ipcRenderer.invoke('desktop:terminal-kill', { id }),
+    onData(callback) {
+      if (typeof callback !== 'function') return () => {}
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on(TERMINAL_DATA_CHANNEL, listener)
+      return () => ipcRenderer.removeListener(TERMINAL_DATA_CHANNEL, listener)
+    },
+    onExit(callback) {
+      if (typeof callback !== 'function') return () => {}
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on(TERMINAL_EXIT_CHANNEL, listener)
+      return () => ipcRenderer.removeListener(TERMINAL_EXIT_CHANNEL, listener)
+    },
+  }),
+  // Docked browser: the renderer reports where its panel is and asks for a URL;
+  // the main process owns the view and decides whether either request is allowed.
+  browser: Object.freeze({
+    navigate: (url) => ipcRenderer.invoke('desktop:browser-navigate', String(url ?? '')),
+    action: (name) => ipcRenderer.invoke('desktop:browser-action', String(name ?? '')),
+    back: () => ipcRenderer.invoke('desktop:browser-action', 'back'),
+    forward: () => ipcRenderer.invoke('desktop:browser-action', 'forward'),
+    reload: () => ipcRenderer.invoke('desktop:browser-action', 'reload'),
+    stop: () => ipcRenderer.invoke('desktop:browser-action', 'stop'),
+    setBounds: (rect) => ipcRenderer.invoke('desktop:browser-set-bounds', rect || null),
+    state: () => ipcRenderer.invoke('desktop:browser-state'),
+    // Page facts, for the preview panel and the agent verifying through it.
+    capture: () => ipcRenderer.invoke('desktop:preview-capture'),
+    evaluate: (script) => ipcRenderer.invoke('desktop:preview-evaluate', String(script ?? '')),
+    consoleEntries: (options) => ipcRenderer.invoke('desktop:preview-console', options || {}),
+    hide: () => ipcRenderer.invoke('desktop:browser-hide'),
+    destroy: () => ipcRenderer.invoke('desktop:browser-destroy'),
+    onUpdated(callback) {
+      if (typeof callback !== 'function') return () => {}
+      const listener = (_event, state) => callback(state)
+      ipcRenderer.on(BROWSER_UPDATED_CHANNEL, listener)
+      return () => ipcRenderer.removeListener(BROWSER_UPDATED_CHANNEL, listener)
+    },
+  }),
   onPetState(callback) {
     if (typeof callback !== 'function') return () => {}
     const listener = (_event, state) => callback(state)

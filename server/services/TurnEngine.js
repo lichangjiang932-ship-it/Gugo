@@ -3,18 +3,20 @@ import { getBoundTurnToolSpecs, runBoundTurnLoop } from './turnLoopBindingRuntim
 import { prepareBoundInlineSkillsForPrompt } from './inlineSkillPromptBindingRuntime.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
-import { getApprovalMode } from './approvalSettingsStore.js'
+import { getEffectiveApprovalMode, withTurnApprovalMode } from './approvalSettingsStore.js'
 import { recordEvolutionCanaryOutcome, resolveEvolutionCanaryAssignment } from './evolutionCanaryService.js'
 import { createTurnExecutionToolContextRuntime } from './turnExecutionToolContextRuntime.js'
 import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
 import { createTurnCanaryOutcomeRuntime } from './turnCanaryOutcomeRuntime.js'
 import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
+import { scheduleExperienceAbstraction } from './experienceAbstraction.js'
 import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import { resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions } from './toolImplementationRevision.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
 import { getLocalFileAccessStatus, resolveTurnProjectDirectory, withTurnProjectDirectory } from './localFileAccessService.js'
-import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
+import { logWarn, withLogContext } from '../utils/logger.js'
 import { createTurnEventEmitter, isTerminalTurnEventType } from './turnEventEmitter.js'
+import { traceIdForTurn } from './turnTraceSpans.js'
 import { createTurnModelRequestRunner } from './turnModelRequestRuntime.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
 import { createTurnStartRuntime, normalizeTurnModelMode as normalizeModelMode, normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
@@ -57,14 +59,18 @@ export class TurnEngine {
     now = Date.now,
     toolSpecs = getBoundTurnToolSpecs(),
     directoryAuthorizationToolSpecs = toolSpecs,
-    readApprovalMode = getApprovalMode,
+    readApprovalMode = getEffectiveApprovalMode,
+    runWithApprovalMode = withTurnApprovalMode,
     readRuntimePolicyProvenance = getActiveRuntimePolicyProvenance,
     preparePromptContext = missingTurnPromptRuntime,
     prepareInlineSkills = prepareBoundInlineSkillsForPrompt,
+    prepareMemoryQueryVector = null,
+    indexMemoryEmbeddings = null,
     resolveCanaryAssignment = resolveEvolutionCanaryAssignment,
     recordCanaryOutcome = recordEvolutionCanaryOutcome,
     resolveToolSpecs = resolveTurnToolSpecs,
     scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
+    scheduleExperienceAbstraction: scheduleExperienceAbstractionDep = scheduleExperienceAbstraction,
     runMemoryModel = missingTurnModelRuntime,
     getContextWindow = () => undefined,
     readFileAccessStatus = getLocalFileAccessStatus,
@@ -97,7 +103,8 @@ export class TurnEngine {
       readMessages: persistenceDeps.readMessages,
       readPreviousUserMessage: persistenceDeps.readPreviousUserMessage,
       writeMessage: persistenceDeps.writeMessage, idFactory, now, toolSpecs, directoryAuthorizationToolSpecs,
-      readApprovalMode, readRuntimePolicyProvenance, preparePromptContext, prepareInlineSkills,
+      readApprovalMode, runWithApprovalMode, readRuntimePolicyProvenance, preparePromptContext, prepareInlineSkills,
+      prepareMemoryQueryVector, indexMemoryEmbeddings,
       resolveCanaryAssignment, recordCanaryOutcome,
       resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
       getContextWindow, readFileAccessStatus, resolveProjectDirectory, runWithProjectDirectory,
@@ -143,6 +150,9 @@ export class TurnEngine {
     this.startIdleWaiters = new Set()
     this.closing = false
     this.closePromise = null
+    // Optional post-turn work belongs to the engine lifetime, not the turn
+    // checkpoint. Headless shutdown must not leave a detached model request.
+    this.autoMemoryController = new AbortController()
     this.executionToolContextRuntime = createTurnExecutionToolContextRuntime({
       readApprovalMode: (input) => this.deps.readApprovalMode(input),
       readFileAccessStatus: (input) => this.deps.readFileAccessStatus(input),
@@ -194,8 +204,24 @@ export class TurnEngine {
       writeMessage: this.deps.writeMessage,
       commitTurnBoundary: this.deps.commitTurnBoundary,
       dispatchHooks: this.deps.dispatchHooks,
-      scheduleMemoryExtraction: this.deps.scheduleMemoryExtraction,
-      runMemoryModel: this.deps.runMemoryModel,
+      scheduleMemoryExtraction: (input) => {
+        if (this.autoMemoryController.signal.aborted) return
+        return this.deps.scheduleMemoryExtraction({
+          ...input, signal: this.autoMemoryController.signal,
+        })
+      },
+      scheduleExperienceAbstraction: (input) => {
+        if (this.autoMemoryController.signal.aborted) return
+        return scheduleExperienceAbstractionDep({
+          ...input, signal: this.autoMemoryController.signal,
+        })
+      },
+      runMemoryModel: (input) => {
+        this.autoMemoryController.signal.throwIfAborted()
+        return this.deps.runMemoryModel({
+          ...input, signal: this.autoMemoryController.signal,
+        })
+      },
     })
     this.executionRuntime = createTurnExecutionRuntime({
       deps: this.deps,
@@ -230,7 +256,10 @@ export class TurnEngine {
   }
 
   shutdown() {
-    return this.shutdownRuntime()
+    const closing = this.shutdownRuntime()
+    // Publish the shared close barrier before abort listeners can re-enter.
+    this.autoMemoryController.abort()
+    return closing
   }
 
   async getTurn({ userId, sessionId, turnId }) {
@@ -336,10 +365,15 @@ export class TurnEngine {
     if (this.closing) throw new TurnEngineError('TURN_ENGINE_SHUTTING_DOWN', 'turn engine is shutting down', 503)
     // 一轮 turn 的关联上下文：userId/sessionId/turnId/traceId 沿异步链传递，
     // 期间模型代理、工具循环、压缩恢复等结构化日志都能按 turnId 串起来。
+    // traceId 必须与 `gugo trace --export otel` 导出的 span trace id 相同，
+    // 否则日志和 span 各说各话，同一个 turn 出现两个 id，无法跨进程对齐。
     const { userId, sessionId, turnId } = args || {}
     const resolvedTurnId = turnId || this.deps.idFactory()
+    const resolveTraceId = typeof this.deps.traceIdForTurn === 'function'
+      ? this.deps.traceIdForTurn
+      : traceIdForTurn
     return withLogContext(
-      { userId, sessionId, turnId: resolvedTurnId, traceId: newTraceId() },
+      { userId, sessionId, turnId: resolvedTurnId, traceId: resolveTraceId(resolvedTurnId) },
       () => this.#startTurnInner({ ...args, turnId: resolvedTurnId }),
     )
   }
@@ -418,8 +452,16 @@ export class TurnEngine {
     return this.resumeRuntime.resumeTurn(scope)
   }
 
-  async cancelTurn({ userId, sessionId, turnId, authMode = null }) {
-    return this.cancellationRuntime.cancel({ userId, sessionId, turnId, authMode })
+  async cancelTurn({ userId, sessionId, turnId, authMode = null, directoryPausedSequence }) {
+    return this.cancellationRuntime.cancel({
+      userId, sessionId, turnId, authMode,
+      ...(directoryPausedSequence === undefined ? {} : { directoryPausedSequence }),
+    })
+  }
+
+  /** Stop the running turn so the user can continue the same task later. */
+  async pauseTurn({ userId, sessionId, turnId, authMode = null }) {
+    return this.cancellationRuntime.pause({ userId, sessionId, turnId, authMode })
   }
 
   waitForTurn({ userId, sessionId, turnId }) {

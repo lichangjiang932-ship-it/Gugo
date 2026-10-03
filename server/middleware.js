@@ -5,6 +5,7 @@ import { resolveClientId } from './utils/loginGuard.js'
 import { createRateLimiter } from './utils/rateLimiter.js'
 import { toPublicRuntimeConfigHttpError } from './utils/runtimeConfigErrors.js'
 import { z } from 'zod'
+import { isPureLocalModeEnabled } from './utils/outboundNetworkGuard.js'
 
 /* ── CORS ── */
 
@@ -72,18 +73,21 @@ export function securityHeaders(req, res, next) {
   //   · style-src 仍保留 unsafe-inline:React JSX style={{...}} 会落到 DOM style 属性,
   //     CSP3 style-src-attr 兼容性不足,暂不能用 nonce 覆盖这个现实
   //   · connect-src 默认只放 self + DeepSeek;额外模型端点通过 ALLOWED_MODEL_ENDPOINTS 注入
+  //   · connect-src 不放裸 ws:/wss: scheme-source —— 那是「任意主机 WebSocket」。
+  //     实时通道按 globalThis.location 拼 URL(见 turnTransport.js),同源由 'self' 覆盖。
   const extraConnect = (process.env.ALLOWED_MODEL_ENDPOINTS || '')
     .split(',').map((s) => s.trim()).filter(Boolean).join(' ')
+  const pureLocal = isPureLocalModeEnabled()
   res.setHeader(
     'Content-Security-Policy',
     [
       "default-src 'self'",
       `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' blob:`,
       "worker-src 'self' blob:",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
-      "font-src 'self' https://fonts.gstatic.com",
-      "img-src 'self' data: blob: https:",
-      `connect-src 'self' ws: wss: https://api.deepseek.com ${extraConnect}`.trim(),
+      pureLocal ? "style-src 'self' 'unsafe-inline'" : "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
+      pureLocal ? "font-src 'self'" : "font-src 'self' https://fonts.gstatic.com",
+      pureLocal ? "img-src 'self' data: blob:" : "img-src 'self' data: blob: https:",
+      pureLocal ? "connect-src 'self'" : `connect-src 'self' https://api.deepseek.com ${extraConnect}`.trim(),
       "frame-src 'self' blob:",
       "object-src 'none'",
       "base-uri 'self'",

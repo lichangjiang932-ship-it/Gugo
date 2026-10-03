@@ -23,6 +23,7 @@ const TaskRunPanel = lazy(() => import('./pages/TaskRunPanel'))
 const HistoryView = lazy(() => import('./pages/HistoryView'))
 const SettingsView = lazy(() => import('./pages/SettingsView'))
 const MemoryView = lazy(() => import('./pages/MemoryView'))
+const GitWorkbenchView = lazy(() => import('./pages/GitWorkbenchView'))
 const DeskView = lazy(() => import('./pages/DeskView'))
 const AgentList = lazy(() => import('./pages/AgentList'))
 const ChannelsPage = lazy(() => import('./pages/ChannelsPage'))
@@ -88,6 +89,7 @@ function App() {
           <Route path="/history" element={<RequireAuth><HistoryView /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />
           <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />
+          <Route path="/git" element={<RequireAuth><GitWorkbenchView /></RequireAuth>} />
           <Route path="/desk" element={<RequireAuth><DeskView /></RequireAuth>} />
           <Route path="/agents" element={<RequireAuth><AgentList /></RequireAuth>} />
           <Route path="/channels" element={<RequireAuth><ChannelsPage /></RequireAuth>} />

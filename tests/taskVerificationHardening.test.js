@@ -36,6 +36,7 @@ test('verification command parser recognizes supported project checks conservati
     ['./gradlew check', 'check'],
     ['make build', 'build'],
     ['npm test -- --watch=false', 'test'],
+    ['npm test 2>&1', 'test'],
   ])
   for (const [command, kind] of cases) {
     assert.deepEqual(
@@ -382,15 +383,18 @@ test('bounded verification overflow requires a covering successful check to reco
   }
 })
 
-test('verification command parser rejects compound, mutating, and output-producing variants', () => {
+test('verification command parser rejects unknown, mutating, and output-producing variants', () => {
   const commands = [
-    'npm test && npm lint',
+    // A chain is only a verification when every segment is a verification of
+    // its own: an untrusted launcher or a watch-mode check voids the whole chain.
+    'npm test && npx eslint src',
+    'npm run lint && npm run typecheck -- --watch',
     'cd packages/api && npm test && del victim.txt',
     'npm test || del victim.txt',
     'npm test; del victim.txt',
     'npm test | tee report.txt',
     'npm test > report.txt',
-    'npm test 2>&1',
+    'npm test 2>&1 > results.log',
     'npm test & del victim.txt',
     'echo npm test',
     'sh -c "npm test"',

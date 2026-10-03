@@ -5,6 +5,7 @@ import {
   getManagedAttachment,
   validateManagedAttachmentsForTurn,
 } from './managedAttachmentStore.js'
+import { textTokens } from '../../shared/textTokenEstimate.js'
 
 const MAX_EXTRACTED_CHARS = 256 * 1024
 const MAX_EXTRACTION_BYTES = 25 * 1024 * 1024
@@ -344,15 +345,14 @@ function metadataLine(attachment) {
   return `[GUGO_MANAGED_ATTACHMENT id="${attachment.id}" uri="${attachment.uri}" name="${name}" mime="${attachment.mimeType}" size=${attachment.size} sha256="${attachment.sha256}"]`
 }
 
+/**
+ * The same rule the compaction threshold is computed with (shared/textTokenEstimate.js):
+ * this budget decides how much of an attachment's text is inlined, and measuring
+ * it differently from the budget it is spent against would truncate a Chinese
+ * document long before the model needed it.
+ */
 function projectedTokens(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '')
-  let ascii = 0
-  let nonAscii = 0
-  for (const char of text) {
-    if (char.charCodeAt(0) <= 0x7f) ascii += 1
-    else nonAscii += 1
-  }
-  return Math.ceil(ascii / 4) + nonAscii
+  return textTokens(value)
 }
 
 function normalizeAttachmentTokenBudget(value) {

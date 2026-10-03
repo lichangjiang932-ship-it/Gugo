@@ -1,5 +1,6 @@
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { modelAuthoredTurnEvidenceText } from '../../../shared/turnEvidenceText.js'
+import { normalizePublicTurnTimeline } from '../../../shared/publicTurnTimeline.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { DEFAULT_SNAPSHOT_PAGE_SIZE, DEFAULT_SNAPSHOT_REVISION_ATTEMPTS } from './turnTransport.js'
 import { fetchServerSessionSnapshotPages } from './sessionSnapshotFetch.js'
@@ -206,8 +207,10 @@ function turnEvidenceMeta(message) {
   const modelRequestUnknown = state === 'blocked'
     && recovery?.requiresUserVerification === true
     && recovery?.recoveryKind === 'model_request_outcome_unknown'
-  const recoveryToolCallId = sideEffectUnknown
-    ? String(recovery?.toolCallId || '').trim().slice(0, 200)
+  const recoveryToolCallId = sideEffectUnknown && typeof recovery?.toolCallId === 'string'
+    && recovery.toolCallId.length <= 256 && !/\s/u.test(recovery.toolCallId)
+    && !Array.from(recovery.toolCallId).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    ? recovery.toolCallId
     : ''
   const recoveryModelRequestId = modelRequestUnknown
     ? String(recovery?.modelRequestId || '').trim().slice(0, 200)
@@ -258,7 +261,7 @@ function turnEvidenceMeta(message) {
                 : modelRequestUnknown ? 'model_request_outcome_unknown' : null,
               serverRecoveryToolCallId: recoveryToolCallId || null,
               ...(recoveryModelRequestId ? { serverRecoveryModelRequestId: recoveryModelRequestId } : {}),
-              serverRecoveryActionPath: (sideEffectUnknown || modelRequestUnknown)
+              serverRecoveryActionPath: modelRequestUnknown
                 && recovery?.recoveryAction?.kind === 'open_settings'
                 && recovery?.recoveryAction?.path === '/settings?tab=recovery'
                 ? '/settings?tab=recovery'
@@ -330,7 +333,8 @@ function activeTurnRecoveryStub(rawMessages) {
     }
   }
 
-  if (!latestCanonicalUser || assistantTurnIds.has(latestCanonicalUser.turnId)) return null
+  if (!latestCanonicalUser || assistantTurnIds.has(latestCanonicalUser.turnId)
+    || latestCanonicalUser.message.modelContext?.turnRecoverySuppressed === true) return null
   const { message, turnId } = latestCanonicalUser
   return {
     id: `${turnId}:assistant`,
@@ -387,6 +391,10 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const toolCalls = message.role === 'assistant'
         ? toolCallsFromContext({ toolTrace })
         : []
+      const publicTimeline = message.role === 'assistant' && message.modelContext?.turnId
+        ? normalizePublicTurnTimeline(message.modelContext?.publicTimeline, {
+            turnId: message.modelContext?.turnId, canonicalText: message.content,
+          }) : null
       const serverDeliveryArtifactIds = message.role === 'assistant'
         ? optionalContextArtifactIds(message?.modelContext, 'deliveryArtifactIds')
         : undefined
@@ -481,6 +489,7 @@ export function normalizeServerSessionSnapshot(snapshot) {
             streaming: false,
             serverAuthoritative: true,
             toolCalls,
+            ...(publicTimeline ? { publicTimeline } : {}),
             ...(toolTrace.length ? { toolTrace } : {}),
             ...(hasAuthoritativeArtifactCollection || serverArtifacts.length
               ? { serverArtifacts }

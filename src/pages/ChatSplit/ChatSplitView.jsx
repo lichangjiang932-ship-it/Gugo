@@ -1,19 +1,24 @@
-import { Folder, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import AppLayout from '../../components/AppLayout.jsx'
 import DirectoryApprovalModal from '../../components/DirectoryApprovalModal.jsx'
 import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
 import PermissionRequestCard from './chatMessages/PermissionRequestCard.jsx'
 import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
-import DesktopPet from './DesktopPet.jsx'
+import ChatDesktopPetHost from './chatSplitView/ChatDesktopPetHost.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
+import PlanCard from './chatSplitView/PlanCard.jsx'
+import { revealTurnInConversation } from '../../lib/chatMessageSignals.js'
+import ChatSessionHeaderBar from './chatSplitView/ChatSessionHeaderBar.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
+import ChatNoticeDocks from './chatSplitView/ChatNoticeDocks.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
 
 export { ChatRightPanels }
 export default function ChatSplitView({
   activeSession,
   activeSessionId,
+  recoveryOwnerScope,
+  onSideEffectResolved,
   approvalMode,
   attachments,
   contextSystemPrompt,
@@ -22,43 +27,33 @@ export default function ChatSplitView({
   contextWindowAuthoritative,
   desktopPetVisible,
   directoryApproval,
-  editingMessageId,
   input,
   isGenerating,
   messages, messageRouteHash, modelReadiness,
   modelOptions,
-  onAbort,
+  onAbort, onPause,
   onApprovalModeChange,
-  onClearWorkspace,
-  onAuthorizeDirectoryRequest,
+  onClearWorkspace, onAuthorizeDirectoryRequest,
+  onRejectDirectoryRequest,
   onAuthorizeDirectory,
-  onCancelMessageEdit,
-  onCloseDesktopPet,
-  onCloseInlinePanel,
+  onCloseDesktopPet, onCloseInlinePanel,
   onCloseModelPicker,
-  onClosePreview,
-  onCloseWorkbench,
+  onClosePreview, onCloseWorkbench,
   onDirectoryReject,
-  onDismissResume,
-  onEditMessage,
-  onExpandCompaction,
-  onFileChange,
+  onDismissResume, onForkMessage,
+  forkingMessageId,
+  onExpandCompaction, onFileChange,
   onGoalsChange,
-  onInlineContext,
-  onInlineTasks,
-  onKeyDown,
-  onManageMcp,
-  onManageModels,
+  onInlineContext, onInlineTasks, onKeyDown,
+  onManageMcp, onManageModels,
   onModelChange,
   onModelRetry,
   onNavigatePermissions,
-  onOpenArtifact,
-  onOpenInPreview,
+  onOpenArtifact, onOpenInPreview,
   onOpenModelPicker,
   onPermAllow,
   onPermDeny,
   onPreviewMessage,
-  onQuoteSelection,
   onRetryModelFailure,
   onSelectWorkspace,
   onResume,
@@ -69,8 +64,8 @@ export default function ChatSplitView({
   onWorkbenchSend,
   onWorkbenchTabChange,
   onWorkbenchToggle,
-  manualRetryAvailable,
-  resumeAvailable,
+  manualRetryAvailable, resumeAvailable,
+  continueSameTaskAvailable, handleContinueSameTask,
   runtimeSkillIds,
   selectedModel,
   selectedModelProviderId,
@@ -88,6 +83,11 @@ export default function ChatSplitView({
   toolApproval,
   workbenchMessage,
   workbenchOpen,
+  planVisible,
+  onClosePlan, onOpenPlan,
+  sessionChangesReview = null,
+  previewOpen = false,
+  onOpenPreview,
   workbenchTab,
   previewArtifact,
   previewTabs,
@@ -98,10 +98,8 @@ export default function ChatSplitView({
   workspaceBusy,
   workspaceError,
 }) {
-  const latestAssistantMessage = [...messages].reverse()
-    .find((message) => message?.role === 'assistant')
-  const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens
-  const serverEstimatedPromptTokens = latestAssistantMessage?.meta?.serverEstimatedPromptTokens
+  const latestAssistantMessage = [...messages].reverse().find((message) => message?.role === 'assistant')
+  const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens, serverEstimatedPromptTokens = latestAssistantMessage?.meta?.serverEstimatedPromptTokens
   // 优先显示服务端真实 usage；缺失时用服务端最终请求估算，避免压缩后按完整 UI 历史高估。
   const contextUsage = {
     ...estimateClientContextUsage({
@@ -113,44 +111,33 @@ export default function ChatSplitView({
       serverEstimatedPromptTokens,
     }),
     cumulativeTokens: sumSessionModelUsage(messages),
+    modelUsage: latestAssistantMessage?.meta?.modelUsage,
     contextWindowAuthoritative,
   }
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
+  const hasWorkspace = Boolean(selectedWorkspacePath || activeSession?.workspacePath)
 
   return (
-    <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper">
+    <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper" mainAs="main" mainClassName="relative flex min-w-0 flex-1 overflow-hidden" mainProps={{ 'data-chat-main-area': true }}>
       <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
-        <header className="chat-session-header flex h-12 shrink-0 items-center gap-3 px-4 backdrop-blur-sm">
-          <Folder className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
-          <h1
-            className="min-w-0 flex-1 truncate text-[14px] font-semibold tracking-[-0.01em] text-ink"
-            data-testid="chat-session-title"
-            title={activeSession?.title || t('nav.newChat')}
-          >
-            {activeSession?.title || t('nav.newChat')}
-          </h1>
-          <button
-            type="button"
-            onClick={onWorkbenchToggle}
-            className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"
-            title={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
-            aria-label={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
-            aria-controls="right-workbench"
-            aria-expanded={workbenchOpen}
-            data-testid="workbench-toggle"
-          >
-            {workbenchOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
-          </button>
-        </header>
-        <ChatMessages
-          key={activeSessionId || '__draft__'}
+        <ChatSessionHeaderBar
+          activeSession={activeSession} hasWorkspace={hasWorkspace} workspacePath={selectedWorkspacePath || activeSession?.workspacePath || ''}
+          onClosePlan={onClosePlan} onOpenPlan={onOpenPlan}
+          onOpenPreview={onOpenPreview} onWorkbenchToggle={onWorkbenchToggle}
+          planVisible={planVisible} previewOpen={previewOpen}
+          sessionChangesReview={sessionChangesReview} t={t} workbenchOpen={workbenchOpen}
+        />
+        <ChatMessages key={JSON.stringify([recoveryOwnerScope, activeSessionId || '__draft__'])}
+          sessionId={activeSessionId} recoveryOwnerScope={recoveryOwnerScope}
+          workspacePath={selectedWorkspacePath || activeSession?.workspacePath || ''}
+          onSideEffectResolved={onSideEffectResolved}
           messages={messages} routeHash={messageRouteHash}
-          workbenchMessage={workbenchMessage}
-          isGenerating={isGenerating}
-          onEditMessage={onEditMessage}
+          workbenchMessage={workbenchMessage} isGenerating={isGenerating}
+          onForkMessage={onForkMessage}
+          forkingMessageId={forkingMessageId}
           onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
+          onRejectDirectoryRequest={onRejectDirectoryRequest}
           onManageModels={onManageModels}
-          onQuoteSelection={onQuoteSelection}
           onRetryModelFailure={onRetryModelFailure}
           onPromptSelect={setInput}
           onOpenArtifact={onOpenArtifact}
@@ -169,13 +156,12 @@ export default function ChatSplitView({
             toolSpecs: contextToolSpecs,
             systemPrompt: contextSystemPrompt,
             approvalMode,
-            onOpenTasks: onInlineTasks,
-            onOpenContext: onInlineContext,
+            onOpenTasks: onInlineTasks, onOpenContext: onInlineContext,
           }}
           todos={activeSession?.todos || []}
+          sessionId={activeSessionId || ''}
           onGoalsChange={onGoalsChange}
-          onSubmitFeedback={onSubmitFeedback}
-          onManageMcp={onManageMcp}
+          onSubmitFeedback={onSubmitFeedback} onManageMcp={onManageMcp}
         />
         {directoryApproval.open && (
           <DirectoryApprovalModal
@@ -190,7 +176,7 @@ export default function ChatSplitView({
         )}
         {(state.permRequest || toolApproval.open) && (
           <div
-            className="mx-auto flex w-full min-w-0 max-w-[min(780px,calc(100vw-320px))] flex-col gap-2 px-4 pb-2"
+            className="chat-notice-dock mx-auto flex w-full min-w-0 max-w-[780px] flex-col gap-2 px-4 pb-2 sm:px-6"
             data-testid="chat-approval-dock"
           >
             <PermissionRequestCard
@@ -208,25 +194,18 @@ export default function ChatSplitView({
             />
           </div>
         )}
-        {resumeAvailable && !isGenerating && (
-          <div className="mx-auto w-full min-w-0 max-w-[min(780px,calc(100vw-320px))] px-4 pb-1.5">
-            <div className="flex items-center gap-2 rounded-md border border-ink/10 border-l-2 border-l-warning/55 bg-paper-2/45 px-3 py-2 text-xs">
-              <span className="flex-1 text-ink-soft">{t(manualRetryAvailable
-                ? 'toast.chatTaskRetryHint'
-                : 'toast.chatResumeHint')}</span>
-              <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-accent text-accent-contrast">
-                {t(manualRetryAvailable ? 'toast.chatTaskRetryButton' : 'toast.chatResumeButton')}
-              </button>
-              <button type="button" onClick={onDismissResume} className="h-7 px-2 text-ink-fade hover:text-ink">
-                {t('toast.chatResumeDismiss')}
-              </button>
-            </div>
-          </div>
-        )}
-
+        <ChatNoticeDocks
+          continueSameTaskAvailable={continueSameTaskAvailable}
+          handleContinueSameTask={handleContinueSameTask}
+          isGenerating={isGenerating}
+          manualRetryAvailable={manualRetryAvailable}
+          onDismissResume={onDismissResume}
+          onResume={onResume}
+          resumeAvailable={resumeAvailable}
+          t={t}
+        />
         <ChatComposer
           input={input}
-          editingMessageId={editingMessageId}
           setInput={setInput}
           onSend={onSend}
           attachments={attachments}
@@ -239,8 +218,7 @@ export default function ChatSplitView({
           selectedModel={selectedModel}
           selectedModelProviderId={selectedModelProviderId}
           isGenerating={isGenerating}
-          onAbort={onAbort}
-          onCancelMessageEdit={onCancelMessageEdit}
+          onAbort={onAbort} onPause={onPause}
           onFileChange={onFileChange}
           onToggleContext={toggleContextPanel}
           onOpenModelPicker={onOpenModelPicker}
@@ -266,7 +244,10 @@ export default function ChatSplitView({
       </div>
 
       <ChatRightPanels
+        onInsertText={(text) => setInput((current) => (current ? `${current} ${text}` : text))}
         workbenchOpen={workbenchOpen}
+        sessionId={activeSessionId}
+        todos={activeSession?.todos || []}
         messages={messages}
         attachments={attachments}
         workbenchTab={workbenchTab}
@@ -283,17 +264,23 @@ export default function ChatSplitView({
         onClosePreviewTab={onClosePreviewTab}
         onClosePreview={onClosePreview}
         onPreviewMessage={onPreviewMessage}
+        selectedWorkspacePath={selectedWorkspacePath}
       />
 
-      {desktopPetVisible && !window.gugoDesktop?.isDesktop && (
-        <DesktopPet
-          onClose={onCloseDesktopPet}
-          isGenerating={isGenerating}
-          messages={messages}
-          tasks={tasks}
-          toolApproval={toolApproval}
+      {/* The plan card belongs to the session, not to the tool panel, so it is
+          drawn over the main area and stays put whether or not the panel is open. */}
+      {planVisible && (
+        <PlanCard
+          onClose={onClosePlan}
+          onRevealTurn={revealTurnInConversation}
+          sessionId={activeSessionId}
+          t={t}
+          todos={activeSession?.todos || []}
         />
       )}
+
+      <ChatDesktopPetHost isGenerating={isGenerating} messages={messages} onClose={onCloseDesktopPet}
+        tasks={tasks} toolApproval={toolApproval} visible={desktopPetVisible} />
     </AppLayout>
   )
 }

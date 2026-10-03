@@ -108,13 +108,54 @@ test('missing dotenv warning points to local BYOK settings and treats env as dep
 
     assert.equal(result.error, undefined, result.error?.message)
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-    assert.match(result.stderr, /设置 → 模型/)
-    assert.match(result.stderr, /本地 BYOK Provider/)
-    assert.match(result.stderr, /MODEL_\* 环境变量仅用于部署默认配置/)
-    assert.doesNotMatch(result.stderr, /只从系统环境变量读取/)
+    assert.match(result.stderr, /Settings > Models/)
+    assert.match(result.stderr, /local BYOK provider/)
+    assert.match(result.stderr, /MODEL_\* environment variables are deployment defaults/)
+    assert.doesNotMatch(result.stderr, /[\u3400-\u9fff]/u)
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true })
   }
+})
+
+test('quiet runtime inspection still resolves configured storage and does not consume the startup warning', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-quiet-env-'))
+  const childEnv = { ...process.env }
+  delete childEnv.MODEL_BASE_URL
+  delete childEnv.MODEL_PROVIDERS
+  try {
+    fs.mkdirSync(path.join(cwd, '.gugo'))
+    fs.writeFileSync(path.join(cwd, '.gugo', 'runtime.json'), JSON.stringify({ APP_DATA_DIR: './configured-data', AUTH_MODE: 'multi_user' }))
+    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+      import assert from 'node:assert/strict';
+      const { resolveRuntimeStartupEnvironment, getRuntimeEnv, readRuntimeEnvFile } = await import(${JSON.stringify(runtimeEnvModuleUrl)});
+      const warnings = [];
+      console.warn = (value) => warnings.push(value);
+      const runtime = resolveRuntimeStartupEnvironment({ cwd: process.cwd(), env: {}, warnOnMissingDotEnv: false });
+      const ordinary = getRuntimeEnv({}, { cwd: process.cwd(), warnOnMissingDotEnv: false });
+      assert.equal(runtime.AUTH_MODE, 'multi_user');
+      assert.equal(ordinary.AUTH_MODE, 'multi_user');
+      assert.equal(warnings.length, 0);
+      readRuntimeEnvFile(process.cwd());
+      readRuntimeEnvFile(process.cwd());
+      assert.equal(warnings.length, 1);
+      process.stdout.write(JSON.stringify(runtime));
+    `], { cwd, env: childEnv, encoding: 'utf8', timeout: 10_000, windowsHide: true })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stderr, '')
+    assert.equal(JSON.parse(result.stdout).APP_DB_PATH, path.join(cwd, 'configured-data', 'app.db'))
+    assert.equal(fs.existsSync(path.join(cwd, 'configured-data')), false)
+  } finally { fs.rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test('quiet config resolution never hides malformed runtime configuration', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-quiet-invalid-env-'))
+  try {
+    fs.mkdirSync(path.join(cwd, '.gugo'))
+    fs.writeFileSync(path.join(cwd, '.gugo', 'runtime.json'), '{invalid')
+    assert.throws(() => resolveRuntimeStartupEnvironment({ cwd, env: {}, warnOnMissingDotEnv: false }),
+      { code: 'RUNTIME_CONFIG_FILE_INVALID' })
+    assert.equal(fs.existsSync(path.join(cwd, 'server-data')), false)
+  } finally { fs.rmSync(cwd, { recursive: true, force: true }) }
 })
 
 test('runtime config snapshot reads one bounded byte sequence and reports typed failures', () => {

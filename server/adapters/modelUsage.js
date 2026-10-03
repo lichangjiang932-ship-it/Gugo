@@ -1,4 +1,4 @@
-import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { normalizeCacheReadUsage, normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { isLocalEndpoint } from '../utils/endpointProfile.js'
 
 const INTERNAL_USAGE_OWNER = Symbol('internal-model-usage')
@@ -9,15 +9,25 @@ function usageOwnerKey(ownerId) {
   return normalized || INTERNAL_USAGE_OWNER
 }
 
-function emptyUsageTotals() {
+function emptyUsageCounters() {
   return {
     requests: 0,
     promptTokens: 0,
     completionTokens: 0,
     cacheHitTokens: 0,
     cacheMissTokens: 0,
-    byModel: new Map(),
+    cacheUsageReportedRequests: 0,
+    cacheUsageUnknownRequests: 0,
+    cacheReportedPromptTokens: 0,
+    cacheCreationTokens: 0,
+    cacheCreationReportedRequests: 0,
+    uncachedInputTokens: 0,
+    uncachedInputReportedRequests: 0,
   }
+}
+
+function emptyUsageTotals() {
+  return { ...emptyUsageCounters(), byModel: new Map() }
 }
 
 function usageTotalsFor(ownerId, { create = false } = {}) {
@@ -30,25 +40,35 @@ function usageTotalsFor(ownerId, { create = false } = {}) {
   return totals || emptyUsageTotals()
 }
 
-export function recordUsage(modelName, usage, { ownerId } = {}) {
-  if (!usage) return
-  const usageTotals = usageTotalsFor(ownerId, { create: true })
-  usageTotals.requests += 1
-  usageTotals.promptTokens += usage.promptTokens || 0
-  usageTotals.completionTokens += usage.completionTokens || 0
-  usageTotals.cacheHitTokens += usage.cacheHitTokens || 0
-  usageTotals.cacheMissTokens += usage.cacheMissTokens || 0
-  const key = String(modelName || 'unknown')
-  const model = usageTotals.byModel.get(key) || {
-    requests: 0,
-    promptTokens: 0,
-    cacheHitTokens: 0,
-    cacheMissTokens: 0,
+function accumulateUsage(totals, usage) {
+  totals.requests += 1
+  totals.promptTokens += usage.promptTokens
+  totals.completionTokens += usage.completionTokens || 0
+  const measured = normalizeCacheReadUsage(usage)
+  if (measured.cacheHitTokens !== undefined) {
+    totals.cacheUsageReportedRequests += 1
+    totals.cacheReportedPromptTokens += usage.promptTokens
+    totals.cacheHitTokens += measured.cacheHitTokens
+    totals.cacheMissTokens += measured.cacheMissTokens
+  } else totals.cacheUsageUnknownRequests += 1
+  for (const [field, samples] of [
+    ['cacheCreationTokens', 'cacheCreationReportedRequests'],
+    ['uncachedInputTokens', 'uncachedInputReportedRequests'],
+  ]) {
+    if (usage[field] === undefined || usage[field] > usage.promptTokens) continue
+    totals[field] += usage[field]
+    totals[samples] += 1
   }
-  model.requests += 1
-  model.promptTokens += usage.promptTokens || 0
-  model.cacheHitTokens += usage.cacheHitTokens || 0
-  model.cacheMissTokens += usage.cacheMissTokens || 0
+}
+
+export function recordUsage(modelName, usage, { ownerId } = {}) {
+  const normalized = normalizeModelUsage(usage)
+  if (!normalized) return
+  const usageTotals = usageTotalsFor(ownerId, { create: true })
+  accumulateUsage(usageTotals, normalized)
+  const key = String(modelName || 'unknown')
+  const model = usageTotals.byModel.get(key) || emptyUsageCounters()
+  accumulateUsage(model, normalized)
   usageTotals.byModel.set(key, model)
 }
 
@@ -58,20 +78,20 @@ function hitRate(hit, total) {
 
 export function getUsageStats({ ownerId } = {}) {
   const usageTotals = usageTotalsFor(ownerId)
-  const cacheable = usageTotals.cacheHitTokens + usageTotals.cacheMissTokens
+  const rates = (totals) => ({
+    cacheHitRatePercent: hitRate(totals.cacheHitTokens, totals.cacheReportedPromptTokens),
+    cacheUsageCoveragePercent: hitRate(totals.cacheUsageReportedRequests, totals.requests),
+  })
+  const { byModel, ...totals } = usageTotals
   return {
-    requests: usageTotals.requests,
-    promptTokens: usageTotals.promptTokens,
-    completionTokens: usageTotals.completionTokens,
-    cacheHitTokens: usageTotals.cacheHitTokens,
-    cacheMissTokens: usageTotals.cacheMissTokens,
-    cacheHitRatePercent: hitRate(usageTotals.cacheHitTokens, cacheable),
+    ...totals,
+    ...rates(totals),
     byModel: Object.fromEntries(
-      [...usageTotals.byModel.entries()].map(([name, model]) => [
+      [...byModel.entries()].map(([name, model]) => [
         name,
         {
           ...model,
-          cacheHitRatePercent: hitRate(model.cacheHitTokens, model.cacheHitTokens + model.cacheMissTokens),
+          ...rates(model),
         },
       ]),
     ),

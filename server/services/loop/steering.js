@@ -82,18 +82,19 @@ export function createSteeringController({
     leaseId = null,
     incomplete = false,
     reason = null,
+    assistantMessage = null,
   } = {}) => {
     if (!completionGate) return { closed: true, prepared: false }
     try {
       if (leaseId) {
-        if (text && appendCandidate) appendCandidate(text)
+        if (text && appendCandidate) appendCandidate(text, assistantMessage)
         if (persistState) await persistState()
         await acknowledgeDurable(leaseId)
       }
       const closed = await completionGateAllowsFinish({ text, incomplete, reason })
       if (!closed) {
         if (!leaseId) {
-          if (text && appendCandidate) appendCandidate(text)
+          if (text && appendCandidate) appendCandidate(text, assistantMessage)
           if (persistState) await persistState()
         }
         if (completionDeferred) completionDeferred()

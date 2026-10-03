@@ -66,6 +66,50 @@ test('runToolsLoop executes an all-read batch concurrently and preserves result 
   assert.deepEqual(orderedResults, ['first.txt', 'second.txt', 'third.txt'])
 })
 
+test('parallel execution failure drains reads, records completed siblings and never starts queued calls', async () => {
+  const started = []
+  const completed = []
+  const failure = Object.assign(new Error('read cancelled'), { name: 'AbortError' })
+  let release
+  const pending = new Promise((resolve) => { release = resolve })
+  let announceFailure
+  const failed = new Promise((resolve) => { announceFailure = resolve })
+  let settled = false
+  const checkpoints = []
+  const run = runToolsLoop({
+    job: { id: 'job-read-failure-drain', userId: TEST_USER, title: 'read failure drain' },
+    step: { id: 'step-read-failure-drain', kind: 'execute' },
+    messages: [{ role: 'user', content: 'Read five files.' }],
+    saveCheckpoint: async (state) => { checkpoints.push(structuredClone(state)); return true },
+    runModel: async () => ({ content: '', toolCalls: Array.from({ length: 5 }, (_, index) => (
+      toolCall(`drain-${index}`, 'read_file', { path: `drain-${index}.txt` })
+    )) }),
+    executeTool: async ({ args }) => {
+      started.push(args.path)
+      if (args.path === 'drain-0.txt') {
+        announceFailure()
+        throw failure
+      }
+      await pending
+      completed.push(args.path)
+      return { ok: true, path: args.path, content: args.path }
+    },
+  })
+  const rejected = assert.rejects(run, (error) => error === failure)
+  run.then(() => { settled = true }, () => { settled = true })
+  await failed
+  await new Promise((resolve) => setImmediate(resolve))
+  const settledBeforeDrain = settled
+  release()
+  await rejected
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settledBeforeDrain, false)
+  assert.deepEqual(started, ['drain-0.txt', 'drain-1.txt', 'drain-2.txt'])
+  assert.deepEqual(completed.sort(), ['drain-1.txt', 'drain-2.txt'])
+  const saved = checkpoints.at(-1).toolCalls.filter((call) => call.checkpointStatus === 'completed')
+  assert.deepEqual(saved.map((call) => call.id), ['drain-1', 'drain-2'])
+})
+
 test('runToolsLoop caps a large parallel read batch at three active tools', async () => {
   let modelTurns = 0
   let active = 0

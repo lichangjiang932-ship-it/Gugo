@@ -7,6 +7,7 @@ import {
   sideEffectResumeDescriptor,
   sideEffectRecoveryRecordForClient,
 } from '../services/sideEffectRecoveryService.js'
+import { getSideEffectTurnInteraction, resolveSideEffectTurnInteraction } from '../services/sideEffectTurnRecoveryService.js'
 
 const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -29,6 +30,20 @@ export async function handleSideEffectRequest(req, res) {
 
   const url = new URL(req.url, 'http://localhost')
   try {
+    if (url.pathname === '/api/side-effects/unknown/turn') {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, {
+          error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
+        })
+      }
+      const interaction = getSideEffectTurnInteraction({
+        userId,
+        sessionId: url.searchParams.get('sessionId'),
+        turnId: url.searchParams.get('turnId'),
+        toolCallId: url.searchParams.get('toolCallId'),
+      })
+      return sendJson(res, 200, interaction)
+    }
     if (url.pathname === '/api/side-effects/unknown') {
       if (req.method !== 'GET') {
         return sendJson(res, 405, {
@@ -55,6 +70,20 @@ export async function handleSideEffectRequest(req, res) {
         cursor: url.searchParams.get('cursor'),
       })
       return sendJson(res, 200, page)
+    }
+
+    if (url.pathname === '/api/side-effects/resolve/turn') {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' } })
+      }
+      const body = await readJson(req, { maxBytes: SIDE_EFFECT_RECOVERY_BODY_LIMIT })
+      const resolved = resolveSideEffectTurnInteraction({
+        userId, sessionId: body?.sessionId, turnId: body?.turnId, toolCallId: body?.toolCallId,
+        boundary: body?.boundary, argsDigest: body?.argsDigest,
+        verificationConfirmed: body?.verificationConfirmed, confirmToolCallId: body?.confirmToolCallId,
+        resolution: body?.resolution, note: body?.note,
+      })
+      return sendJson(res, 200, { ok: true, ...resolved })
     }
 
     if (url.pathname === '/api/side-effects/resolve') {

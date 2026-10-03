@@ -1,3 +1,4 @@
+// @ts-check
 import { z } from 'zod'
 import {
   TURN_EVENT_TRANSPORT_VERSION,
@@ -131,18 +132,25 @@ export const TURN_WEBSOCKET_SERVER_FRAME_SCHEMA = z.discriminatedUnion('type', [
   }).strict(),
 ])
 
-function versionMismatch(value) {
-  return !value || typeof value !== 'object' || value.v !== TURN_WEBSOCKET_PROTOCOL_VERSION
+/** @param {unknown} value */
+function receivedFrameVersion(value) {
+  return value !== null && typeof value === 'object' && 'v' in value ? value.v : undefined
 }
 
+/**
+ * @param {unknown} value
+ * @param {{ error: { issues: readonly { message: string }[] } }} result
+ * @returns {import('../types/turn-protocol.js').FrameValidationFailure}
+ */
 function validationFailure(value, result) {
-  if (versionMismatch(value)) {
+  const receivedVersion = receivedFrameVersion(value)
+  if (receivedVersion !== TURN_WEBSOCKET_PROTOCOL_VERSION) {
     return {
       ok: false,
       code: 'VERSION_MISMATCH',
       message: `Realtime protocol v${TURN_WEBSOCKET_PROTOCOL_VERSION} is required. Refresh this page and try again.`,
       expectedVersion: TURN_WEBSOCKET_PROTOCOL_VERSION,
-      receivedVersion: Number.isInteger(value?.v) ? value.v : null,
+      receivedVersion: typeof receivedVersion === 'number' && Number.isInteger(receivedVersion) ? receivedVersion : null,
     }
   }
   return {
@@ -153,16 +161,40 @@ function validationFailure(value, result) {
   }
 }
 
+/**
+ * @param {unknown} value
+ * @returns {import('../types/turn-protocol.js').FrameValidationResult<import('../types/turn-protocol.js').TurnWebSocketClientFrame>}
+ */
 export function validateTurnWebSocketClientFrame(value) {
   const result = TURN_WEBSOCKET_CLIENT_FRAME_SCHEMA.safeParse(value)
   return result.success ? { ok: true, value: result.data } : validationFailure(value, result)
 }
 
+/**
+ * @param {unknown} value
+ * @returns {import('../types/turn-protocol.js').FrameValidationResult<import('../types/turn-protocol.js').TurnWebSocketServerFrame>}
+ */
 export function validateTurnWebSocketServerFrame(value) {
   const result = TURN_WEBSOCKET_SERVER_FRAME_SCHEMA.safeParse(value)
   return result.success ? { ok: true, value: result.data } : validationFailure(value, result)
 }
 
+/**
+ * @overload
+ * @param {'ready'} type
+ * @returns {import('../types/turn-protocol.js').TurnWebSocketFrameOf<'ready'>}
+ */
+/**
+ * @template {import('../types/turn-protocol.js').TurnWebSocketFrameType} Type
+ * @overload
+ * @param {Type} type
+ * @param {import('../types/turn-protocol.js').TurnWebSocketFramePayload<Type>} payload
+ * @returns {import('../types/turn-protocol.js').TurnWebSocketFrameOf<Type>}
+ */
+/**
+ * @param {import('../types/turn-protocol.js').TurnWebSocketFrameType} type
+ * @param {Record<string, unknown>} [payload]
+ */
 export function createTurnWebSocketFrame(type, payload = {}) {
   return { ...payload, v: TURN_WEBSOCKET_PROTOCOL_VERSION, type }
 }

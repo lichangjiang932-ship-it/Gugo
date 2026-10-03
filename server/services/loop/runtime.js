@@ -4,6 +4,7 @@ import {
   inspectToolLoopModelResponse,
 } from '../../core/toolLoopAdapter.js'
 import { isLoopPauseResult } from '../../utils/agenticTools.js'
+import { goalToolContextForTurn } from '../goalPlanPrompt.js'
 import { requiresPerCallApproval } from '../../utils/approvalPolicy.js'
 import {
   filterCurrentDynamicToolSpecs,
@@ -18,11 +19,16 @@ import { writeToolAudit } from '../../utils/audit.js'
 import { isContextLengthError } from '../../adapters/modelProxy.js'
 import { callModelWithContextRecovery } from '../contextCompactionRuntime.js'
 import { ensureSafetySystemMessages } from '../promptCompiler.js'
+import {
+  hasRuntimeSkillActivationBlock,
+  MAX_DYNAMIC_SKILLS_PER_TURN,
+  prepareRuntimeSkillActivation,
+} from '../runtimeSkillActivation.js'
 import { allowedArtifactTools, findAdjacentDeliveredArtifacts, findContinuableArtifactTargets, findExplicitlyReferencedDeliveredArtifacts, isArtifactRevisionRequest, isExplicitCodeSnippetRequest, isFileArtifactTool, parseSkillIdFromPrompt, resolveArtifactDeliveryTargets, resolveArtifactRevisionMode } from '../artifactIntent.js'
 import { restoreDirectoryAuthorizationToolSpecs } from '../turnToolSpecs.js'
 import { createSubagentApprovalContext, rememberApprovedSubagentCall } from '../subagentApprovalContext.js'
 import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessageBundle, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, stripEphemeralToolMediaMessages, validateToolCall } from '../../utils/toolCallHarness.js'
-import { extractTextToolCalls } from '../../utils/textToolCalls.js'
+import { extractTextToolCalls, salvageBareJsonToolCall } from '../../utils/textToolCalls.js'
 import { replaceRuntimeCapabilityBlock } from '../runtimeCapabilities.js'
 import { hasMutationExecutionIntent, isExecutionCapabilityChallenge, isTextDeliverableRequest, shouldRequireExecution } from '../../utils/executionIntent.js'
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../../utils/toolProgress.js'
@@ -42,7 +48,7 @@ import { createArtifactReplacementGuard, createDisabledToolGuard, createExplicit
 import { FALSE_SUCCESS_STATUS, INCOMPLETE_STATUS, STATUS_INQUIRY_PROMPT, isExplicitLocalMutationRetryRequest, isForcedToolChoiceCompatibilityError, isLocalMutationContinuationRequest, latestPriorTurnOutcome, mergeCompactionRecovery, normalizeArtifactIdList, normalizeCompactionRecovery, recoverPriorLocalMutationTargets, restoreNamedToolSpecs, shouldRepairLegacyWorkspaceMutationCheckpoint, sameArtifactIdList, sanitizeIncompleteTerminalText, sourceHandoffViolation, synchronizeCheckpointToolCallMessages } from './runtimeState.js'
 import { hasEffectiveReadOnlyBoundary, resolveChatCapabilityMode, shouldInheritExecutionIntent } from '../chatToolSelection.js'
 import { createRepeatCallGuard } from '../../utils/repeatCallGuard.js'
-import { COMMAND_EXECUTION_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, MAX_ITERS, JOB_READ_CONCURRENCY, ARTIFACT_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, EXECUTION_EVIDENCE_GUARD_MARKER, DIRECTORY_RESUME_GUARD_MARKER, AVAILABLE_TOOL_CAPABILITIES_MARKER, POST_MUTATION_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PDF_LAYOUT_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_VERIFICATION_OK, MAX_EXECUTION_EVIDENCE_RETRIES, MAX_DIRECTORY_RESUME_RETRIES, MAX_MUTATION_VERIFICATION_RETRIES, MAX_PDF_LAYOUT_VERIFICATION_RETRIES, VERIFIED_DIRECTORY_RESOLUTION, DIRECTORY_AUTHORIZATION_WAIT_CLAIM, EXPLICIT_LOCAL_DIRECTORY_CONTEXT, MANAGED_ATTACHMENT_MARKER, PROJECT_SCOPE_TARGET, VERIFICATION_TOOLS, SCHEDULED_WAIT_INTENT, FILE_WRITE_TOOL_NAMES, FAILURE_RECOVERY_MARKER, FAILURE_RECOVERY_THRESHOLD, EXECUTION_CONVERGENCE_MARKER, REPEAT_CALL_GUARD_MARKER, EXECUTION_CONVERGENCE_ROUND_THRESHOLD, MAX_INSTALL_ATTEMPT_SIGNATURES, toolNameFromSpec, isCommandExecutionTool, hasCommandExecutionTool, commandExecutionToolLabel, contradictedCapabilityClarification, isSuccessfulToolResult, requestedPdfSectionLabel, shouldRequirePdfLayoutVerification, buildPdfLayoutExecutionContract, isSuccessfulPdfLayoutVerification, restoreFailureRecovery, serializeFailureRecovery, installAttemptSignature, isProbeLikeCall, isExplorationOnlyCall, restoreExecutionConvergence, serializeExecutionConvergence, isProductiveExecutionOutcome, shouldReflectOnFailure, progressChangesFor, isLocalMutationCall, isVerificationCall, isMutationExecutionCall, normalizeMutationTarget, targetsMatch, shellTargetWithCwd, looksLikeDeletionCommand, staticDeletionTargets, extractMutationTargets, clearArtifactValidatedMutationTargets, clearVerifiedDeletionTargets, clearVerifiedMutationTargets, persistLocalToolArtifactsAsync, DIRECTORY_REVIEW_GUARD_MARKER, LIVE_STEERING_GUARD_MARKER, DIRECTORY_REVIEW_INTENT, buildRepresentativeReadCalls, hasSuccessfulLocalPreflightRead, successfulReadFileInMessages, requestedArtifactOutputDirective, executeServerTool, supportsIdempotentResume, SERVER_TOOL_SPECS, selectJobToolSpecs, buildJobToolIdempotencyKey, scopeTextToolCallIds } from '../toolLoopHeuristics.js'
+import { COMMAND_EXECUTION_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, MAX_ITERS, JOB_READ_CONCURRENCY, ARTIFACT_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, EXECUTION_EVIDENCE_GUARD_MARKER, DIRECTORY_RESUME_GUARD_MARKER, AVAILABLE_TOOL_CAPABILITIES_MARKER, POST_MUTATION_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PDF_LAYOUT_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_VERIFICATION_OK, MAX_EXECUTION_EVIDENCE_RETRIES, MAX_DIRECTORY_RESUME_RETRIES, MAX_MUTATION_VERIFICATION_RETRIES, MAX_PDF_LAYOUT_VERIFICATION_RETRIES, DIRECTORY_AUTHORIZATION_WAIT_CLAIM, DIRECTORY_AUTHORIZATION_REFRESH_MARKER, EXPLICIT_LOCAL_DIRECTORY_CONTEXT, MANAGED_ATTACHMENT_MARKER, MANAGED_ATTACHMENT_EXECUTION_MARKER, PROJECT_SCOPE_TARGET, VERIFICATION_TOOLS, SCHEDULED_WAIT_INTENT, FILE_WRITE_TOOL_NAMES, FAILURE_RECOVERY_MARKER, FAILURE_RECOVERY_THRESHOLD, EXECUTION_CONVERGENCE_MARKER, REPEAT_CALL_GUARD_MARKER, TOOL_FAILURE_STRATEGY_MARKER, EXECUTION_CONVERGENCE_ROUND_THRESHOLD, MAX_INSTALL_ATTEMPT_SIGNATURES, MAX_DELIVERABLE_SELECTION_RETRIES, MAX_SOURCE_HANDOFF_RETRIES, MAX_LOCAL_HTML_DELIVERY_RETRIES, ADJACENT_ARTIFACT_REVISION_MARKER, ARTIFACT_SOURCE_DELIVERY_POLICY_MARKER, DIRECT_EXECUTION_REQUIRED_MARKER, toolNameFromSpec, isCommandExecutionTool, hasCommandExecutionTool, commandExecutionToolLabel, contradictedCapabilityClarification, isSuccessfulToolResult, requestedPdfSectionLabel, shouldRequirePdfLayoutVerification, buildPdfLayoutExecutionContract, isSuccessfulPdfLayoutVerification, restoreFailureRecovery, serializeFailureRecovery, installAttemptSignature, isProbeLikeCall, isExplorationOnlyCall, restoreExecutionConvergence, serializeExecutionConvergence, isProductiveExecutionOutcome, shouldReflectOnFailure, progressChangesFor, isLocalMutationCall, isVerificationCall, isMutationExecutionCall, normalizeMutationTarget, targetsMatch, shellTargetWithCwd, looksLikeDeletionCommand, staticDeletionTargets, extractMutationTargets, clearArtifactValidatedMutationTargets, clearVerifiedDeletionTargets, clearVerifiedMutationTargets, persistLocalToolArtifactsAsync, DIRECTORY_REVIEW_GUARD_MARKER, LIVE_STEERING_GUARD_MARKER, DIRECTORY_REVIEW_INTENT, buildRepresentativeReadCalls, hasSuccessfulLocalPreflightRead, successfulReadFileInMessages, requestedArtifactOutputDirective, executeServerTool, supportsIdempotentResume, SERVER_TOOL_SPECS, selectJobToolSpecs, buildJobToolIdempotencyKey, scopeTextToolCallIds } from '../toolLoopHeuristics.js'
 import { initializeInputs } from './runtime-initializeInputs.js'
 import { initializeArtifacts } from './runtime-initializeArtifacts.js'
 import { initializeConversation } from './runtime-initializeConversation.js'
@@ -98,11 +104,8 @@ import {
 
 const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRED]'
 const DELIVERABLE_SELECTION_FALLBACK_MARKER = '[FINAL DELIVERABLE SAFE FALLBACK]'
-const MAX_DELIVERABLE_SELECTION_RETRIES = 2
 const SOURCE_HANDOFF_GUARD_MARKER = '[SOURCE HANDOFF BLOCKED]'
-const MAX_SOURCE_HANDOFF_RETRIES = 1
 const LOCAL_HTML_DELIVERY_GUARD_MARKER = '[LOCAL HTML DELIVERY VALIDATION REQUIRED]'
-const MAX_LOCAL_HTML_DELIVERY_RETRIES = 4
 const ARTIFACT_RECOVERY_DIAGNOSIS_MARKER = '[ARTIFACT RECOVERY DIAGNOSIS]'
 const ARTIFACT_RECOVERY_FORCE_MARKER = '[ARTIFACT RECOVERY GENERATOR REQUIRED]'
 const ARTIFACT_RECOVERY_PHASE_DIAGNOSE = 'diagnose'
@@ -141,6 +144,8 @@ const PATCH_WRITE_TOOL_NAMES = new Set([
   'apply_patch',
 ])
 const CAPABILITY_CONTROL_TOOL_NAMES = new Set([
+  'load_skill',
+  'search_tools',
   'Agent',
   'manage_todos',
   'reflect',
@@ -152,84 +157,35 @@ const CAPABILITY_CONTROL_TOOL_NAMES = new Set([
 const MAX_CAPABILITY_TOOL_NAMES = 256
 
 const runtimeDependencies = {
+  ADJACENT_ARTIFACT_REVISION_MARKER,
+  allowedArtifactTools,
+  appendFinalAnswerToolEvidence,
   ARTIFACT_DELIVERY_GUARD_MARKER,
   ARTIFACT_RECOVERY_DIAGNOSIS_MARKER,
   ARTIFACT_RECOVERY_FORCE_MARKER,
   ARTIFACT_RECOVERY_PHASE_DIAGNOSE,
   ARTIFACT_RECOVERY_PHASE_FORCE,
-  AVAILABLE_TOOL_CAPABILITIES_MARKER,
-  CAPABILITY_CONTROL_TOOL_NAMES,
-  CHECKPOINT_FLUSH_ERROR_CODE,
-  COMMAND_EXECUTION_TOOL_NAMES,
-  DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
-  DELIVERABLE_SELECTION_FALLBACK_MARKER,
-  DELIVERABLE_SELECTION_GUARD_MARKER,
-  DIRECTORY_AUTHORIZATION_WAIT_CLAIM,
-  DIRECTORY_RESUME_GUARD_MARKER,
-  DIRECTORY_REVIEW_GUARD_MARKER,
-  DIRECTORY_REVIEW_INTENT,
-  DYNAMIC_EXECUTION_TARGET_MARKER,
-  DYNAMIC_EXECUTION_TOOL_NAMES,
-  DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER,
-  DYNAMIC_MUTATION_TOOL_NAMES,
-  EXECUTION_CONVERGENCE_MARKER,
-  EXECUTION_CONVERGENCE_ROUND_THRESHOLD,
-  EXECUTION_EVIDENCE_GUARD_MARKER,
-  EXPLICIT_LOCAL_DIRECTORY_CONTEXT,
-  FAILURE_RECOVERY_MARKER,
-  FAILURE_RECOVERY_THRESHOLD,
-  FALSE_SUCCESS_STATUS,
-  FILE_WRITE_TOOL_NAMES,
-  GENERATED_ARTIFACT_TYPE,
-  INCOMPLETE_STATUS,
-  JOB_READ_CONCURRENCY,
-  LIVE_ARTIFACT_CONTRACT_MARKER,
-  LIVE_STEERING_GUARD_MARKER,
-  LOCAL_HTML_DELIVERY_GUARD_MARKER,
-  MANAGED_ATTACHMENT_MARKER,
-  MAX_ARTIFACT_DELIVERY_RETRIES,
-  MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS,
-  MAX_CAPABILITY_TOOL_NAMES,
-  MAX_DELIVERABLE_SELECTION_RETRIES,
-  MAX_DIRECTORY_RESUME_RETRIES,
-  MAX_EXECUTION_EVIDENCE_RETRIES,
-  MAX_INSTALL_ATTEMPT_SIGNATURES,
-  MAX_ITERS,
-  MAX_LOCAL_HTML_DELIVERY_RETRIES,
-  MAX_MUTATION_VERIFICATION_RETRIES,
-  MAX_PDF_LAYOUT_VERIFICATION_RETRIES,
-  MAX_SOURCE_HANDOFF_RETRIES,
-  PATCH_WRITE_TOOL_NAMES,
-  PDF_LAYOUT_EXECUTION_CONTRACT_MARKER,
-  PDF_LAYOUT_VERIFICATION_GUARD_MARKER,
-  PDF_LAYOUT_VERIFICATION_OK,
-  POST_MUTATION_VERIFICATION_GUARD_MARKER,
-  PROJECT_SCOPE_TARGET,
-  REPEAT_CALL_GUARD_MARKER,
-  SCHEDULED_WAIT_INTENT,
-  SERVER_TOOL_SPECS,
-  SOURCE_HANDOFF_GUARD_MARKER,
-  STATUS_INQUIRY_PROMPT,
-  TOOL_HOOK_RESULT,
-  VERIFICATION_TOOLS,
-  VERIFIED_DIRECTORY_RESOLUTION,
-  allowedArtifactTools,
+  ARTIFACT_SOURCE_DELIVERY_POLICY_MARKER,
   attachJobBudget,
-  appendFinalAnswerToolEvidence,
+  AVAILABLE_TOOL_CAPABILITIES_MARKER,
+  budgetExceededCopy,
   buildAssistantToolCallsMessage,
   buildFinalAnswerEvidenceReviewPrompt,
   buildFinalAnswerEvidenceSnapshot,
-  collectFinalAnswerToolEvidence,
   buildJobToolIdempotencyKey,
   buildPdfLayoutExecutionContract,
   buildRepresentativeReadCalls,
+  buildTaskVerificationRepairPrompt,
   buildToolResultMessage,
   buildToolResultMessageBundle,
-  buildTaskVerificationRepairPrompt,
   callModelWithContextRecovery,
+  CAPABILITY_CONTROL_TOOL_NAMES,
+  CHECKPOINT_FLUSH_ERROR_CODE,
   clearArtifactValidatedMutationTargets,
   clearVerifiedDeletionTargets,
   clearVerifiedMutationTargets,
+  collectFinalAnswerToolEvidence,
+  COMMAND_EXECUTION_TOOL_NAMES,
   commandExecutionToolLabel,
   contradictedCapabilityClarification,
   createArtifactReplacementGuard,
@@ -242,42 +198,64 @@ const runtimeDependencies = {
   createPartialResultFallback,
   createRedundantImageGuard,
   createRepeatCallGuard,
-  createSteeringController,
-  createSideEffectScope,
   createSideEffectExecution,
+  createSideEffectScope,
+  createSteeringController,
   createSubagentApprovalContext,
-  createTruncatedToolCallResult,
   createToolAbortScope,
   createToolLoopGuard,
+  createTruncatedToolCallResult,
   createWorkspaceTargetGuard,
+  DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
+  DELIVERABLE_SELECTION_FALLBACK_MARKER,
+  DELIVERABLE_SELECTION_GUARD_MARKER,
+  DIRECT_EXECUTION_REQUIRED_MARKER,
+  DIRECTORY_AUTHORIZATION_REFRESH_MARKER,
+  DIRECTORY_AUTHORIZATION_WAIT_CLAIM,
+  DIRECTORY_RESUME_GUARD_MARKER,
+  DIRECTORY_REVIEW_GUARD_MARKER,
+  DIRECTORY_REVIEW_INTENT,
+  DYNAMIC_EXECUTION_TARGET_MARKER,
+  DYNAMIC_EXECUTION_TOOL_NAMES,
+  DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER,
+  DYNAMIC_MUTATION_TOOL_NAMES,
   ensureSafetySystemMessages,
   executeServerTool,
   executeToolWithRetry,
+  EXECUTION_CONVERGENCE_MARKER,
+  EXECUTION_CONVERGENCE_ROUND_THRESHOLD,
+  EXECUTION_EVIDENCE_GUARD_MARKER,
+  EXPLICIT_LOCAL_DIRECTORY_CONTEXT,
   extractMutationTargets,
   extractTextToolCalls,
+  FAILURE_RECOVERY_MARKER,
+  FAILURE_RECOVERY_THRESHOLD,
+  FALSE_SUCCESS_STATUS,
+  FILE_WRITE_TOOL_NAMES,
   filterCurrentDynamicToolSpecs,
-  budgetExceededCopy,
-  formatIncompleteTerminalText,
-  priorOutcomeStatusCopy,
-  terminalProtectionCopy,
   finalAnswerEvidenceDigest,
   findAdjacentDeliveredArtifacts,
   findContinuableArtifactTargets,
   findExplicitlyReferencedDeliveredArtifacts,
   formatDeniedToolResult,
+  formatIncompleteTerminalText,
+  GENERATED_ARTIFACT_TYPE,
   getDefaultOutputDirectory,
   getJobBudget,
   getProjectDirectory,
   getSideEffectExecutionLedger,
   getToolMetadata,
-  matchesDynamicToolRegistration,
+  goalToolContextForTurn,
   hasCommandExecutionTool,
-  hasSuccessfulLocalPreflightRead,
   hasEffectiveReadOnlyBoundary,
   hasMutationExecutionIntent,
   hasPendingTaskVerificationRepair,
-  installAttemptSignature,
+  hasRuntimeSkillActivationBlock,
+  hasSuccessfulLocalPreflightRead,
+  INCOMPLETE_STATUS,
   inspectToolLoopModelResponse,
+  installAttemptSignature,
+  installToolFailureRecovery,
   isArtifactRevisionRequest,
   isCommandExecutionTool,
   isContextLengthError,
@@ -287,7 +265,6 @@ const runtimeDependencies = {
   isExplorationOnlyCall,
   isFileArtifactTool,
   isForcedToolChoiceCompatibilityError,
-  installToolFailureRecovery,
   isLocalMutationCall,
   isLocalMutationContinuationRequest,
   isLoopPauseResult,
@@ -297,18 +274,38 @@ const runtimeDependencies = {
   isSubstantiveToolCall,
   isSuccessfulPdfLayoutVerification,
   isSuccessfulToolResult,
-  isTrustedInternalLoopPrincipal,
   isTextDeliverableRequest,
+  isTrustedInternalLoopPrincipal,
   isVerificationCall,
+  JOB_READ_CONCURRENCY,
   latestPriorTurnOutcome,
   listTurnArtifacts,
+  LIVE_ARTIFACT_CONTRACT_MARKER,
+  LIVE_STEERING_GUARD_MARKER,
+  LOCAL_HTML_DELIVERY_GUARD_MARKER,
   looksLikeDeletionCommand,
+  MANAGED_ATTACHMENT_EXECUTION_MARKER,
+  MANAGED_ATTACHMENT_MARKER,
   mapWithConcurrency,
+  matchesDynamicToolRegistration,
+  MAX_ARTIFACT_DELIVERY_RETRIES,
+  MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS,
+  MAX_CAPABILITY_TOOL_NAMES,
+  MAX_DELIVERABLE_SELECTION_RETRIES,
+  MAX_DIRECTORY_RESUME_RETRIES,
+  MAX_DYNAMIC_SKILLS_PER_TURN,
+  MAX_EXECUTION_EVIDENCE_RETRIES,
+  MAX_INSTALL_ATTEMPT_SIGNATURES,
+  MAX_ITERS,
+  MAX_LOCAL_HTML_DELIVERY_RETRIES,
+  MAX_MUTATION_VERIFICATION_RETRIES,
+  MAX_PDF_LAYOUT_VERIFICATION_RETRIES,
+  MAX_SOURCE_HANDOFF_RETRIES,
   mergeCompactionRecovery,
   normalizeArtifactIdList,
-  normalizeFinalAnswerToolEvidence,
   normalizeCompactionRecovery,
   normalizeDirectoryAuthorizationResolutions,
+  normalizeFinalAnswerToolEvidence,
   normalizeMutationTarget,
   normalizeToolCalls,
   normalizeToolError,
@@ -318,31 +315,39 @@ const runtimeDependencies = {
   observeTaskVerificationRepair,
   observeToolCalls,
   parseSkillIdFromPrompt,
+  PATCH_WRITE_TOOL_NAMES,
   path,
+  PDF_LAYOUT_EXECUTION_CONTRACT_MARKER,
+  PDF_LAYOUT_VERIFICATION_GUARD_MARKER,
+  PDF_LAYOUT_VERIFICATION_OK,
   persistLocalToolArtifactsAsync,
+  POST_MUTATION_VERIFICATION_GUARD_MARKER,
+  prepareRuntimeSkillActivation,
+  priorOutcomeStatusCopy,
   progressChangesFor,
+  PROJECT_SCOPE_TARGET,
+  recordRecoveredModelResult,
   recordToolProgress,
   recoverPriorLocalMutationTargets,
-  shouldRepairLegacyWorkspaceMutationCheckpoint,
-  recordRecoveredModelResult,
   rememberApprovedSubagentCall,
+  REPEAT_CALL_GUARD_MARKER,
   replaceRuntimeCapabilityBlock,
-  requiresPerCallApproval,
   requestApproval,
   requestedArtifactOutputDirective,
   requestedPdfSectionLabel,
+  requiresPerCallApproval,
   resolveArtifactDeliveryTargets,
   resolveArtifactRevisionMode,
   resolveChatCapabilityMode,
   resolveIterationWindow,
+  resolveSideEffectExecutionLedger,
   resolveToolResultMaxChars,
   restoreDirectoryAuthorizationToolSpecs,
   restoreExecutionConvergence,
   restoreFailureRecovery,
   restoreNamedToolSpecs,
-  restoreToolProgress,
   restoreTaskVerificationRepair,
-  resolveSideEffectExecutionLedger,
+  restoreToolProgress,
   resumePersistedApproval,
   revalidateHookAuthorization,
   revalidateToolPermission,
@@ -351,25 +356,31 @@ const runtimeDependencies = {
   runPreStep,
   runPreTool,
   runWithModelBudget,
+  salvageBareJsonToolCall,
   sameArtifactIdList,
   sanitizeIncompleteTerminalText,
-  SIDE_EFFECT_LEDGER_CONFLICT,
-  SIDE_EFFECT_OUTCOME_UNKNOWN,
-  sideEffectRecoveryBlock,
+  SCHEDULED_WAIT_INTENT,
   scopeTextToolCallIds,
   selectJobToolSpecs,
-  snapshotDynamicToolSpecRegistrations,
   serializeExecutionConvergence,
   serializeFailureRecovery,
-  serializeToolProgress,
   serializeTaskVerificationRepair,
+  serializeToolProgress,
+  SERVER_TOOL_SPECS,
   shellTargetWithCwd,
   shouldInheritExecutionIntent,
   shouldReflectOnFailure,
+  shouldRepairLegacyWorkspaceMutationCheckpoint,
   shouldRequireExecution,
   shouldRequirePdfLayoutVerification,
+  SIDE_EFFECT_LEDGER_CONFLICT,
+  SIDE_EFFECT_OUTCOME_UNKNOWN,
+  sideEffectRecoveryBlock,
+  snapshotDynamicToolSpecRegistrations,
+  SOURCE_HANDOFF_GUARD_MARKER,
   sourceHandoffViolation,
   staticDeletionTargets,
+  STATUS_INQUIRY_PROMPT,
   stripEphemeralToolMediaMessages,
   successfulReadFileInMessages,
   supportsIdempotentResume,
@@ -378,15 +389,25 @@ const runtimeDependencies = {
   taskVerificationRepairBlockerText,
   taskVerificationRepairDetails,
   taskVerificationRepairExhausted,
+  terminalProtectionCopy,
+  TOOL_FAILURE_STRATEGY_MARKER,
+  TOOL_HOOK_RESULT,
   toolNameFromSpec,
   toolProgressPayload,
   validateLocalHtmlDelivery,
   validateToolCall,
+  VERIFICATION_TOOLS,
   writeToolAudit,
 }
 
 async function runPhase(phase, state) {
   const outcome = await phase(state)
+  if (outcome?.kind === 'return') {
+    const value = await outcome.value
+    return value?.deferredForSteering === true
+      ? { kind: 'continue' }
+      : { ...outcome, value }
+  }
   return outcome || { kind: 'next' }
 }
 
@@ -422,11 +443,12 @@ function getPreparedRuntimeRecord(prepared) {
  * opaque, module-branded handle. The handle deliberately has no properties:
  * the handle itself cannot be used to inspect or replace the phase state.
  */
-export async function prepareToolsLoopRuntime(context) {
+export async function prepareToolsLoopRuntime(context, dependencies = runtimeDependencies) {
   // The generated phases intentionally share this dependency bag. Validate the
-  // small bootstrap subset here so refactors fail at the boundary, not mid-turn.
-  assertRuntimeDependencies(runtimeDependencies)
-  const s = { context, d: runtimeDependencies, iteration: null }
+  // complete bag here so a missing or wrong-kind symbol fails before any
+  // phase, model call or tool execution can start.
+  assertRuntimeDependencies(dependencies)
+  const s = { context, d: dependencies, iteration: null }
   let terminalOutcome = null
   for (const phase of [
     initializeInputs,
@@ -495,7 +517,7 @@ export function consumePreparedToolsLoopTerminalOutcome(prepared) {
   return result
 }
 
-async function runPreparedToolsLoopState(s) {
+async function runPreparedToolsLoopWindow(s) {
   for (; s.iter < s.maxIters; s.iter += 1) {
     s.iteration = {}
     let outcome = await runPhase(prepareIteration, s)
@@ -525,6 +547,16 @@ async function runPreparedToolsLoopState(s) {
     if (outcome?.kind === 'continue') continue
   }
   return finalizeRuntime(s)
+}
+
+async function runPreparedToolsLoopState(s) {
+  for (;;) {
+    const result = await runPreparedToolsLoopWindow(s)
+    // Closing the inbox can race with a new steering message even after the
+    // final allowed tool batch. The controller extends the window and clears
+    // the obsolete terminal candidate; consume its control signal locally.
+    if (result?.deferredForSteering !== true && result?.deferredForVerification !== true) return result
+  }
 }
 
 /** Execute exactly once from a module-branded prepared runtime handle. */

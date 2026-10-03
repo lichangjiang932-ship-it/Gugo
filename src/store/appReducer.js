@@ -4,6 +4,7 @@ import { reduceServerSessionState } from './reducers/serverSessionReducer.js'
 import { reduceSessionLifecycleState } from './reducers/sessionLifecycleReducer.js'
 import { reduceSyncState } from './reducers/syncReducer.js'
 import { reduceTaskSettingsState } from './reducers/taskSettingsReducer.js'
+import { syncOpenPreviewArtifactRevisions } from './previewArtifactRevisionSync.js'
 
 const DOMAIN_REDUCERS = [
   reduceAuthState,
@@ -17,7 +18,7 @@ const DOMAIN_REDUCERS = [
 export function reducer(state, action) {
   for (const domainReducer of DOMAIN_REDUCERS) {
     const nextState = domainReducer(state, action)
-    if (nextState !== null) return nextState
+    if (nextState !== null) return syncOpenPreviewArtifactRevisions(state, nextState, action)
   }
   return state
 }

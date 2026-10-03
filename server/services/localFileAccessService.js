@@ -52,6 +52,13 @@ const MANAGED_PROJECTS_DIRECTORY = 'Gugo Projects'
 const DEFAULT_MANAGED_PROJECT_DIRECTORY = 'Default'
 const turnProjectDirectoryContext = new AsyncLocalStorage()
 
+/** Read only the current Turn's scope; never infer one from saved grants. */
+export function getScopedTurnProjectDirectory({ userId } = {}) {
+  if (typeof userId !== 'string' || !userId.trim()) return null
+  const scoped = turnProjectDirectoryContext.getStore()
+  return scoped?.userId === userId ? scoped.projectDirectory || null : null
+}
+
 export function getProjectDirectory({ userId } = {}) {
   const scoped = turnProjectDirectoryContext.getStore()
   if (scoped?.projectDirectory && (!userId || scoped.userId === userId)) {
@@ -299,6 +306,18 @@ export function withTurnProjectDirectory({
   }), operation)
 }
 
+/** Only the exact process-trusted CLI root can supply temporary authority. */
+function cliExplicitWorkspaceRoot() {
+  const configured = String(process.env.GUGO_CLI_WORKSPACE_ROOT || '').trim()
+  if (!configured || process.env.WORKSPACE_FS_ENABLED !== '1' || !sharedWorkspaceTrusted()) return ''
+  try {
+    const canonical = realPath(path.resolve(configured))
+    return samePath(canonical, realPath(workspaceRoot())) ? canonical : ''
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Resolve the effective directory before any Turn state is persisted. An
  * explicitly selected project must still be writable, authorized and trusted
@@ -308,8 +327,15 @@ export function withTurnProjectDirectory({
 export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {}) {
   if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
   const selectedPath = stripPairedOuterQuotes(workspacePath)
+  // A headless CLI run selects its workspace explicitly as --cwd. That choice
+  // must decide the project directory (and the applicable project
+  // instructions) instead of a configured default output directory taking over
+  // the workspace role. The default output directory still controls where new
+  // files are written.
+  const cliWorkspace = cliExplicitWorkspaceRoot()
   const configuredPath = configuredOutputDirectory(userId)
   let requestedPath = selectedPath
+    || cliWorkspace
     || configuredPath
     || isolatedTestOutputDirectory()
     || workspaceRoot()
@@ -343,13 +369,16 @@ export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {})
     canonicalPath = realPath(requestedPath)
     stat = fs.statSync(canonicalPath)
   }
+  const selectedCliWorkspace = Boolean(cliWorkspace && samePath(cliWorkspace, canonicalPath))
   if (selectedPath) {
     const grant = findAuthorizedDirectoryGrant({
       userId,
       rawPath: canonicalPath,
       accessMode: 'read_write',
     })
-    if (!grant) {
+    // This authority was already established by the CLI host, not an HTTP
+    // request or session metadata. It never becomes a saved grant/trust row.
+    if (!grant && !selectedCliWorkspace) {
       throw serviceError('所选项目目录尚未获得读写授权', 403, 'TURN_WORKSPACE_NOT_AUTHORIZED')
     }
     const trust = getWorkspaceTrustStatus({ userId, rootPath: canonicalPath })
@@ -361,7 +390,9 @@ export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {})
   return {
     workspacePath: selectedPath ? canonicalPath : null,
     projectDirectory: canonicalPath,
-    defaultOutputDirectory: canonicalPath,
+    defaultOutputDirectory: selectedCliWorkspace
+      ? (configuredPath || isolatedTestOutputDirectory() || canonicalPath)
+      : canonicalPath,
   }
 }
 

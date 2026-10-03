@@ -50,7 +50,7 @@ test('Streamable HTTP carries custom/session headers across requests and notific
     await transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
   })
   assert.equal(calls[0].headers.authorization, 'Bearer test-key')
-  assert.equal(calls[0].headers['mcp-protocol-version'], '2025-03-26')
+  assert.equal(calls[0].headers['mcp-protocol-version'], '2024-11-05')
   assert.equal(calls[1].headers['mcp-session-id'], 'session-123')
 })
 

@@ -33,13 +33,11 @@ test('local mode hides mail diagnostics and links missing model configuration to
 
 test('chat and Reasonix surfaces use completion and token statistics only', () => {
   const modelClient = read('../src/lib/modelClient.js')
-  const tools = read('../src/lib/tools/index.js')
   const messages = read('../src/pages/ChatSplit/ChatMessages.jsx')
   const reasonix = read('../src/pages/ReasonixWorkspace.jsx')
 
   assert.match(modelClient, /type: 'complete'/)
   assert.doesNotMatch(modelClient, /type: 'billing'|chunk\.billing/)
-  assert.doesNotMatch(tools, /output\.billing|data\.billing/)
   assert.doesNotMatch(messages, /creditsCharged|creditsBalance|billingError/)
   assert.doesNotMatch(reasonix, /costCredits|costRatio/)
 })

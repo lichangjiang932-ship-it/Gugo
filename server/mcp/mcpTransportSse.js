@@ -20,6 +20,7 @@
  */
 
 import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
+import { PROTOCOL_VERSION } from './mcpJsonRpc.js'
 
 function isLoopbackUrl(raw) {
   try {
@@ -39,8 +40,9 @@ function isLoopbackHttpUrl(raw) {
   }
 }
 
-function mcpRpcError(message) {
+function mcpRpcError({ message, code }) {
   const error = new Error(message || 'MCP error')
+  error.code = code
   error.isMcpRpcError = true
   return error
 }
@@ -70,6 +72,7 @@ export class SseTransport {
     this.resolveDns = resolveDns ?? (typeof lookup === 'function' || fetchImpl === globalThis.fetch)
     this.closed = false
     this.sessionId = null
+    this.protocolVersion = PROTOCOL_VERSION
     this.notificationHandlers = new Set()
     this.errorHandlers = new Set()
     this.closeHandlers = new Set()
@@ -98,7 +101,7 @@ export class SseTransport {
     return {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
-      'MCP-Protocol-Version': '2025-03-26',
+      'MCP-Protocol-Version': this.protocolVersion,
       ...(this.sessionId ? { 'MCP-Session-Id': this.sessionId } : {}),
       ...(this.headers || {}),
       ...(dynamicHeaders || {}),
@@ -134,13 +137,20 @@ export class SseTransport {
       }
       this.sessionId = resp.headers.get('mcp-session-id') || this.sessionId
       const ct = resp.headers.get('content-type') || ''
+      let result
       if (ct.includes('text/event-stream')) {
-        return this._parseSseResponse(resp, message.id)
+        result = await this._parseSseResponse(resp, message.id)
+      } else {
+        const text = await resp.text()
+        const data = text ? JSON.parse(text) : {}
+        if (data.error) throw mcpRpcError(data.error)
+        result = data.result
       }
-      const text = await resp.text()
-      const data = text ? JSON.parse(text) : {}
-      if (data.error) throw mcpRpcError(data.error.message)
-      return data.result
+      if (message.method === 'initialize' && result?.protocolVersion !== undefined) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(result.protocolVersion)) throw new Error('MCP initialize returned an invalid protocol version')
+        this.protocolVersion = result.protocolVersion
+      }
+      return result
     } catch (error) {
       if (signal?.aborted) throw signal.reason || error
       if (!error?.isMcpRpcError) this._emitError(error)
@@ -189,7 +199,7 @@ export class SseTransport {
         let msg
         try { msg = JSON.parse(payload) } catch { continue }
         if (msg.id !== undefined && msg.id === expectedId) {
-          if (msg.error) throw mcpRpcError(msg.error.message)
+          if (msg.error) throw mcpRpcError(msg.error)
           // 关掉 reader,后续 event 丢弃
           try { await reader.cancel() } catch { /* ignore */ }
           return msg.result

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { resolveTurnToolSpecs } from '../server/services/turnToolSpecs.js'
+import { projectToolSpecsForRuntimePolicy, resolveTurnToolSpecs } from '../server/services/turnToolSpecs.js'
+import { classifyToolRisk } from '../server/utils/approvalPolicy.js'
+import { assertSafeOutboundUrl } from '../server/utils/outboundNetworkGuard.js'
 
 const spec = (name) => ({
   type: 'function',
@@ -50,10 +52,35 @@ test('ordinary questions, terse follow-ups, refresh and checkpoint resume keep o
     const names = namesOf(resolved)
     expected ||= names
     assert.deepEqual(names, expected)
-    for (const name of [...namesOf(BASE_SPECS), 'set_deliverables']) {
+    for (const name of [...namesOf(BASE_SPECS), 'set_deliverables']
+      .filter((name) => !name.startsWith('mcp__'))) {
       assert.ok(names.includes(name), `${turn.prompt}: ${name}`)
     }
+    assert.equal(names.some((name) => name.startsWith('mcp__')), false)
   }
+})
+
+test('MCP schemas require explicit or historical intent while remaining recoverable', async () => {
+  const explicit = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: BASE_SPECS,
+    enabledConnectorTools: [],
+    prompt: 'Use MCP to read the documentation source.',
+  })
+  assert.ok(namesOf(explicit).includes('mcp__docs__read'))
+  assert.ok(namesOf(explicit).includes('mcp__docs__write'))
+
+  const historical = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: BASE_SPECS,
+    enabledConnectorTools: [],
+    prompt: 'Continue.',
+    messages: [{ role: 'assistant', tool_calls: [{
+      id: 'prior-mcp', type: 'function', function: { name: 'mcp__docs__read', arguments: '{}' },
+    }] }],
+  })
+  assert.ok(namesOf(historical).includes('mcp__docs__read'))
+  assert.equal(namesOf(historical).includes('mcp__docs__write'), false)
 })
 
 test('plan mode projects the model schema to the execution policy read-only allowlist', async () => {
@@ -71,10 +98,12 @@ test('plan mode projects the model schema to the execution policy read-only allo
     catalogs.set(permissionMode, namesOf(resolved))
   }
 
-  assert.deepEqual(catalogs.get('plan'), ['git_status', 'list_directory', 'read_file', 'request_directory'])
+  // Plan mode researches like Claude Code's: the web tools join the local reads
+  // (a non-GET fetch is still refused per call at execution).
+  assert.deepEqual(catalogs.get('plan'), ['fetch_url', 'git_status', 'list_directory', 'read_file', 'request_directory', 'web_search'])
   for (const name of [
-    'apply_patch', 'bash_exec', 'create_docx', 'fetch_url', 'mcp__docs__read',
-    'mcp__docs__write', 'set_deliverables', 'web_search', 'write_file',
+    'apply_patch', 'bash_exec', 'create_docx', 'mcp__docs__read',
+    'mcp__docs__write', 'set_deliverables', 'write_file',
   ]) {
     assert.equal(catalogs.get('plan').includes(name), false, name)
     assert.ok(decisions.get('plan').excludedTools.some((entry) => (
@@ -90,7 +119,7 @@ test('plan mode projects the model schema to the execution policy read-only allo
   assert.ok(catalogs.get('normal').includes('bash_exec'))
 })
 
-test('unauthorized plan mode exposes only the directory authorization entry point', async () => {
+test('unauthorized plan mode exposes only the directory authorization entry point and web research', async () => {
   const resolved = await resolveTurnToolSpecs({
     userId: null,
     baseSpecs: BASE_SPECS,
@@ -100,7 +129,76 @@ test('unauthorized plan mode exposes only the directory authorization entry poin
     prompt: '只读分析这个项目。',
   })
 
-  assert.deepEqual(namesOf(resolved), ['request_directory'])
+  // Web research needs no local directory grant, so it is the one other thing
+  // a plan-mode turn without a workspace can do.
+  assert.deepEqual(namesOf(resolved), ['fetch_url', 'request_directory', 'web_search'])
+})
+
+for (const permissionMode of ['normal', 'acceptEdits', 'bypass']) {
+  test(`${permissionMode} web research does not require an unrelated local directory grant`, async () => {
+    const resolved = await resolveTurnToolSpecs({
+      userId: null,
+      baseSpecs: BASE_SPECS,
+      permissionMode,
+      fileAccessStatus: { grants: [], workspace: {}, runtime: {} },
+      enabledConnectorTools: [],
+      prompt: 'Search the web and read the source pages.',
+    })
+    const names = namesOf(resolved)
+    assert.ok(names.includes('web_search'))
+    assert.ok(names.includes('fetch_url'))
+    assert.ok(names.includes('request_directory'))
+    for (const localName of ['read_file', 'write_file', 'list_directory', 'bash_exec', 'git_status']) {
+      assert.equal(names.includes(localName), false, `${localName} still needs local authority`)
+    }
+  })
+}
+
+test('workspace-independent web schemas still honor turn and per-user disabling', () => {
+  const excluded = []
+  const webSpecs = [spec('web_search'), spec('fetch_url')]
+  const firstUser = projectToolSpecsForRuntimePolicy(webSpecs, {
+    userId: 'web-disabled-user',
+    permissionMode: 'normal',
+    fileAccessStatus: { grants: [] },
+    toolsConfig: { disabled: ['web_search'] },
+    userToolPermissions: { fetch_url: false },
+    onExcluded: (value) => excluded.push(value),
+  })
+  assert.deepEqual(namesOf(firstUser), [])
+  assert.deepEqual(excluded.map(({ name, reason }) => ({ name, reason })), [
+    { name: 'web_search', reason: 'tool_disabled' },
+    { name: 'fetch_url', reason: 'user_tool_disabled' },
+  ])
+  const secondUser = projectToolSpecsForRuntimePolicy(webSpecs, {
+    userId: 'web-enabled-user',
+    permissionMode: 'normal',
+    fileAccessStatus: { grants: [] },
+    userToolPermissions: {},
+  })
+  assert.deepEqual(namesOf(secondUser), ['web_search', 'fetch_url'])
+})
+
+test('plan-mode web research does not relax external-write approval or pure-local outbound policy', async () => {
+  const projected = projectToolSpecsForRuntimePolicy([spec('web_search'), spec('fetch_url')], {
+    permissionMode: 'plan', fileAccessStatus: { grants: [] }, userToolPermissions: {},
+  })
+  assert.deepEqual(namesOf(projected), ['web_search', 'fetch_url'])
+  // Visible is not executable for every call: plan mode still refuses a POST.
+  assert.equal(classifyToolRisk('fetch_url', { method: 'POST', url: 'https://example.com' }, {
+    permissionMode: 'plan', mode: 'unattended', origin: 'chat',
+  }).denied, true)
+  assert.equal(classifyToolRisk('fetch_url', { method: 'POST', url: 'https://example.com' }, {
+    permissionMode: 'normal', mode: 'unattended', origin: 'chat',
+  }).needsApproval, true)
+  await assert.rejects(
+    assertSafeOutboundUrl('https://93.184.216.34/', { env: { GUGO_PURE_LOCAL_MODE: '1' } }),
+    (error) => error.code === 'OUTBOUND_PURE_LOCAL_DENIED',
+  )
+  await assert.rejects(
+    assertSafeOutboundUrl('http://169.254.169.254/latest/meta-data'),
+    (error) => error.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
 })
 
 test('normal mode keeps shell requestable after an exact file grant', async () => {
@@ -267,20 +365,77 @@ test('execution switches delete disabled schemas from the model-visible catalog'
   }
 })
 
-test('all connected connector schemas remain visible independent of prompt intent', async () => {
+test('connected connector schemas are disclosed only for current or historical intent', async () => {
   const connectorSpecs = [spec('slack_send_message'), spec('notion_search')]
-  const prompts = ['解释本地文件。', '发送 Slack 消息。', '继续']
-  for (const prompt of prompts) {
-    const resolved = await resolveTurnToolSpecs({
+  const options = {
+    userId: null,
+    baseSpecs: connectorSpecs,
+    enabledConnectorTools: ['slack_send_message', 'notion_search'],
+  }
+  let decision = null
+  const local = await resolveTurnToolSpecs({
+    ...options,
+    prompt: '解释本地文件。',
+    onDecision: (value) => { decision = value },
+  })
+  assert.deepEqual(namesOf(local), ['set_deliverables'])
+  for (const name of ['slack_send_message', 'notion_search']) {
+    assert.deepEqual(decision.excludedTools.find((entry) => entry.name === name), {
+      name, stage: 'intent', reason: 'intent_not_selected',
+    })
+  }
+
+  const slack = await resolveTurnToolSpecs({ ...options, prompt: '发送 Slack 消息。' })
+  assert.deepEqual(namesOf(slack), ['set_deliverables', 'slack_send_message'])
+
+  const continued = await resolveTurnToolSpecs({
+    ...options,
+    prompt: '继续',
+    messages: [{ role: 'assistant', tool_calls: [{
+      id: 'notion-history', type: 'function', function: { name: 'notion_search', arguments: '{}' },
+    }] }],
+  })
+  assert.deepEqual(namesOf(continued), ['notion_search', 'set_deliverables'])
+})
+
+test('browser schemas are disclosed for browser intent and retained by browser history', async () => {
+  const browserSpecs = [spec('browser_snapshot'), spec('browser_click'), spec('browser_upload_file')]
+  const local = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: browserSpecs,
+    enabledConnectorTools: [],
+    prompt: '解释本地文件。',
+  })
+  assert.deepEqual(namesOf(local), ['set_deliverables'])
+
+  const requested = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: browserSpecs,
+    enabledConnectorTools: [],
+    prompt: '打开浏览器并点击页面按钮。',
+  })
+  assert.deepEqual(namesOf(requested), ['browser_click', 'browser_snapshot', 'browser_upload_file', 'set_deliverables'])
+
+  for (const prompt of ['Upload the file to the website form.', '把附件上传到网站表单。']) {
+    const upload = await resolveTurnToolSpecs({
       userId: null,
-      baseSpecs: connectorSpecs,
-      enabledConnectorTools: ['slack_send_message', 'notion_search'],
+      baseSpecs: browserSpecs,
+      enabledConnectorTools: [],
       prompt,
     })
-    const names = namesOf(resolved)
-    assert.ok(names.includes('slack_send_message'), prompt)
-    assert.ok(names.includes('notion_search'), prompt)
+    assert.ok(namesOf(upload).includes('browser_upload_file'), prompt)
   }
+
+  const continued = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: browserSpecs,
+    enabledConnectorTools: [],
+    prompt: '继续',
+    messages: [{ role: 'tool', name: 'browser_snapshot', content: '{}' }],
+  })
+  assert.deepEqual(namesOf(continued), [
+    'browser_click', 'browser_snapshot', 'browser_upload_file', 'set_deliverables',
+  ])
 })
 
 test('an integration that is not connected stays absent with a structured discovery reason', async () => {
@@ -289,7 +444,7 @@ test('an integration that is not connected stays absent with a structured discov
     userId: null,
     baseSpecs: [spec('slack_send_message'), spec('notion_search')],
     enabledConnectorTools: ['slack_send_message'],
-    prompt: '继续',
+    prompt: '发送 Slack 消息，并在 Notion 中查找关联页面。',
     onDecision: (value) => { decision = value },
   })
   const names = namesOf(resolved)
@@ -299,4 +454,28 @@ test('an integration that is not connected stays absent with a structured discov
     decision?.excludedTools.find((entry) => entry.name === 'notion_search'),
     { name: 'notion_search', stage: 'availability', reason: 'integration_disabled' },
   )
+})
+
+test('plan mode with a workspace offers research and read-only subagents from the real server catalog', async () => {
+  const { SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+  const resolved = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    permissionMode: 'plan',
+    fileAccessStatus: { grants: [{ id: 'plan-ws', path: process.cwd(), resourceType: 'directory', accessMode: 'read_write', available: true }] },
+    enabledConnectorTools: [],
+    prompt: 'Research how routing works and plan a change.',
+  })
+  const names = namesOf(resolved)
+  for (const name of ['Agent', 'web_search', 'fetch_url', 'read_file', 'grep_code']) {
+    assert.ok(names.includes(name), `${name} is available in plan mode`)
+  }
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_command', 'run_project_check', 'git_commit']) {
+    assert.equal(names.includes(name), false, `${name} stays out of plan mode`)
+  }
+  // The Agent schema is visible, but only explore/plan subagents run in plan mode.
+  assert.equal(classifyToolRisk('Agent', { subagent_type: 'explore', prompt: 'map the router' },
+    { permissionMode: 'plan', mode: 'unattended', origin: 'chat' }).denied, undefined)
+  assert.equal(classifyToolRisk('Agent', { subagent_type: 'general', prompt: 'edit the router' },
+    { permissionMode: 'plan', mode: 'unattended', origin: 'chat' }).denied, true)
 })

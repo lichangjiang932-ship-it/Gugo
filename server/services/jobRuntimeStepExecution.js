@@ -1,3 +1,6 @@
+import { getJobBudget } from '../utils/jobBudget.js'
+import { nextJobCheckpointWriteSequence } from './jobTurnCheckpointStore.js'
+
 function createCurrentStepExecutor(runtime, freshJob) {
   const { host, dependencies: d, job, nextStep, tickBudget, controller, modelBinding, leaseScope } = runtime
   return (stepToExecute) => tickBudget.run(() => host.executeStep({
@@ -65,6 +68,42 @@ async function executeAndRepairStep(runtime) {
   return { result, repairAttempt: repair.repairAttempt }
 }
 
+function preservesPausedBudgetCounters(saved, current) {
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved) || !current) return false
+  if (!Number.isFinite(saved.elapsed) || saved.elapsed < 0 || saved.elapsed > current.elapsed) return false
+  return Object.keys(current).every((key) => (
+    key === 'elapsed' || (Object.hasOwn(saved, key) && saved[key] === current[key])
+  ))
+}
+
+function releaseCheckpointedPausedBudget({ host, tickBudget, job, nextStep, commitOwned }) {
+  const scope = { jobId: job.id, stepId: nextStep.id, userId: job.userId }
+  commitOwned(() => {
+    const checkpoint = host.runtimeCore.checkpoint.load(scope)
+    const current = getJobBudget(job)?.snapshot()
+    if (checkpoint?.state?.final != null
+      || !preservesPausedBudgetCounters(checkpoint?.state?.budget, current)) return
+    // A custom executor's stale or incomplete snapshot cannot replace live
+    // counters. When the counters agree, include review/finalization work
+    // since the loop checkpoint before starting the durable wait interval.
+    if (checkpoint.state.budget.elapsed !== current.elapsed) {
+      const sequence = nextJobCheckpointWriteSequence(checkpoint.state)
+      const refreshed = host.runtimeCore.checkpoint.save(scope, {
+        ...checkpoint.state,
+        checkpointWriteSequence: sequence,
+        budget: current,
+      }, { checkpointWriteSequence: sequence })
+      if (refreshed?.state?.checkpointWriteSequence !== sequence
+        || refreshed.state.final != null
+        || !preservesPausedBudgetCounters(refreshed.state.budget, current)
+        || refreshed.state.budget.elapsed !== current.elapsed) return
+    }
+    // release() compares this tick's budget instance, so late cleanup cannot
+    // erase a replacement generation even when it has identical counters.
+    tickBudget.release()
+  })
+}
+
 function handlePausedStep(runtime, result) {
   const { host, dependencies: d, job, nextStep, commitOwned } = runtime
   const clarification = result.clarification || {}
@@ -106,6 +145,7 @@ function handlePausedStep(runtime, result) {
       payload: waitingPayload,
     }))
   })) return true
+  releaseCheckpointedPausedBudget(runtime)
   if (sleeping) return true
   try {
     d.createNotification({

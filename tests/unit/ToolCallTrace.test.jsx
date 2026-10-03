@@ -35,7 +35,9 @@ test('ToolCallTrace renders one lightweight accessible timeline without a visibl
   assert.doesNotMatch(markup, /chat-activity-title/)
   assert.match(markup, /aria-label="2 tool calls"/)
   assert.doesNotMatch(markup, /执行过程/)
-  assert.match(markup, /chat-tool-step-marker/)
+  // Steps carry what the agent was doing; there is no numeric marker chrome.
+  assert.match(markup, /data-kind="consult"/)
+  assert.doesNotMatch(markup, /chat-tool-step-marker/)
   assert.equal((markup.match(/data-testid="tool-call-step"/g) || []).length, 2)
 })
 

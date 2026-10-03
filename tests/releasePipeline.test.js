@@ -4,7 +4,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { stageWebRelease, WEB_RELEASE_ENTRIES } from '../scripts/release/package-web.mjs'
+import { collectStaticModuleGraph } from './helpers/staticModuleGraph.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8')
@@ -12,7 +14,7 @@ const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'u
 function createReleaseFixture(t) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-release-fixture-'))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
-  const directories = new Set(['bin', 'dist', 'server', 'shared', 'seed', 'plugins', 'resources/licenses'])
+  const directories = new Set(['bin', 'dist', 'server', 'shared', 'sdk', 'seed', 'plugins', 'resources/licenses'])
   for (const entry of WEB_RELEASE_ENTRIES) {
     const target = path.join(rootDir, entry)
     if (directories.has(entry)) {
@@ -57,6 +59,9 @@ test('Web release staging contains a complete runnable distribution and is repea
   assert.match(readFrom(first.stageDir, 'README-WEB.md'), /node bin\/yma-cli\.js --help/)
   assert.equal(fs.existsSync(path.join(first.stageDir, 'bin', 'yma-cli.js')), true)
   assert.equal(fs.existsSync(path.join(first.stageDir, 'docs', 'CLI.md')), true)
+  assert.equal(fs.existsSync(path.join(first.stageDir, 'docs', 'CONTEXT_COMPACTION.md')), true)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /docs\/CONTEXT_COMPACTION\.md/)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /lossy continuation aids/)
   assert.equal(execFileSync(process.execPath, [path.join(first.stageDir, 'bin', 'yma-cli.js'), '--version'], {
     encoding: 'utf8',
   }).trim(), '1.2.3')
@@ -79,6 +84,17 @@ test('Web release staging refuses a build without dist/index.html', (t) => {
   )
 })
 
+test('Windows startup diagnostics are opt-in and cannot publish or replace release gates', () => {
+  const diagnostics = read('.github/workflows/windows-process-guard.yml')
+  assert.match(diagnostics, /^on:\s*\r?\n\s+workflow_dispatch:/m)
+  assert.doesNotMatch(diagnostics, /^\s+(?:push|pull_request|schedule|workflow_run|workflow_call):/m)
+  assert.match(diagnostics, /permissions:\s*\r?\n\s+contents: read/)
+  assert.match(diagnostics, /persist-credentials: false/)
+  assert.doesNotMatch(diagnostics, /(?:contents|id-token|attestations): write/)
+  assert.doesNotMatch(diagnostics, /publish-github-release|desktop:publish|git push/)
+  assert.match(read('.github/workflows/release.yml'), /needs:\s*ci/)
+})
+
 test('Release workflow is gated by reusable CI and never overwrites a published release', () => {
   const ci = read('.github/workflows/ci.yml')
   const release = read('.github/workflows/release.yml')
@@ -94,6 +110,11 @@ test('Release workflow is gated by reusable CI and never overwrites a published 
   assert.doesNotMatch(offlineGate, /--eval-suite/)
   assert.equal(packageMetadata.scripts['eval:offline'], 'node scripts/run-tests.js offline-eval')
   assert.match(ci, /npm run test:coverage/)
+  const coverageJob = ci.match(/\n {2}coverage:[\s\S]*?(?=\n {2}[a-z][a-z-]+:|$)/)?.[0] || ''
+  assert.match(coverageJob, /timeout-minutes: 50/)
+  assert.match(coverageJob, /TEST_COVERAGE_TIMEOUT_MS: 2400000/)
+  assert.match(coverageJob, /TEST_CONCURRENCY: 1/)
+  assert.doesNotMatch(coverageJob, /continue-on-error|COVERAGE_(?:LINES|FUNCTIONS|BRANCHES):\s*0\b/)
   assert.match(ci, /npm run audit:prod/)
   assert.match(ci, /gitleaks\/gitleaks-action/)
   assert.match(ci, /docker build --tag gugo:ci/)
@@ -245,23 +266,74 @@ test('Release secret scanning cannot pass without scanning an explicit checkout 
   }
 })
 
-test('Web release includes the server parser dependency closure without browser barrels', () => {
-  const runtimeParserEntries = [
+test('Web release includes the transitive artifact and skill runtime closure without browser barrels', async (t) => {
+  const runtimeFrontendEntries = [
+    'src/data.js',
+    'src/data/skillCatalog.js',
+    'src/i18n/domains/skillsMarket.js',
     'src/lib/officeExport/documentExport.js',
     'src/lib/officeExport/officeCommon.js',
     'src/lib/officeExport/spreadsheetExport.js',
+    'src/lib/pptCore.js',
     'src/lib/presentationExport/presentationParseHelpers.js',
     'src/lib/presentationExport/presentationParser.js',
+    'src/lib/presentationPlanner.js',
   ]
-  for (const entry of runtimeParserEntries) {
+  for (const entry of runtimeFrontendEntries) {
     assert.equal(WEB_RELEASE_ENTRIES.includes(entry), true, `missing runtime parser dependency ${entry}`)
   }
+  const roots = ['server/services/loop/heuristics/artifactPublishing.js', 'server/services/skillRegistry.js']
+  const graphs = roots.map((entry) => collectStaticModuleGraph(path.join(ROOT, entry)))
+  const relative = (file, root = ROOT) => path.relative(root, file).split(path.sep).join('/')
+  const files = new Set(graphs.flatMap((graph) => [...graph.files].map((file) => relative(file))))
+  for (const graph of graphs) assert.deepEqual(graph.unresolvedLocalModules, [])
+  assert.deepEqual([...files].filter((file) => file.startsWith('src/')).sort(), [...runtimeFrontendEntries].sort())
+  for (const module of ['pptxMarkdownCompatibility', 'pptxMarkdownSource', 'pptxMarkdownChart']) {
+    assert.equal(files.has(`server/services/${module}.js`), true, `${module} must be reachable through publishing`)
+  }
+  for (const file of files) {
+    assert.equal(WEB_RELEASE_ENTRIES.some((entry) => file === entry || file.startsWith(`${entry}/`)), true,
+      `runtime dependency is not packed: ${file}`)
+  }
+  const forbidden = ['src', 'src/lib', 'src/i18n', 'src/i18n/domains', 'src/lib/officeExport.js', 'src/lib/presentationExport.js', 'src/i18n/translations.js']
+  for (const entry of forbidden) assert.equal(WEB_RELEASE_ENTRIES.includes(entry), false, `overbroad runtime entry: ${entry}`)
 
-  const heuristics = read('server/services/loop/heuristics/artifactPublishing.js')
-  assert.match(heuristics, /officeExport\/documentExport\.js/)
-  assert.match(heuristics, /officeExport\/spreadsheetExport\.js/)
-  assert.match(heuristics, /presentationExport\/presentationParser\.js/)
-  assert.doesNotMatch(heuristics, /from ['"]\.\.\/\.\.\/src\/lib\/(?:officeExport|presentationExport)\.js['"]/)
+  const rootDir = createReleaseFixture(t)
+  for (const file of files) {
+    const target = path.join(rootDir, file)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(path.join(ROOT, file), target)
+  }
+  const { stageDir } = stageWebRelease({ rootDir, outputDir: path.join(rootDir, 'output') })
+  for (const [index, entry] of roots.entries()) {
+    const staged = collectStaticModuleGraph(path.join(stageDir, entry))
+    assert.deepEqual(staged.unresolvedLocalModules, [])
+    assert.deepEqual([...staged.files].map((file) => relative(file, stageDir)).sort(),
+      [...graphs[index].files].map((file) => relative(file)).sort())
+  }
+  for (const entry of forbidden.filter((entry) => entry.endsWith('.js'))) {
+    assert.equal(fs.existsSync(path.join(stageDir, entry)), false, `browser barrel leaked into the release: ${entry}`)
+  }
+  const compatibility = await import(pathToFileURL(path.join(stageDir, 'server/services/pptxMarkdownCompatibility.js')).href)
+  assert.deepEqual(compatibility.canonicalPptxMarkdownSlides('# Ordinary page\n- Complete evidence')[0].bullets, ['Complete evidence'])
+  const skills = await import(pathToFileURL(path.join(stageDir, 'src/data/skillCatalog.js')).href)
+  const copy = (await import(pathToFileURL(path.join(stageDir, 'src/i18n/domains/skillsMarket.js')).href)).default
+  assert.equal(skills.SKILLS.find((skill) => skill.id === 'ppt').desc, copy.zh.builtInPptDescription)
+})
+
+test('Web distribution retains its advertised gugo/sdk export without installing or contacting dependencies', (t) => {
+  const rootDir = createReleaseFixture(t)
+  fs.cpSync(path.join(ROOT, 'sdk'), path.join(rootDir, 'sdk'), { recursive: true })
+  const metadata = JSON.parse(readFrom(rootDir, 'package.json'))
+  metadata.exports = { './sdk': './sdk/index.js' }
+  fs.writeFileSync(path.join(rootDir, 'package.json'), JSON.stringify(metadata))
+  const { stageDir } = stageWebRelease({ rootDir, outputDir: path.join(rootDir, 'output') })
+  assert.equal(fs.existsSync(path.join(stageDir, 'sdk/index.js')), true)
+  assert.equal(fs.existsSync(path.join(stageDir, 'sdk/python/gugo_sdk.py')), true)
+  const version = execFileSync(process.execPath, ['--input-type=module', '--eval',
+    'import { GUGO_SDK_CONTRACT_VERSION } from "gugo/sdk"; process.stdout.write(String(GUGO_SDK_CONTRACT_VERSION))'],
+  { cwd: stageDir, encoding: 'utf8', windowsHide: true })
+  assert.equal(version, '1')
 })
 
 function readFrom(rootDir, relativePath) {

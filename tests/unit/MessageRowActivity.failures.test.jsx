@@ -281,14 +281,13 @@ test('legacy interrupted, cancelled, and recovery-blocked snapshots never render
   }
 })
 
-test('unknown side-effect block clearly stops automatic retry and links to recovery settings', async () => {
+test('legacy unknown side-effect block uses one inline confirmation and keeps local file evidence', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
   const copy = {
-    'chatMessages.sideEffectUnknownTitle': 'Operation outcome unknown; automatic retry stopped',
-    'chatMessages.sideEffectUnknownBody': 'Verify the real outcome in Settings → Operation recovery. It will not run again until you confirm.',
-    'chatMessages.openSideEffectRecovery': 'Open Settings → Operation recovery',
+    'sideEffectRecovery.inlineTitle': 'Operation outcome unknown; automatic retry stopped',
+    'sideEffectRecovery.inlineWarning': 'Verify this operation here. It will not run again until you confirm.',
   }
   const msg = {
     id: 'assistant-side-effect-unknown',
@@ -300,6 +299,8 @@ test('unknown side-effect block clearly stops automatic retry and links to recov
       serverRecoveryBlocked: true,
       serverRecoveryKind: 'side_effect_outcome_unknown',
       serverConnectionState: 'blocked',
+      serverRecoveryActionPath: '/settings?tab=recovery',
+      retainedLocalFiles: [{ id: 'saved-report', path: 'D:\\work\\saved-report.pptx', filename: 'saved-report.pptx' }],
     },
   }
 
@@ -313,7 +314,11 @@ test('unknown side-effect block clearly stops automatic retry and links to recov
     assert.ok(card)
     assert.match(card.textContent, /automatic retry stopped/)
     assert.match(card.textContent, /It will not run again until you confirm/)
-    assert.equal(card.querySelector('a')?.getAttribute('href'), '#/settings?tab=recovery')
+    assert.equal(card.querySelector('a[href*="settings"]'), null)
+    assert.equal(card.querySelector('input,textarea'), null, 'long operation IDs never require typing')
+    assert.equal(rootElement.querySelector('[data-testid="incomplete-task-notice"]'), null)
+    assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
+    assert.match(rootElement.textContent, /saved-report\.pptx/u)
 
     await act(async () => root.render(
       <I18nProvider>

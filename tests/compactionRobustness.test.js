@@ -12,16 +12,13 @@ import {
   validateCompactCheckpointSource,
   validateToolCallChain,
 } from '../server/services/compactionService.js'
+import { estimateContextTokens } from '../server/services/contextCompactionMetrics.js'
 
-function estimatedTokens(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value)
-  let ascii = 0
-  let nonAscii = 0
-  for (const char of text) {
-    if (char.charCodeAt(0) <= 0x7f) ascii += 1
-    else nonAscii += 1
-  }
-  return Math.ceil(ascii / 4) + nonAscii
+// Measured with the estimator the production path uses, not a copy of it: a
+// private rule here would score a batch differently from the budget that built
+// it, and the check would pass or fail on the difference.
+function estimatedTokens(messages) {
+  return estimateContextTokens(messages, [])
 }
 
 test('compaction keeps canonical history untouched and preserves archived user text verbatim', () => {
@@ -166,14 +163,23 @@ test('compaction checkpoint source proves the archived range is balanced and unc
 })
 
 test('semantic summary input is split into bounded batches instead of serializing the whole archive', () => {
+  // Each message is deliberately several times the batch budget, so the property
+  // under test is the split itself: an archive that already fits says nothing
+  // about whether a bigger one would be bounded. (Chinese is charged at the
+  // tokenizer's real rate — see shared/textTokenEstimate.js — so one message
+  // needs a few thousand characters to overflow a 4096-token budget.)
   const archivedMessages = Array.from({ length: 24 }, (_, index) => ({
     role: index % 2 ? 'assistant' : 'user',
-    content: `${index}:${'中'.repeat(1800)}`,
+    content: `${index}:${'中'.repeat(9000)}`,
   }))
   const plan = buildCompactionSummaryBatches({ archivedMessages, inputTokenBudget: 4096 })
 
   assert.ok(plan.batches.length > 1)
-  assert.equal(plan.truncatedMessageCount, 24)
+  assert.equal(plan.truncatedMessageCount, 0)
+  assert.equal(plan.splitMessageCount, 24)
+  for (const [index, message] of archivedMessages.entries()) {
+    assert.equal(plan.batches.flat().filter((part) => part.index === index).map((part) => part.content || '').join(''), message.content)
+  }
   for (const batch of plan.batches) {
     const request = buildCompactionEvidenceMessages({ serializedMessages: batch })
     assert.ok(estimatedTokens(request) <= 4096, `batch exceeded budget: ${estimatedTokens(request)}`)

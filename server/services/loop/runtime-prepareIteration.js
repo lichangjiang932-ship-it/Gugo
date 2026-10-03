@@ -2,11 +2,29 @@ export async function prepareIteration(s) {
   const i = s.iteration
   const { DIRECTORY_REVIEW_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, buildAssistantToolCallsMessage, buildJobToolIdempotencyKey, normalizeToolCalls, observeToolCalls, runPreStep } = s.d
   if (s.artifactRecoveryActive()
+        && !s.completionDeferredForSteering
         && s.artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES
         && !s.hasRequiredArtifacts()) {
         return { kind: 'return', value: s.finishIncomplete(s.missingArtifactBlocker()) }
       }
   if (s.signal?.aborted) {
+        const reason = s.signal.reason
+        if (reason?.code === 'TURN_PAUSE_REQUESTED') {
+          // A user pause stops at an iteration boundary and keeps the turn
+          // resumable: `paused` is non-terminal, so "continue" picks up from the
+          // persisted checkpoint instead of redoing the task. Cancellation still
+          // throws, because a cancelled turn must not be resumed.
+          const clarification = { reason_code: 'user_paused' }
+          const terminal = await s.finishTerminalResult({
+            text: s.locale === 'en' ? 'Paused.' : '已暂停。',
+            artifactIds: s.artifactIds,
+            iterations: s.iter + 1,
+            paused: true,
+            clarification,
+            recovery: s.recovery,
+          }, { steeringLeaseId: i.steeringLeaseId, finalMetadata: { paused: true, clarification } })
+          return terminal ? { kind: 'return', value: terminal } : { kind: 'continue' }
+        }
         const error = new Error('Turn cancelled')
         error.name = 'AbortError'
         throw error

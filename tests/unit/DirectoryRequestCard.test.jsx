@@ -15,6 +15,10 @@ function setupDom() {
   globalThis.SVGElement = dom.window.SVGElement
   globalThis.MouseEvent = dom.window.MouseEvent
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  // React is imported before this per-test DOM and uses its legacy input
+  // listener fallback; jsdom has no attachEvent/detachEvent implementation.
+  dom.window.HTMLElement.prototype.attachEvent = () => {}
+  dom.window.HTMLElement.prototype.detachEvent = () => {}
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator })
   return dom
 }
@@ -116,4 +120,87 @@ test('目录请求卡保留建议路径、最小权限并通过内联浏览更�
     await act(async () => root.unmount())
     dom.window.close()
   }
+})
+
+async function mountCard(context, overrides = {}) {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const decisions = []
+  let props = { request: { purpose: 'Inspect one directory', suggested_path: 'D:\\Reports', access_mode: 'read_only' },
+    busy: '', onAuthorize: value => decisions.push(value), t, ...overrides }
+  const render = async updates => {
+    props = { ...props, ...updates }
+    await act(async () => root.render(<DirectoryRequestCard {...props} />))
+  }
+  context.after(async () => { await act(async () => root.unmount()); dom.window.close() })
+  await render()
+  return { dom, element, decisions, render,
+    authorize: () => click(dom, [...element.querySelectorAll('button')].find(button => button.textContent.includes('授权此路径'))) }
+}
+
+test('chat can explicitly reject, including while an authorization request is pending', async context => {
+  let rejected = 0
+  const view = await mountCard(context, { onReject: () => { rejected += 1 } })
+  const reject = () => view.element.querySelector('[data-testid="directory-reject-cancel"]')
+  assert.ok(reject())
+  await click(view.dom, reject())
+  assert.equal(rejected, 1)
+  assert.equal(view.decisions.length, 0)
+  await view.render({ busy: 'reject' })
+  assert.equal(reject().disabled, true)
+  await click(view.dom, reject())
+  assert.equal(rejected, 1)
+  await view.render({ busy: 'grant' })
+  assert.equal(reject().disabled, false)
+  assert.equal(view.element.querySelector('input').disabled, true)
+  await click(view.dom, reject())
+  assert.equal(rejected, 2)
+  assert.equal(view.decisions.length, 0)
+})
+
+test('a legacy job card without a rejection callback retains its existing editable mode', async context => {
+  const view = await mountCard(context)
+  assert.equal(view.element.querySelector('[data-testid="directory-reject-cancel"]'), null)
+  const mode = view.element.querySelector('select')
+  assert.equal(mode.disabled, false)
+  await act(async () => {
+    mode.value = 'read_write'
+    mode.dispatchEvent(new view.dom.window.Event('change', { bubbles: true }))
+  })
+  await view.authorize()
+  assert.equal(view.decisions[0].accessMode, 'read_write')
+})
+
+test('a chat card locks its callback to the pending requested mode even after synthetic select changes', async context => {
+  const view = await mountCard(context, { lockAccessMode: true })
+  const mode = view.element.querySelector('select')
+  assert.equal(mode.disabled, true)
+  await act(async () => {
+    mode.value = 'read_write'
+    mode.dispatchEvent(new view.dom.window.Event('change', { bubbles: true }))
+  })
+  await view.authorize()
+  assert.deepEqual(view.decisions[0], { path: 'D:\\Reports', accessMode: 'read_only', authorizationScope: 'session' })
+  await view.render({ request: { suggested_path: 'D:\\Reports', access_mode: 'read_write' } })
+  assert.equal(mode.value, 'read_write')
+  await view.authorize()
+  assert.equal(view.decisions[1].accessMode, 'read_write')
+})
+
+test('IME, repeated, modified and already-consumed Enter cannot authorize a directory', async context => {
+  const view = await mountCard(context, { lockAccessMode: true })
+  const input = view.element.querySelector('input')
+  await act(async () => input.focus())
+  for (const modifiers of [{ isComposing: true }, { keyCode: 229 }, { repeat: true },
+    { altKey: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { consumed: true }]) {
+    await act(async () => {
+      const event = new view.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...modifiers })
+      if (modifiers.consumed) event.preventDefault()
+      input.dispatchEvent(event)
+    })
+  }
+  assert.equal(view.decisions.length, 0)
+  await act(async () => input.dispatchEvent(new view.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
+  assert.equal(view.decisions.length, 1)
 })

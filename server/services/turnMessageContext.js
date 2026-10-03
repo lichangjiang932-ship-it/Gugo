@@ -148,13 +148,21 @@ function textContent(value) {
     .join('\n')
 }
 
+function historicalTurnEvidence(context) {
+  if (context?.turnEvidence === true) return context
+  const provenance = context?.forkSource
+  return provenance && typeof provenance === 'object' && !Array.isArray(provenance)
+    && provenance.turnEvidence === true ? provenance : null
+}
+
 function storedModelAuthoredContent(message, context) {
   const content = String(context?.modelContent ?? message?.content ?? '')
 
-  const state = context?.turnEvidence === true ? String(context.evidenceState || '').trim() : ''
+  const evidence = historicalTurnEvidence(context)
+  const state = String(evidence?.evidenceState || '').trim()
   if (!['blocked', 'cancelled', 'failed', 'interrupted'].includes(state)) return content
 
-  const failureValue = context?.error
+  const failureValue = evidence?.error
   const failureMessage = typeof failureValue === 'object' && failureValue !== null
     ? String(failureValue.message || failureValue.error || '').trim()
     : String(failureValue || '').trim()
@@ -193,9 +201,10 @@ function priorTurnOutcomeWire(message) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
     : null
-  const state = context?.turnEvidence === true ? String(context.evidenceState || '').trim() : ''
+  const evidence = historicalTurnEvidence(context)
+  const state = String(evidence?.evidenceState || '').trim()
   if (!['blocked', 'failed', 'interrupted'].includes(state)) return null
-  const errorValue = context?.error
+  const errorValue = evidence?.error
   const error = errorValue && typeof errorValue === 'object'
     ? {
         code: String(errorValue.code || '').slice(0, 160),

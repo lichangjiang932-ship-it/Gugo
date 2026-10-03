@@ -281,4 +281,9 @@ test('pause and public status projections preserve durable event precedence', ()
   assert.equal(runtime.publicStatus({ type: 'turn.started' }, true), 'running')
   assert.equal(runtime.publicStatus({ type: 'turn.completed' }), 'completed')
   assert.equal(runtime.publicStatus({ type: 'approval.required' }), 'awaiting_approval')
+  // An orphaned turn — a non-terminal last event with nothing running — was
+  // interrupted, not paused by the user.
+  assert.equal(runtime.publicStatus({ type: 'turn.started' }, false), 'interrupted')
+  assert.equal(runtime.publicStatus({ type: 'tool.completed' }, false), 'interrupted')
+  assert.equal(runtime.publicStatus(paused, false), 'paused')
 })

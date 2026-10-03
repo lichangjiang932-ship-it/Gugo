@@ -1,4 +1,12 @@
 import { ARTIFACT_DELIVERY_INCOMPLETE_REASON } from '../turnTerminalProjection.js'
+import { restoreCompletionPolicyState } from './completionPolicy.js'
+import { restoreMutationVerificationRecovery } from './mutationVerificationRecovery.js'
+
+/** Restored completion-policy counters, memoized on the loop state when present. */
+function completionPolicyCounters(s) {
+  return s.completionPolicyState?.counters
+    || restoreCompletionPolicyState(s.restoredState?.completionGuards).counters
+}
 
 const MISSING_ARTIFACT_BLOCKER = Object.freeze({ reason: ARTIFACT_DELIVERY_INCOMPLETE_REASON })
 const ARTIFACT_REQUIREMENT_BY_TOOL = Object.freeze({
@@ -31,10 +39,7 @@ function initializeArtifactCompletionState(s) {
     hasSuccessfulLocalPreflightRead,
     isCommandExecutionTool,
   } = s.d
-  s.artifactDeliveryRetries = Math.max(
-    0,
-    Number(s.restoredState?.completionGuards?.artifactDeliveryRetries) || 0,
-  )
+  s.artifactDeliveryRetries = completionPolicyCounters(s).artifactDeliveryRetries || 0
   s.forcedArtifactToolName = s.expectedArtifactTools.has(
     String(s.restoredState?.completionGuards?.forcedArtifactToolName || '').trim(),
   ) ? String(s.restoredState.completionGuards.forcedArtifactToolName).trim() : ''
@@ -138,10 +143,11 @@ function initializeMutationVerification(s) {
       : []
     return priorOutcomeStatusCopy(s.locale, { blocker, verifiedFiles })
   }
+  const restoredPolicies = completionPolicyCounters(s)
   for (const name of [
     'executionEvidenceRetries', 'executionReasoningRetries',
     'sourceHandoffRetries', 'directoryResumeRetries',
-  ]) s[name] = Math.max(0, Number(s.restoredState?.completionGuards?.[name]) || 0)
+  ]) s[name] = restoredPolicies[name] || 0
   s.hasVerifiedDirectoryResolution = s.directoryAuthorizationResolutions.some(
     (resolution) => resolution?.type === 'directory_authorization' && resolution?.approved === true,
   )
@@ -151,7 +157,7 @@ function initializeMutationVerification(s) {
   const repairedLegacyDebt = rawTargets.length === 1
     && normalizeMutationTarget(rawTargets[0]) === PROJECT_SCOPE_TARGET
     && !(s.restoredState?.completionGuards?.pendingDeletionTargets || []).length
-    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages)
+    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages, s.restoredState)
   s.restoredMutationTargets = repairedLegacyDebt ? [] : rawTargets
   s.recoveredHistoricalTargets = s.recoveredPriorLocalTargets
   s.pendingMutationTargets = new Set([
@@ -174,15 +180,14 @@ function initializeMutationVerification(s) {
     s.restoredState?.completionGuards?.verifiedRecoveredMutationObserved,
   )
   s.mutationSteeringPending = Boolean(s.restoredState?.completionGuards?.mutationSteeringPending)
-  s.mutationVerificationRetries = Math.max(
-    0, Number(s.restoredState?.completionGuards?.mutationVerificationRetries) || 0,
+  s.mutationVerificationRetries = restoredPolicies.mutationVerificationRetries || 0
+  s.mutationVerificationRecovery = restoreMutationVerificationRecovery(
+    s.restoredState?.completionGuards?.mutationVerificationRecovery,
   )
   s.pdfLayoutVerificationObserved = Boolean(
     s.restoredState?.completionGuards?.pdfLayoutVerificationObserved,
   )
-  s.pdfLayoutVerificationRetries = Math.max(
-    0, Number(s.restoredState?.completionGuards?.pdfLayoutVerificationRetries) || 0,
-  )
+  s.pdfLayoutVerificationRetries = restoredPolicies.pdfLayoutVerificationRetries || 0
 }
 
 function installLocalHtmlVerification(s) {
@@ -203,9 +208,7 @@ function installLocalHtmlVerification(s) {
   ].map(normalizeMutationTarget).filter(s.isLocalHtmlTarget))
   s.localHtmlReadSources = new Map()
   s.localHtmlDeliveryValidationPending = s.localHtmlDeliveryTargets.size > 0
-  s.localHtmlDeliveryRetries = Math.max(
-    0, Number(s.restoredState?.completionGuards?.localHtmlDeliveryRetries) || 0,
-  )
+  s.localHtmlDeliveryRetries = completionPolicyCounters(s).localHtmlDeliveryRetries || 0
   s.absoluteLocalHtmlPath = (target) => {
     const normalized = normalizeMutationTarget(target)
     if (!normalized || normalized === PROJECT_SCOPE_TARGET) return ''
@@ -327,25 +330,29 @@ function installTaskVerification(s) {
 function installCompletionPrompts(s) {
   const {
     AVAILABLE_TOOL_CAPABILITIES_MARKER,
+    ADJACENT_ARTIFACT_REVISION_MARKER,
+    ARTIFACT_SOURCE_DELIVERY_POLICY_MARKER,
+    DIRECT_EXECUTION_REQUIRED_MARKER,
     FILE_WRITE_TOOL_NAMES,
+    MANAGED_ATTACHMENT_EXECUTION_MARKER,
     PDF_LAYOUT_EXECUTION_CONTRACT_MARKER,
     buildPdfLayoutExecutionContract,
     isCommandExecutionTool,
     isFileArtifactTool,
     toolNameFromSpec,
   } = s.d
-  if (s.hasManagedAttachments && !s.hasRuntimeMarker('[MANAGED ATTACHMENT EXECUTION CONTRACT]')) {
+  if (s.hasManagedAttachments && !s.hasRuntimeMarker(MANAGED_ATTACHMENT_EXECUTION_MARKER)) {
     const uris = (s.job?.managedAttachments || []).map((item) => String(item?.uri || '').trim())
       .filter(Boolean).slice(0, 16)
     s.convo.push({ role: 'system', content: [
-      '[MANAGED ATTACHMENT EXECUTION CONTRACT]',
+      MANAGED_ATTACHMENT_EXECUTION_MARKER,
       'The attached files are already uploaded into Gugo-managed storage and require no directory permission or cloud connector.',
       uris.length ? `Use read_file with these exact URIs when file contents are needed: ${uris.join(', ')}.` : 'Use the attachment:// URI shown in the user message with read_file when file contents are needed.',
       'Do not search Dropbox, Google Drive, OneDrive, or browser apps to locate these files. Prefer the supplied extracted PDF/text content when it is already present.',
     ].join(' ') })
   }
   if (s.priorArtifacts.length > 0 && s.revisesAdjacentArtifact
-    && !s.hasRuntimeMarker('[ADJACENT ARTIFACT REVISION CONTRACT]')) {
+    && !s.hasRuntimeMarker(ADJACENT_ARTIFACT_REVISION_MARKER)) {
     const instruction = s.artifactRevisionMode === 'replace_original'
       ? ['The user explicitly requested an in-place revision of the original file.', 'Call each matching artifact generator with replace_artifact_id set to the exact authorized artifact ID shown above. The tool will preserve that artifact ID and filename while replacing its contents.', 'Do not create or deliver a second file for that artifact.']
       : s.artifactRevisionMode === 'create_copy'
@@ -354,7 +361,7 @@ function installCompletionPrompts(s) {
           ? ['The current request contains conflicting instructions about replacing the original versus creating a separate file.', 'Call request_clarification before any artifact generator. Do not guess which file disposition the user intended.']
           : ['No explicit in-place replacement was authorized. Create and deliver a new revised artifact ID, preserving the prior delivered file.']
     s.convo.push({ role: 'system', content: [
-      '[ADJACENT ARTIFACT REVISION CONTRACT]',
+      ADJACENT_ARTIFACT_REVISION_MARKER,
       'The current user request is a revision of the authorized delivered files listed below. An exact filename or artifact ID in the current request may deliberately select an older delivered file instead of the immediately preceding one.',
       `Prior delivered artifacts: ${JSON.stringify(s.priorArtifacts)}.`,
       'Use the preceding tool-call arguments and current user request as the source of truth, apply the requested changes, and call the matching artifact generator.',
@@ -363,12 +370,12 @@ function installCompletionPrompts(s) {
     ].join(' ') })
   }
   if ((s.directExecutionRequested || s.requiresPersistedArtifact || s.revisesAdjacentArtifact || s.codeSnippetRequested)
-    && !s.hasRuntimeMarker('[ARTIFACT SOURCE DELIVERY POLICY]')) {
+    && !s.hasRuntimeMarker(ARTIFACT_SOURCE_DELIVERY_POLICY_MARKER)) {
     s.convo.push({ role: 'system', content: s.codeSnippetRequested
-      ? '[ARTIFACT SOURCE DELIVERY POLICY] The user explicitly requested a code snippet, so you may include the specifically requested snippet in the answer. If the user also requested a downloadable artifact, the snippet does not replace the required successful artifact tool call.'
-      : '[ARTIFACT SOURCE DELIVERY POLICY] The user did not explicitly request a code snippet. Never output complete source code, a large code block, copy/paste instructions, or directions telling the user to create, save, rename, or convert the file manually. This remains true after malformed arguments, a failed artifact tool call, retries, missing capabilities, or exhausted execution budget. Correct and retry with tools when safe; otherwise report one concise blocker without source code.' })
+      ? `${ARTIFACT_SOURCE_DELIVERY_POLICY_MARKER} The user explicitly requested a code snippet, so you may include the specifically requested snippet in the answer. If the user also requested a downloadable artifact, the snippet does not replace the required successful artifact tool call.`
+      : `${ARTIFACT_SOURCE_DELIVERY_POLICY_MARKER} The user did not explicitly request a code snippet. Never output complete source code, a large code block, copy/paste instructions, or directions telling the user to create, save, rename, or convert the file manually. This remains true after malformed arguments, a failed artifact tool call, retries, missing capabilities, or exhausted execution budget. Correct and retry with tools when safe; otherwise report one concise blocker without source code.` })
   }
-  if ((s.directExecutionRequested || s.requiresPersistedArtifact)
+  if ((s.requiresExecutionEvidence || s.requiresPersistedArtifact)
     && !s.hasRuntimeMarker(AVAILABLE_TOOL_CAPABILITIES_MARKER)) {
     const activeNames = s.activeToolSpecs.map(toolNameFromSpec).filter(Boolean)
     const commandNames = activeNames.filter(isCommandExecutionTool)
@@ -387,9 +394,9 @@ function installCompletionPrompts(s) {
       'Do not call request_clarification merely to claim that a listed capability is missing; correct the arguments or use another listed tool and continue.',
     ].filter(Boolean).join(' ') })
   }
-  if ((s.directExecutionRequested || s.requiresPersistedArtifact)
-    && !s.hasRuntimeMarker('[DIRECT EXECUTION REQUIRED]')) {
-    s.convo.push({ role: 'system', content: '[DIRECT EXECUTION REQUIRED] The user asked for concrete work, not instructions for doing it later. Use the available tools now, follow the supplied steps, create or modify the requested deliverable, and verify the result before answering. Do not merely print a script or tell the user to run commands. If execution is genuinely blocked, report the concise blocker; full source is allowed only when the artifact source-delivery policy confirms that the user explicitly requested a code snippet. Keep internal deliberation brief; report the completed result or one concise, specific blocker.' })
+  if ((s.requiresExecutionEvidence || s.requiresPersistedArtifact)
+    && !s.hasRuntimeMarker(DIRECT_EXECUTION_REQUIRED_MARKER)) {
+    s.convo.push({ role: 'system', content: `${DIRECT_EXECUTION_REQUIRED_MARKER} The user asked for concrete work, not instructions for doing it later. Use the available tools now, follow the supplied steps, create or modify the requested deliverable, and verify the result before answering. Do not merely print a script or tell the user to run commands. If execution is genuinely blocked, report the concise blocker; full source is allowed only when the artifact source-delivery policy confirms that the user explicitly requested a code snippet. Keep internal deliberation brief; report the completed result or one concise, specific blocker.` })
   }
   if (s.requiresPdfLayoutVerification && !s.hasRuntimeMarker(PDF_LAYOUT_EXECUTION_CONTRACT_MARKER)) {
     s.convo.push({ role: 'system', content: buildPdfLayoutExecutionContract(s.executionIntentText) })

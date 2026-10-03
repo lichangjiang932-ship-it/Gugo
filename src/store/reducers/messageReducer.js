@@ -1,6 +1,7 @@
 import { TOOL_LIVE_OUTPUT_CHAR_LIMIT } from '../../lib/turnClient/toolOutputBuffer.js'
 import { removeVerifiedLocalFilesFromRetained } from '../../lib/localFileReferences.js'
 import { TOOL_CALL_STATUS } from '../taskStatus.js'
+import { preserveModelActivityTiming } from '../modelActivityTiming.js'
 
 function applyStreamCursor(message, action) {
   const meta = message.meta || {}
@@ -208,7 +209,7 @@ export function reduceMessageState(state, action) {
             ...last,
             meta: {
               ...cursor.meta,
-              ...(action.meta || {}),
+              ...preserveModelActivityTiming(cursor.meta, action.meta || {}),
               reasoning: (cursor.meta.reasoning || '') + delta,
             },
           }
@@ -237,7 +238,7 @@ export function reduceMessageState(state, action) {
           msgs[messageIndex] = {
             ...last,
             content: (last.content || '') + delta,
-            meta: { ...cursor.meta, ...(action.meta || {}) },
+            meta: { ...cursor.meta, ...preserveModelActivityTiming(cursor.meta, action.meta || {}) },
           }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),

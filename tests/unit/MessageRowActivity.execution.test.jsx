@@ -4,8 +4,219 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
+import { translateKey } from '../../src/i18n/translations.js'
 import MessageRow from '../../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 import { setupDom } from './helpers/messageRowActivityTestUtils.js'
+import { sessionFileChanges } from '../../src/lib/sessionChanges.js'
+import { createTurnEvent } from '../../shared/turnEvents.js'
+import { dispatchTurnEvent } from '../../src/lib/turnClient/turnEventDispatch.js'
+import { reduceMessageState } from '../../src/store/reducers/messageReducer.js'
+
+const diagnosticFingerprint = 'a'.repeat(64)
+const contextDiagnosticFixture = {
+  version: 1, stage: 'pre_compaction', comparisonScope: 'within_turn',
+  stablePrefixFingerprint: diagnosticFingerprint, contextFingerprint: diagnosticFingerprint,
+  toolsFingerprint: diagnosticFingerprint, stableBlockCount: 1, messageCount: 3, toolCount: 2,
+  prefixComparable: false, stablePrefixChanged: null, toolsChanged: null,
+  memory: { failed: false, touchFailed: false, linkedCount: 2,
+    semantic: { code: 'MEMORY_SEMANTIC_SCAN_LIMIT', coverage: 'partial', truncated: true, scanned: 42 } },
+}
+const wireDiagnosticFixture = {
+  version: 1, stage: 'wire', comparisonScope: 'same_owner_endpoint_model_config', prefixKind: 'leading_instructions',
+  available: true, truncated: false, bodyBytes: 100, ownerScopeFingerprint: diagnosticFingerprint,
+  endpointFingerprint: diagnosticFingerprint, modelFingerprint: diagnosticFingerprint, configFingerprint: diagnosticFingerprint,
+  bodyFingerprint: diagnosticFingerprint, prefixFingerprint: diagnosticFingerprint, toolsFingerprint: diagnosticFingerprint,
+  identityComparable: true, prefixBlocks: 1, messageCount: 3, toolCount: 2,
+  prefixComparable: true, prefixChanged: false, toolsChanged: false, bodyChanged: true,
+}
+
+function diagnosticState() {
+  let state = { activeSessionId: 'diagnostic-session', sessions: [{ id: 'diagnostic-session', messages: [{
+    id: 'diagnostic-message', role: 'assistant', content: '', meta: { streaming: true, executionStarted: true },
+  }] }] }
+  return {
+    message: () => state.sessions[0].messages[0],
+    send: (type, payload, sequence, overrides = {}) => dispatchTurnEvent(createTurnEvent({
+      id: `diagnostic-event-${sequence}`, sessionId: 'diagnostic-session', turnId: 'diagnostic-turn',
+      sequence, createdAt: 1000 + sequence, type, payload, ...overrides,
+    }), { taskId: 'diagnostic-task', messageTarget: { sessionId: 'diagnostic-session', messageId: 'diagnostic-message' },
+      dispatch: (action) => { state = reduceMessageState(state, action) || state },
+    }),
+  }
+}
+
+for (const lang of ['zh', 'en']) {
+  test(`wire/context events survive dispatch and reducer without diagnostic chrome in normal conversation (${lang})`, async (t) => {
+    const dom = setupDom()
+    const element = document.getElementById('root')
+    const root = createRoot(element)
+    const state = diagnosticState()
+    const translate = (key, vars = {}) => translateKey(key, lang).replace(/\{(\w+)\}/g, (_, name) => vars[name])
+    const network = t.mock.method(globalThis, 'fetch', async () => { throw new Error('diagnostics must not make requests') })
+    const render = () => act(async () => root.render(<I18nProvider><MessageRow msg={state.message()}
+      rowKey="diagnostic-message" generatingMessageId={state.message().meta.streaming ? 'diagnostic-message' : ''}
+      lang={lang} t={translate} /></I18nProvider>))
+    try {
+      await state.send('turn.started', {}, 0)
+      assert.equal((await state.send('model.phase', { phase: 'context_prepared', contextDiagnostics: contextDiagnosticFixture }, 1)).cursorCommitted, true)
+      assert.equal((await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+        modelRequestId: 'request-fixture', physicalAttempt: 2 }, 2)).cursorCommitted, true)
+      assert.deepEqual(state.message().meta.modelContextDiagnostics, contextDiagnosticFixture)
+      assert.deepEqual(state.message().meta.modelWireDiagnostics, wireDiagnosticFixture)
+      assert.equal(state.message().meta.modelRequestId, 'request-fixture')
+      assert.equal(state.message().meta.modelPhysicalAttempt, 2)
+      await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+        modelRequestId: 'stale-request', physicalAttempt: 1 }, 1)
+      assert.equal(state.message().meta.modelRequestId, 'request-fixture', 'stale diagnostic cannot replace current request identity')
+      await render()
+      const live = element.querySelector('[data-testid="execution-diagnostics"]')
+      assert.equal(Boolean(live), false)
+      assert.doesNotMatch(element.textContent, /request-fixture|MEMORY_SEMANTIC_SCAN_LIMIT|实际 KV|Actual KV/u)
+      await state.send('model.phase', { phase: 'completed', usage: { promptTokens: 100, cacheHitTokens: 20 } }, 3)
+      await state.send('assistant.delta', { text: 'Final fixture answer' }, 4)
+      await state.send('turn.completed', { text: 'Final fixture answer' }, 5)
+      await render()
+      const toggle = element.querySelector('[data-testid="execution-toggle"]')
+      assert.equal(Boolean(toggle), false, 'trace metadata must not create process UI for a tool-free terminal')
+      const final = element.querySelector('[data-testid="execution-diagnostics"]')
+      assert.equal(Boolean(final), false)
+      assert.equal(state.message().meta.modelUsage.cacheHitTokens, 20, 'provider evidence is retained, not removed from state')
+      assert.match(element.textContent, /Final fixture answer/u)
+      assert.equal(network.mock.callCount(), 0)
+    } finally { await act(async () => root.unmount()); dom.window.close() }
+  })
+}
+
+test('completion-policy exhaustion remains durable and failed without raw diagnostics in the transcript', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const state = diagnosticState()
+  const policies = [{ id: 'mutation_verification', attempts: 2, limit: 2, exhausted: true }]
+  const t = (key, vars = {}) => translateKey(key, 'en').replace(/\{(\w+)\}/g, (_, name) => vars[name])
+  try {
+    await state.send('turn.started', {}, 0)
+    await state.send('turn.failed', { code: 'TURN_INCOMPLETE', incompleteReason: 'task_verification_repair_exhausted', completionPolicies: policies }, 1)
+    assert.equal(state.message().meta.failed, true)
+    assert.deepEqual(state.message().meta.serverFailure.completionPolicies, policies)
+    await act(async () => root.render(<I18nProvider><MessageRow msg={state.message()} rowKey="diagnostic-message"
+      generatingMessageId="" lang="en" t={t} /></I18nProvider>))
+    const toggle = element.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(Boolean(toggle), false)
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.ok(element.textContent.trim(), 'the actual failure must remain visible')
+    assert.equal(state.message().meta.failed, true)
+    assert.deepEqual(state.message().meta.serverFailure.completionPolicies, policies)
+  } finally { await act(async () => root.unmount()); dom.window.close() }
+})
+
+test('manual retry clears prior request diagnostics and cache usage atomically without stale resurrection', async () => {
+  const state = diagnosticState()
+  await state.send('model.phase', { phase: 'context_prepared', contextDiagnostics: contextDiagnosticFixture }, 0)
+  await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+    modelRequestId: 'old-request', physicalAttempt: 1 }, 1)
+  await state.send('model.phase', { phase: 'completed', usage: { promptTokens: 30, cacheHitTokens: 20 } }, 2)
+  assert.equal(state.message().meta.modelUsage.cacheHitTokens, 20)
+  await state.send('turn.attempt', { attempt: 2, reason: 'checkpoint_resume', resetStreaming: true,
+    checkpointSequence: 1, previousStreamSequence: 2, assistantText: '', reasoningText: '' }, 3)
+  for (const key of ['modelContextDiagnostics', 'modelWireDiagnostics', 'modelRequestId', 'modelPhysicalAttempt', 'modelUsage']) {
+    assert.equal(state.message().meta[key], null, key)
+  }
+  await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+    modelRequestId: 'stale-request', physicalAttempt: 1 }, 1)
+  assert.equal(state.message().meta.modelRequestId, null)
+  assert.equal(state.message().meta.serverLastSequence, 3)
+})
+
+test('model failures stay visible without rendering request diagnostics or fabricating tool activity', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const state = diagnosticState()
+  const t = (key, vars = {}) => translateKey(key, 'en').replace(/\{(\w+)\}/g, (_, name) => vars[name])
+  const render = (msg) => act(async () => root.render(<I18nProvider><MessageRow msg={msg} rowKey={msg.id}
+    generatingMessageId="" lang="en" t={t} /></I18nProvider>))
+  try {
+    await state.send('model.phase', { phase: 'context_prepared', contextDiagnostics: contextDiagnosticFixture }, 0)
+    await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+      modelRequestId: 'failed-request', physicalAttempt: 1 }, 1)
+    await state.send('turn.failed', { code: 'MODEL_NOT_LOADED' }, 2)
+    await render(state.message())
+    const toggle = element.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(Boolean(toggle), false)
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.doesNotMatch(element.textContent, /failed-request/u)
+    assert.equal(state.message().meta.modelRequestId, 'failed-request')
+    assert.ok(element.textContent.trim(), 'the real failure is not hidden with diagnostic metadata')
+    assert.equal(element.querySelector('.chat-tool-list'), null)
+    await render({ id: 'before-execution', role: 'assistant', content: '', meta: {
+      streaming: false, failed: true, executionStarted: false, serverFailure: { code: 'MODEL_CONFIG_MISSING' },
+    } })
+    assert.equal(element.querySelector('[data-testid="execution-toggle"]'), null)
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.equal(element.querySelector('.chat-tool-list'), null)
+  } finally { await act(async () => root.unmount()); dom.window.close() }
+})
+
+test('restored diagnostic metadata cannot render arbitrary prompt or credential fields', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const t = (key) => translateKey(key, 'en')
+  try {
+    await act(async () => root.render(<I18nProvider><MessageRow rowKey="unsafe-diagnostics" generatingMessageId=""
+      lang="en" t={t} msg={{ id: 'unsafe-diagnostics', role: 'assistant', content: 'Result', meta: {
+        streaming: false, modelWireDiagnostics: { ...wireDiagnosticFixture, prompt: 'PRIVATE_PROMPT' },
+        modelContextDiagnostics: { ...contextDiagnosticFixture, credentials: 'PRIVATE_TOKEN' },
+      } }} /></I18nProvider>))
+    const toggle = element.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(toggle, null)
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.doesNotMatch(element.textContent, /PRIVATE_/u)
+  } finally { await act(async () => root.unmount()); dom.window.close() }
+})
+
+for (const lang of ['zh', 'en']) {
+  test(`collapsed execution adds localized results without changing the duration header (${lang})`, async () => {
+    const dom = setupDom()
+    const element = document.getElementById('root')
+    const root = createRoot(element)
+    const t = (key, vars = {}) => translateKey(key, lang).replace(/\{(\w+)\}/g, (_, name) => vars[name])
+    const toolCalls = [
+      { id: 'write', name: 'write_file', arguments: { path: 'src/a.js' }, status: 'success' },
+      { id: 'edit', name: 'edit_file', arguments: { path: 'src/a.js' }, status: 'success' },
+      { id: 'failed', name: 'read_file', arguments: { path: 'missing.js' }, status: 'error', error: 'missing' },
+    ]
+    const render = (streaming, calls = toolCalls) => act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={{ id: 'summary', role: 'assistant', content: 'Result', meta: { streaming, latency: 2400, toolCalls: calls } }}
+          rowKey="summary" generatingMessageId={streaming ? 'summary' : ''} lang={lang} t={t} />
+      </I18nProvider>,
+    ))
+    try {
+      await render(true)
+      assert.equal(element.querySelector('[data-testid="execution-result-summary"]'), null)
+      await render(false)
+      const toggle = element.querySelector('[data-testid="execution-toggle"]')
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+      const summary = element.querySelector('[data-testid="execution-result-summary"]')
+      assert.equal(summary.parentElement, toggle)
+      assert.equal(summary.textContent.trim(), lang === 'zh' ? '· 已改 1 个文件 · 1 个工具失败' : '· 1 file changed · Failed tools: 1')
+      assert.equal(element.querySelector('[data-testid="task-duration-header"]').textContent,
+        [t('chatMessages.execution'), t('chatMessages.durationSeconds', { seconds: 2 }), t('chatMessages.executionToolCount', { count: 3 })].join(' · '))
+      await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+      assert.equal(element.querySelector('[data-testid="execution-result-summary"]'), null)
+      await render(false)
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+      await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+      await render(false, [{ id: 'read', name: 'read_file', arguments: {}, status: 'success' }])
+      assert.equal(element.querySelector('[data-testid="execution-result-summary"]'), null)
+    } finally {
+      await act(async () => root.unmount())
+      dom.window.close()
+    }
+  })
+}
 
 test('tool readiness is visible without a tool card and yields to the single durable tool call', async () => {
   const dom = setupDom()
@@ -44,7 +255,7 @@ test('tool readiness is visible without a tool card and yields to the single dur
 
     const readiness = rootElement.querySelector('[data-testid="model-activity"]')
     assert.ok(readiness)
-    assert.match(readiness.textContent, /正在准备运行 bash_exec/)
+    assert.match(readiness.textContent, /正在准备运行 运行命令/)
     assert.equal(rootElement.querySelectorAll('.chat-run-timeline').length, 0)
     assert.equal(rootElement.querySelector('.animate-pulse'), null)
 
@@ -115,7 +326,7 @@ test('assistant keeps narration and tools in true DOM order with command details
       </I18nProvider>,
     ))
 
-    const quotable = rootElement.querySelector('[data-quotable="true"]')
+    const quotable = rootElement.querySelector('[data-message-body="true"]')
     assert.ok(quotable)
     const executionToggle = quotable.querySelector('[data-testid="execution-toggle"]')
     assert.equal(executionToggle?.getAttribute('aria-expanded'), 'true')
@@ -131,8 +342,9 @@ test('assistant keeps narration and tools in true DOM order with command details
 
     const timelines = [...executionContent.querySelectorAll(':scope > .chat-run-timeline')]
     assert.equal(timelines.length, 2)
-    assert.equal(timelines[0].querySelector('.chat-tool-step-marker')?.textContent, '1')
-    assert.equal(timelines[1].querySelector('.chat-tool-step-marker')?.textContent, '2')
+    // Steps are named by what the agent was doing, not numbered.
+    assert.equal(timelines[0].querySelector('[data-kind]')?.getAttribute('data-kind'), 'consult')
+    assert.equal(timelines[1].querySelector('[data-kind]')?.getAttribute('data-kind'), 'command')
     const runningToggle = timelines[1].querySelector('[data-testid="tool-step-toggle"]')
     assert.equal(runningToggle?.getAttribute('aria-expanded'), 'false')
     assert.equal(timelines[1].querySelector('[data-testid="tool-step-details"]'), null)
@@ -302,7 +514,7 @@ test('only final deliverables are clickable in execution steps and appear below'
   }
 })
 
-test('reasoning-only completion uses a thought label without exposing private reasoning', async () => {
+test('completed plain replies do not manufacture a process block from private reasoning metadata', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -341,11 +553,182 @@ test('reasoning-only completion uses a thought label without exposing private re
     ))
 
     const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
-    assert.match(executionToggle?.textContent || '', /Thought · 1s/)
-    assert.doesNotMatch(executionToggle?.textContent || '', /Execution/)
-    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(Boolean(executionToggle), false)
     assert.doesNotMatch(rootElement.textContent, /private chain-of-thought/)
     assert.match(rootElement.textContent, /Safe final answer/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('consecutive retrieval calls collapse into one labelled group while a command stands alone', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const translate = (key, vars = {}) => translateKey(key, 'zh').replace(/\{(\w+)\}/g, (_, name) => vars[name])
+  const msg = {
+    id: 'assistant-grouped',
+    role: 'assistant',
+    content: 'Done.',
+    timestamp: Date.now(),
+    meta: {
+      toolCalls: [
+        { id: 'read', name: 'read_file', arguments: JSON.stringify({ path: 'D:\\work\\a.js' }), result: JSON.stringify({ ok: true }), status: 'success', textOffset: 0 },
+        { id: 'grep', name: 'grep_code', arguments: JSON.stringify({ pattern: 'needle' }), result: JSON.stringify({ ok: true }), status: 'success', textOffset: 0 },
+        { id: 'run', name: 'run_command', arguments: JSON.stringify({ command: 'npm test' }), result: JSON.stringify({ ok: true }), status: 'success', textOffset: 0 },
+      ],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" lang="zh" t={translate} />
+      </I18nProvider>,
+    ))
+    await act(async () => rootElement.querySelector('[data-testid="execution-toggle"]')
+      .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+
+    // Reads and searches share one 查阅 row, with per-kind counts.
+    const groups = [...rootElement.querySelectorAll('[data-testid="tool-group-toggle"]')]
+    assert.equal(groups.length, 1, 'only the retrieval run groups')
+    assert.equal(groups[0].querySelector('.chat-tool-group-label').textContent, '查阅')
+    assert.equal(groups[0].querySelector('[data-testid="tool-group-counts"]').textContent, '1 文件, 1 搜索')
+    assert.equal(groups[0].getAttribute('aria-expanded'), 'true', 'the working-out is visible inside the fold')
+
+    // The command is its own row: a group of one is not dressed up as a group.
+    const rows = [...rootElement.querySelectorAll('[data-testid="tool-call-step"]')]
+    assert.deepEqual(rows.map((row) => row.getAttribute('data-kind')), ['consult', 'search', 'command'])
+    assert.equal(rootElement.textContent.includes('终端'), true)
+    assert.equal(rootElement.textContent.includes('npm test'), true)
+
+    // A group the reader closes keeps its children out of the layout.
+    await act(async () => groups[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(groups[0].getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelectorAll('[data-kind="consult"]').length, 0)
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 1)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an edit row reports the executor-reported diffstat', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const t = (key, values = {}) => key === 'chatMessages.progressChanges'
+    ? `+${values.additions} / -${values.deletions}`
+    : key
+  const msg = {
+    id: 'assistant-edit-stat',
+    role: 'assistant',
+    content: 'Edited.',
+    timestamp: Date.now(),
+    meta: {
+      toolCalls: [{
+        id: 'edit',
+        name: 'edit_file',
+        arguments: JSON.stringify({ path: 'D:\\work\\a.js' }),
+        result: JSON.stringify({ ok: true, changes: [{ path: 'D:\\work\\a.js', additions: 19, deletions: 1 }] }),
+        status: 'success',
+        textOffset: 0,
+      }, {
+        id: 'no-stat',
+        name: 'edit_file',
+        arguments: JSON.stringify({ path: 'D:\\work\\b.js' }),
+        result: JSON.stringify({ ok: true }),
+        status: 'success',
+        textOffset: 0,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" lang="zh" t={t} />
+      </I18nProvider>,
+    ))
+    await act(async () => rootElement.querySelector('[data-testid="execution-toggle"]')
+      .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+
+    const stats = [...rootElement.querySelectorAll('[data-testid="tool-diffstat"]')]
+    // Only the call whose executor reported line counts shows them: nothing is
+    // inferred from a path or a file body.
+    assert.equal(stats.length, 1)
+    assert.equal(stats[0].textContent, '+19-1')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a fold the reader opened while tools were running is not collapsed under them at completion', async () => {
+  // The auto-collapse exists so a finished turn is quiet by default. It used to
+  // fire regardless of what the reader had done, so a timeline someone was
+  // reading vanished the moment the turn ended.
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const startedAt = Date.now() - 2400
+  const baseMessage = {
+    id: 'assistant-reader-fold',
+    role: 'assistant',
+    content: 'Working on it.',
+    timestamp: startedAt,
+    meta: {
+      streaming: true,
+      turnStartedAt: startedAt,
+      toolCalls: [{
+        id: 'reader-tool',
+        name: 'read_file',
+        arguments: JSON.stringify({ path: 'README.md' }),
+        status: 'running',
+        textOffset: 0,
+      }],
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'chatMessages.execution') return 'Execution'
+    if (key === 'chatMessages.durationSeconds') return `${values.seconds}s`
+    if (key === 'chatMessages.durationLessThanSecond') return '<1s'
+    if (key === 'chatMessages.executionToolCount') return `${values.count} tools`
+    return key
+  }
+  const renderMessage = (msg, generatingMessageId) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow msg={msg} rowKey={msg.id} generatingMessageId={generatingMessageId} lang="en" t={t} />
+    </I18nProvider>,
+  ))
+
+  try {
+    await renderMessage(baseMessage, baseMessage.id)
+    const toggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(toggle?.getAttribute('aria-expanded'), 'true', 'it opens while tools run')
+    // The reader closes it and opens it again: both are their decision, not the
+    // component's, and the completion must not overrule the second one.
+    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+
+    await renderMessage({
+      ...baseMessage,
+      meta: {
+        ...baseMessage.meta,
+        streaming: false,
+        latency: 2400,
+        toolCalls: [{ ...baseMessage.meta.toolCalls[0], status: 'success', result: '{}' }],
+      },
+    }, '')
+
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true', 'the reader keeps the fold they opened')
+    assert.ok(rootElement.querySelector('[data-testid="execution-content"]'))
+    // Nothing is owed twice: the collapsed-state outcome line stays out of the
+    // expanded view.
+    assert.equal(rootElement.querySelector('[data-testid="execution-result-summary"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -434,6 +817,54 @@ test('execution disclosure auto-collapses after completion and preserves later m
     }, '')
     assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'true')
     assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), manuallyExpandedContent)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('message-row diffstats match the session panel for workspace-relative paths', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const workspacePath = 'D:/work/project'
+  const msg = {
+    id: 'relative-diffstat',
+    role: 'assistant',
+    content: '',
+    meta: {
+      streaming: false,
+      toolCalls: [{
+        id: 'relative-edit',
+        name: 'edit_file',
+        arguments: JSON.stringify({ path: 'src/app.js', old_string: 'old', new_string: 'new' }),
+        result: JSON.stringify({
+          ok: true,
+          path: 'src/app.js',
+          changes: [{ path: 'src/app.js', additions: 3, deletions: 1 }],
+        }),
+        status: 'success',
+      }],
+    },
+  }
+  const translate = (key, values = {}) => translateKey(key, 'en')
+    .replace(/\{(\w+)\}/g, (_, name) => values[name])
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" workspacePath={workspacePath}
+          lang="en" t={translate} />
+      </I18nProvider>,
+    ))
+    await act(async () => element.querySelector('[data-testid="execution-toggle"]').click())
+
+    const messageRowStat = element.querySelector('[data-testid="tool-diffstat"]')
+    const panelStat = sessionFileChanges([msg], { workspacePath }).files[0].reported
+    assert.ok(messageRowStat)
+    assert.match(messageRowStat.textContent, /\+3/u)
+    assert.match(messageRowStat.textContent, /-1/u)
+    assert.deepEqual(panelStat, { additions: 3, deletions: 1 })
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

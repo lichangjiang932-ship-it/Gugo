@@ -12,6 +12,7 @@ import {
   shutdownRuntimePlugins,
 } from '../plugins/pluginRegistry.js'
 import { registerBrowserTools } from '../services/browserTools.js'
+import { stopAllPreviewServers } from '../services/previewServerStore.js'
 import { closeCronScheduler, getCronScheduler } from '../services/cronScheduler.js'
 import { registerConnectorTools } from '../services/connectorTools.js'
 import {
@@ -80,6 +81,7 @@ export const BUILTIN_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
   toolLoop: 'builtin.resource.tool-loop',
   mcp: 'builtin.resource.mcp',
   browser: 'builtin.resource.browser',
+  preview: 'builtin.resource.preview',
   shellTrust: 'builtin.startup.shell-trust',
   browserTools: 'builtin.startup.browser-tools',
   connectorTools: 'builtin.startup.connector-tools',
@@ -110,6 +112,7 @@ const DEFAULT_ADAPTERS = Object.freeze({
   closeSessionContentMaterializerRuntime,
   shutdownMcpAll,
   shutdownBrowsers,
+  stopAllPreviewServers,
   warnShellTrust,
   registerBrowserTools,
   registerConnectorTools,

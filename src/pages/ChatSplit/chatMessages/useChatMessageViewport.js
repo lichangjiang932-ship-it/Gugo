@@ -34,16 +34,14 @@ function routeMessageTarget(routeHash) {
   }
 }
 
-export default function useChatMessageViewport({ messages, onQuoteSelection, routeHash = '' }) {
+export default function useChatMessageViewport({ messages, routeHash = '' }) {
   const [windowStart, setWindowStart] = useState(null)
   const { hiddenCount, hiddenAfterCount, visibleMessages } = getMessageWindow(
     messages,
     DEFAULT_MESSAGE_WINDOW_SIZE,
     windowStart,
   )
-  const [quoteBubble, setQuoteBubble] = useState(null)
   const scrollRef = useRef(null)
-  const containerRef = useRef(null)
   const [atBottom, setAtBottom] = useState(true)
   const atBottomRef = useRef(true)
   const lastCountRef = useRef(messages.length)
@@ -155,30 +153,7 @@ export default function useChatMessageViewport({ messages, onQuoteSelection, rou
     const timer = window.setTimeout(() => document.getElementById(targetId)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80)
     return () => window.clearTimeout(timer)
   }, [hiddenCount, messages, routeHash, visibleMessages.length])
-  useEffect(() => {
-    const handleSelectionChange = () => {
-      const selection = typeof window !== 'undefined' ? window.getSelection() : null
-      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return setQuoteBubble(null)
-      const text = selection.toString().trim()
-      if (!text) return setQuoteBubble(null)
-      const range = selection.getRangeAt(0)
-      const startElement = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement
-      const endElement = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement
-      const startBlock = startElement?.closest?.('[data-quotable="true"]')
-      const endBlock = endElement?.closest?.('[data-quotable="true"]')
-      if (!startBlock || startBlock !== endBlock) return setQuoteBubble(null)
-      const container = containerRef.current
-      if (!container) return
-      const rect = range.getBoundingClientRect()
-      const containerRect = container.getBoundingClientRect()
-      setQuoteBubble({ top: rect.top - containerRect.top + container.scrollTop - 36, left: Math.max(8, rect.left - containerRect.left + rect.width / 2), text })
-    }
-    document.addEventListener('mouseup', handleSelectionChange)
-    document.addEventListener('keyup', handleSelectionChange)
-    return () => { document.removeEventListener('mouseup', handleSelectionChange); document.removeEventListener('keyup', handleSelectionChange) }
-  }, [])
-
-  const bindContainer = (element) => { scrollRef.current = element; containerRef.current = element }
+  const bindContainer = (element) => { scrollRef.current = element }
   const loadEarlierMessages = () => {
     const element = scrollRef.current
     const anchor = element?.querySelector(`[data-chat-message-index="${hiddenCount}"]`)
@@ -213,22 +188,14 @@ export default function useChatMessageViewport({ messages, onQuoteSelection, rou
     element.querySelector(`[data-chat-turn-index="${messageIndex}"]`)
       ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
-  const quoteSelection = () => {
-    if (!quoteBubble?.text) return
-    onQuoteSelection?.(quoteBubble.text)
-    setQuoteBubble(null)
-    if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges()
-  }
   return {
     hiddenCount,
     visibleMessages,
-    quoteBubble,
     atBottom: hiddenAfterCount === 0 && atBottom,
     activeTurnIndex,
     bindContainer,
     loadEarlierMessages,
     scrollToBottom,
     scrollToTurn,
-    quoteSelection,
   }
 }

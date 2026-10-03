@@ -12,6 +12,8 @@ import { recordChatFeedback } from '../../lib/evolutionClient.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import usePlanCardState from './usePlanCardState.js'
+import useChatOverlays from './useChatOverlays.js'
 import ChatSplitView from './ChatSplitView.jsx'
 import useInputHistory from './useInputHistory.js'
 import useChatApprovals from './useChatApprovals.js'
@@ -19,7 +21,7 @@ import useDirectoryApproval from './useDirectoryApproval.js'
 import useVoiceRecognition from './useVoiceRecognition.js'
 import useChatSessionLifecycle from './useChatSessionLifecycle.js'
 import useChatSendFlow from './useChatSendFlow.js'
-import useTurnSteering from './useTurnSteering.js'
+import useTurnSteering, { createRefusalWithFeedback } from './useTurnSteering.js'
 import useSlashCommandExecution from './useSlashCommandExecution.js'
 import { readSessionDraft } from '../../lib/chatDrafts.js'
 import { getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
@@ -30,6 +32,7 @@ import { useChatSendActions } from './chatSendActions.js'
 import useChatTurnRecovery from './useChatTurnRecovery.js'
 import useChatWorkspaceState from './useChatWorkspaceState.js'
 import useProjectFilesWorkbench from './useProjectFilesWorkbench.js'
+import useChatSessionBranches from './useChatSessionBranches.js'
 const CHAT_MODEL_SETTINGS_PATH = settingsPathForSection(SETTINGS_TAB_MODELS, [], { returnTo: '/chat' })
 export default function ChatSplit() {
   const location = useLocation()
@@ -41,17 +44,17 @@ export default function ChatSplit() {
   const initialSessionDraft = readSessionDraft((state.sessionDrafts || {})[state.activeSessionId])
   const [input, setInput] = useState(() => (state.activeSessionId
     ? initialSessionDraft.text : String(state.draftInput || '')))
-  const [workbenchMessage, setWorkbenchMessage] = useState('')
   const [attachments, setAttachments] = useState(() => initialSessionDraft.attachments)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showContextUsage, setShowContextUsage] = useState(readContextUsageVisible)
   const [workbenchOpen, setWorkbenchOpen] = useState(readWorkbenchOpen)
-  const [workbenchTab, setWorkbenchTab] = useState('files')
+  // The panel opens on its entry page: the reader picks a tool from there, or
+  // a key does. The old default was the files tab, which is no longer in it.
+  const [workbenchTab, setWorkbenchTab] = useState('entry')
   const [desktopPetVisible, setDesktopPetVisible] = useState(readDesktopPetVisible)
   const [slashInlinePanel, setSlashInlinePanel] = useState(null)
   const [showContextPanel, setShowContextPanel] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
-  const [messageEdit, setMessageEdit] = useState(null)
   const [authoritativeModelFailure, setAuthoritativeModelFailure] = useState(null)
   const [contextSystemPrompts, setContextSystemPrompts] = useState({})
   const abortCtrlRef = useRef(null)
@@ -59,12 +62,7 @@ export default function ChatSplit() {
   const resumingTurnIdsRef = useRef(new Set())
   const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state }, [state])
-  useProjectFilesWorkbench({ setWorkbenchOpen, setWorkbenchTab })
-  useEffect(() => {
-    if (!workbenchMessage) return undefined
-    const timer = setTimeout(() => setWorkbenchMessage(''), 5000)
-    return () => clearTimeout(timer)
-  }, [workbenchMessage])
+  const { workbenchMessage, setWorkbenchMessage } = useProjectFilesWorkbench()
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,
@@ -78,7 +76,6 @@ export default function ChatSplit() {
     handleWorkspaceSelect, recentWorkspaces, selectedWorkspacePath,
     workspaceBusy, workspaceError,
   } = useChatWorkspaceState({ activeSession, activeSessionId, dispatch, state, t })
-  const clearMessageEditForSessionChange = useCallback(() => setMessageEdit(null), [])
   const navigateInputHistory = useInputHistory({
     messages,
     input,
@@ -92,11 +89,13 @@ export default function ChatSplit() {
   const { abortSessionIdRef, attachmentsRef, inputRef } = useChatSessionLifecycle({
     abortCtrlRef, attachments, desktopPetVisible, dispatch, input, isGenerating, messages, preserveAttachmentsForSessionRef, setAttachments, setDesktopPetVisible,
     setInput, setIsGenerating, setWorkbenchMessage, showContextUsage, state, toolApproval: approvals.toolApproval,
-    workbenchOpen, onSessionChange: clearMessageEditForSessionChange,
+    workbenchOpen,
   })
   const {
-    handleAbort, handleAuthorizeDirectoryRequest, handleDismissResume, handleResume,
-    handleTurnResult, handleTurnStart, manualRetryAvailable, resumeAvailable, showPendingDirectoryGuidance,
+    handleAbort, handlePause, handleAuthorizeDirectoryRequest, handleDismissResume, handleResume,
+    handleRejectDirectoryRequest,
+    handleSideEffectResolved, recoveryOwnerScope,
+    handleTurnResult, handleTurnStart, manualRetryAvailable, resumeAvailable, showPendingDirectoryGuidance, continueSameTaskAvailable, handleContinueSameTask,
   } = useChatTurnRecovery({
     abortCtrlRef, activeSessionId, approvals, dispatch, isGenerating, messages,
     resumingTurnIdsRef, setInput, setWorkbenchMessage, state, stateRef, t, toast,
@@ -126,7 +125,7 @@ export default function ChatSplit() {
     })
   }, [t, toast])
   const showSendBlocked = useCallback((reason) => setWorkbenchMessage(t(reason === 'directory-approval' ? 'chatSteering.directoryAuthorizationRequired'
-    : reason === 'send-pending' ? 'chatSteering.sendPending' : 'chatSteering.turnRunning')), [t])
+    : reason === 'send-pending' ? 'chatSteering.sendPending' : 'chatSteering.turnRunning')), [setWorkbenchMessage, t])
   const triggerSendFlow = useChatSendFlow({
     abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments,
     approvalMode: approvals.approvalSettings?.mode || 'normal',
@@ -154,7 +153,7 @@ export default function ChatSplit() {
     modelConfigRevision: modelReadiness.configRevision,
     modelProviderId: effectiveSelectedModelProviderId, modelReadiness, navigate, onModelUnavailable: showModelUnavailable,
     setDesktopPetVisible, setInput,
-    setSlashInlinePanel, setWorkbenchMessage, setWorkbenchOpen, setWorkbenchTab, slashRegistry, stateRef, triggerSendFlow,
+    setSlashInlinePanel, setWorkbenchMessage, slashRegistry, stateRef, triggerSendFlow,
   })
   const slashQuery = input.match(/^\/([^\s/]*)$/i)?.[1]
   const slashCommands = slashQuery === undefined ? [] : slashRegistry.listCommands({ query: slashQuery })
@@ -182,12 +181,10 @@ export default function ChatSplit() {
     inputRef,
     isGenerating,
     lang,
-    messageEdit,
     modelReadiness,
     navigateInputHistory,
     setAttachments,
     setInput,
-    setMessageEdit,
     setWorkbenchMessage,
     showAuthenticationRequired,
     showModelUnavailable,
@@ -200,20 +197,10 @@ export default function ChatSplit() {
     toast,
     triggerSendFlow,
   })
-  const {
-    handleCancelMessageEdit,
-    handleEditMessage,
-    handleRetryModelFailure,
-  } = useChatReplayActions({
-    attachmentsRef,
-    inputRef,
+  const { handleRetryModelFailure } = useChatReplayActions({
     isGenerating,
     lang,
-    messageEdit,
     modelReadiness,
-    setAttachments,
-    setInput,
-    setMessageEdit,
     setShowModelPicker,
     showModelUnavailable,
     stateRef,
@@ -246,17 +233,30 @@ export default function ChatSplit() {
     if (isLoggedInLocally()) { navigate(CHAT_MODEL_SETTINGS_PATH); return }
     window.dispatchEvent(new CustomEvent('auth:required', { detail: { path: CHAT_MODEL_SETTINGS_PATH, message: t('chatReliability.signInForModels') } }))
   }
+  const { forkingMessageId, handleForkMessage, handleOpenSessionBranch } = useChatSessionBranches(
+    { activeSessionId, dispatch, isGenerating, navigate, stateRef, t, toast },
+  )
+  const {
+    onOpenPlan, planCardVisible, planSignature, setDismissedPlanSignature, setPlanVisible,
+  } = usePlanCardState({ activeSession })
 
-  return (
-    <ChatSplitView
+  const { openPreview, sessionChangesReview } = useChatOverlays({
+    dispatch, isGenerating, messages, sessionId: activeSessionId || '', setPlanVisible,
+    setWorkbenchOpen, setWorkbenchTab, workspacePath: selectedWorkspacePath || activeSession?.workspacePath || '',
+  })
+  return <ChatSplitView
       activeSession={activeSession} activeSessionId={activeSessionId} approvalMode={approvals.approvalSettings?.mode || 'normal'}
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       contextWindowAuthoritative={selectedContextWindowAuthoritative}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
-      modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onApprovalModeChange={approvals.changeApprovalMode}
+      sessionChangesReview={sessionChangesReview} planVisible={planCardVisible} onOpenPlan={() => { sessionChangesReview.close(); onOpenPlan() }}
+      onClosePlan={() => { setPlanVisible(false); setDismissedPlanSignature(planSignature) }}
+      modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onPause={handlePause} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
       onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}
+      onRejectDirectoryRequest={handleRejectDirectoryRequest}
+      onSideEffectResolved={handleSideEffectResolved} recoveryOwnerScope={recoveryOwnerScope}
       onAuthorizeDirectory={directory.authorizeDirectory} onCloseDesktopPet={() => setDesktopPetVisible(false)}
       onCloseInlinePanel={() => setSlashInlinePanel(null)} onCloseModelPicker={() => setShowModelPicker(false)}
       onActivatePreviewTab={(tabId) => dispatch({ type: 'ACTIVATE_PREVIEW_TAB', payload: tabId })}
@@ -269,22 +269,21 @@ export default function ChatSplit() {
       onInlineTasks={() => { setSlashInlinePanel(null); navigate('/tasks') }} onKeyDown={handleKeyDown}
       onManageMcp={() => { setSlashInlinePanel(null); navigate('/mcp') }} onManageModels={handleManageModels}
       onModelChange={setModelForActiveSession} onModelRetry={retryModels} onNavigatePermissions={() => navigate('/permissions')}
-      editingMessageId={messageEdit?.sourceMessageId || ''} onCancelMessageEdit={handleCancelMessageEdit}
-      onEditMessage={handleEditMessage}
+      onForkMessage={handleForkMessage} forkingMessageId={forkingMessageId}
       onRetryModelFailure={handleRetryModelFailure}
       onOpenArtifact={(artifact) => { setWorkbenchOpen(true); dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact ? { ...artifact } : null }) }}
       onOpenInPreview={(msg, preview) => { setWorkbenchOpen(true); dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: { messageId: msg.id, content: msg.meta?.artifactSource || msg.content, preview } }) }}
-      onOpenModelPicker={() => setShowModelPicker(true)} onPermAllow={handlePermAllow}
+      onOpenModelPicker={() => setShowModelPicker(true)} onOpenSessionBranch={handleOpenSessionBranch} onPermAllow={handlePermAllow}
       onPermDeny={() => { dispatch({ type: 'SET_PERM_REQUEST', payload: null }); dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionDenied') }) }}
-      onPreviewMessage={setWorkbenchMessage} onQuoteSelection={(text) => { const quoted = String(text || '').split('\n').map((line) => `> ${line}`).join('\n'); const current = inputRef.current || ''; dispatch({ type: 'SET_DRAFT_INPUT', payload: current ? `${quoted}\n\n${current}` : `${quoted}\n\n` }) }}
+      onPreviewMessage={setWorkbenchMessage}
       onResume={handleResume}
       onSend={handleSend} onSlashCommandSelect={executeSlashEntry}
       onSubmitFeedback={(value) => recordChatFeedback(value, stateRef.current.activeSessionId)}
-      onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={handleWorkbenchSend}
+      onToolApproval={createRefusalWithFeedback({ resolveToolApproval: approvals.resolveToolApproval, steerActiveTurn })} onVoiceClick={handleVoice} onWorkbenchSend={handleWorkbenchSend}
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
-      resumeAvailable={resumeAvailable}
-      manualRetryAvailable={manualRetryAvailable}
+      resumeAvailable={resumeAvailable} continueSameTaskAvailable={continueSameTaskAvailable}
+      handleContinueSameTask={handleContinueSameTask} manualRetryAvailable={manualRetryAvailable}
       runtimeSkillIds={runtimeSkills.filter((skill) => skill.runnable !== false).map((skill) => skill.id)}
       selectedModel={effectiveSelectedModel} selectedModelProviderId={effectiveSelectedModelProviderId}
       selectedWorkspacePath={selectedWorkspacePath} recentWorkspaces={recentWorkspaces}
@@ -294,6 +293,6 @@ export default function ChatSplit() {
       workspaceBusy={workspaceBusy} workspaceError={workspaceError}
       state={state} t={t} tasks={state.tasks} toolApproval={approvals.toolApproval} voiceState={voiceState}
       workbenchMessage={workbenchMessage} workbenchOpen={workbenchOpen} workbenchTab={workbenchTab}
+      previewOpen={workbenchOpen && workbenchTab === 'browser'} onOpenPreview={openPreview}
     />
-  )
 }

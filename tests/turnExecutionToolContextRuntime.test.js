@@ -68,6 +68,7 @@ test('chat-only context never discovers or advertises tools', async () => {
   assert.equal(context.effectiveIntentMode, 'answer')
   assert.deepEqual(context.effectiveToolsConfig, { enabled: [], disabled: [] })
   assert.deepEqual(context.resolvedToolSpecs, [])
+  assert.deepEqual(context.deferredToolSpecs, [])
   assert.deepEqual(context.toolResolutionDecision, {
     version: 1,
     eligibleToolNames: [],
@@ -125,6 +126,38 @@ test('host projection removes write and shell schemas returned by a plan-mode re
     )), name)
   }
   assert.equal(context.toolResolutionDecision.version, 7)
+})
+
+test('deferred discovery remains host-projected and custom resolvers cannot defer omitted tools implicitly', async () => {
+  const readFile = spec('read_file')
+  const writeFile = spec('write_file')
+  const requestDirectory = spec('request_directory')
+  const withDeferred = createTurnExecutionToolContextRuntime({
+    readApprovalMode: () => 'plan',
+    readFileAccessStatus: writableFileAccess,
+    resolveToolSpecs: async (input) => {
+      input.onDeferredSpecs([readFile, writeFile, requestDirectory])
+      return [readFile, requestDirectory]
+    },
+  })
+  const projected = await withDeferred.resolve({
+    userId: 'deferred-plan-user', content: 'Inspect tools.',
+    baseToolSpecs: [readFile, writeFile, requestDirectory],
+  })
+  assert.deepEqual(namesOf(projected.resolvedToolSpecs), ['read_file', 'request_directory'])
+  assert.deepEqual(namesOf(projected.deferredToolSpecs), ['read_file', 'request_directory'])
+
+  const withoutDeferred = createTurnExecutionToolContextRuntime({
+    readApprovalMode: () => 'normal',
+    readFileAccessStatus: writableFileAccess,
+    resolveToolSpecs: async () => [readFile],
+  })
+  const selectedOnly = await withoutDeferred.resolve({
+    userId: 'selected-only-user', content: 'Read a file.',
+    baseToolSpecs: [readFile, writeFile],
+  })
+  assert.deepEqual(namesOf(selectedOnly.resolvedToolSpecs), ['read_file'])
+  assert.deepEqual(namesOf(selectedOnly.deferredToolSpecs), ['read_file'])
 })
 
 test('unreadable file access fails closed before tools reach the loop', async () => {

@@ -6,10 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import ChatMessages from '../../src/pages/ChatSplit/ChatMessages.jsx'
 import ChatMiniTimeline from '../../src/pages/ChatSplit/chatMessages/ChatMiniTimeline.jsx'
-import {
-  buildChatTurnMarkers,
-  CHAT_TIMELINE_MARKER_LIMIT,
-} from '../../src/pages/ChatSplit/chatMessages/chatMiniTimeline.js'
+import { buildChatTurnMarkers } from '../../src/pages/ChatSplit/chatMessages/chatMiniTimeline.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -36,8 +33,6 @@ const translations = {
   'chatTimeline.jumpTo': 'Go to turn',
   'chatTimeline.label': 'Conversation timeline',
   'chatTimeline.turn': 'Turn',
-  'chatTimeline.earlierTurns': 'Earlier turns, go to turn {number}',
-  'chatTimeline.laterTurns': 'Later turns, go to turn {number}',
 }
 
 const t = (key, vars) => {
@@ -58,8 +53,11 @@ test('turn markers represent user-started rounds and keep summaries compact', ()
     { messageIndex: 1, number: 1 },
     { messageIndex: 3, number: 2 },
   ])
-  assert.ok(markers[0].summary.length <= 72)
+  // The whole request, whitespace collapsed — a summary that stops early cannot
+  // tell two similar turns apart, which is the only reason to read it.
+  assert.equal(markers[0].summary, `Build a site ${'with motion '.repeat(10)}`.trim())
   assert.doesNotMatch(markers[0].summary, /\s{2,}/)
+  assert.doesNotMatch(markers[0].summary, /…/u)
   assert.equal(markers[1].summary, 'reference.png')
 })
 
@@ -92,14 +90,15 @@ test('timeline previews, selects, highlights, and appends conversation turns', a
     assert.equal(markers.length, 2)
     assert.equal(rootElement.querySelector('.chat-mini-timeline-list > span[aria-hidden="true"]'), null)
     assert.ok(markerList.classList.contains('w-8'))
-    assert.ok(markerList.classList.contains('gap-0.5'))
+    assert.ok(markerList.classList.contains('gap-1'))
     const activeStroke = markers[0].querySelector('span[aria-hidden="true"]')
     const idleStroke = markers[1].querySelector('span[aria-hidden="true"]')
-    assert.ok(activeStroke.classList.contains('h-[3px]'))
-    assert.ok(activeStroke.classList.contains('w-4'))
-    assert.ok(idleStroke.classList.contains('w-2.5'))
-    assert.ok(activeStroke.classList.contains('bg-ink/80'))
-    assert.ok(idleStroke.classList.contains('bg-ink/25'))
+    // Thick enough to aim at: a one-pixel line reads as texture, not as a target.
+    assert.ok(activeStroke.classList.contains('h-1'), 'the bar has height')
+    assert.ok(activeStroke.classList.contains('w-5'))
+    assert.ok(idleStroke.classList.contains('w-3.5'))
+    assert.ok(activeStroke.classList.contains('bg-ink/70'))
+    assert.ok(idleStroke.classList.contains('bg-ink/30'))
     assert.ok(!activeStroke.classList.contains('bg-accent'))
     assert.equal(markers[0].getAttribute('aria-current'), 'step')
 
@@ -109,6 +108,9 @@ test('timeline previews, selects, highlights, and appends conversation turns', a
     const preview = rootElement.querySelector('[data-testid="chat-timeline-preview"]')
     assert.match(preview.textContent, /Add a moving background/)
     assert.doesNotMatch(preview.textContent, /Turn\s+2/)
+    // The preview shows the request in full: no clamping, no ellipsis.
+    assert.equal(preview.querySelector('.line-clamp-3'), null)
+    assert.equal(preview.textContent, 'Add a moving background')
 
     await act(async () => markers[1].click())
     assert.deepEqual(selected, [2])
@@ -128,7 +130,7 @@ test('timeline previews, selects, highlights, and appends conversation turns', a
   }
 })
 
-test('deep timelines keep a fixed button bound with accessible earlier and later navigation', async () => {
+test('every turn is on the timeline, and the strip scrolls instead of folding turns away', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
@@ -151,23 +153,40 @@ test('deep timelines keep a fixed button bound with accessible earlier and later
 
   try {
     const timeline = rootElement.querySelector('[data-testid="chat-mini-timeline"]')
-    const markers = timeline.querySelectorAll('[data-testid="chat-timeline-marker"]')
-    const earlier = timeline.querySelector('[data-testid="chat-timeline-earlier"]')
-    const later = timeline.querySelector('[data-testid="chat-timeline-later"]')
-    const active = timeline.querySelector('[aria-current="step"]')
+    const markers = [...timeline.querySelectorAll('[data-testid="chat-timeline-marker"]')]
 
-    assert.equal(markers.length, CHAT_TIMELINE_MARKER_LIMIT)
-    assert.equal(timeline.querySelectorAll('button').length, CHAT_TIMELINE_MARKER_LIMIT + 2)
+    // All 240 turns are on the strip. Nothing stands in for a range of them, and no
+    // summary is shortened: the turns a window hid were the ones worth scanning.
+    assert.equal(markers.length, 240)
+    assert.equal(timeline.querySelectorAll('button').length, 240)
+    assert.equal(timeline.querySelector('[data-testid="chat-timeline-earlier"]'), null)
+    assert.equal(timeline.querySelector('[data-testid="chat-timeline-later"]'), null)
+    assert.doesNotMatch(timeline.textContent, /…/u)
+
+    // Showing all of them costs no extra room: the strip scrolls inside its height.
+    const list = timeline.querySelector('.chat-mini-timeline-list')
+    assert.ok(list.classList.contains('overflow-y-auto'))
+    assert.ok(list.classList.contains('max-h-[min(42vh,18rem)]'))
+
+    // The reader's turn is marked, and every marker is a real target.
+    const active = timeline.querySelector('[aria-current="step"]')
     assert.equal(active.dataset.turnIndex, '240')
     assert.equal(active.tagName, 'BUTTON')
-    assert.match(earlier.getAttribute('aria-label'), /^Earlier turns, go to turn \d+$/)
-    assert.match(later.getAttribute('aria-label'), /^Later turns, go to turn \d+$/)
+    assert.ok(markers.every((marker) => marker.dataset.turnIndex !== undefined))
 
-    earlier.focus()
-    assert.equal(dom.window.document.activeElement, earlier)
-    await act(async () => earlier.click())
-    await act(async () => later.click())
-    assert.deepEqual(selected, [228, 252])
+    // Arrow keys still walk the whole strip, and moving focus is not selecting.
+    markers[0].focus()
+    await act(async () => markers[0].dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true })))
+    assert.equal(dom.window.document.activeElement, markers.at(-1))
+    const down = new dom.window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })
+    await act(async () => markers.at(-1).dispatchEvent(down))
+    assert.equal(down.defaultPrevented, true)
+    assert.notEqual(dom.window.document.activeElement, markers.at(-1))
+    assert.deepEqual(selected, [], 'arrow navigation moves focus without selecting a turn')
+
+    // The last turn is reachable directly, without stepping through a control.
+    await act(async () => markers.at(-1).click())
+    assert.deepEqual(selected, [478])
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -217,28 +236,14 @@ test('selecting a marker reveals an older turn while keeping mounted rows bounde
   })
 
   try {
-    assert.equal(
-      rootElement.querySelectorAll('[data-testid="chat-timeline-marker"]').length,
-      CHAT_TIMELINE_MARKER_LIMIT,
-    )
-    assert.ok(
-      rootElement.querySelectorAll('[data-testid="chat-mini-timeline"] button').length
-        <= CHAT_TIMELINE_MARKER_LIMIT + 2,
-    )
+    // 42 request/answer pairs are 42 user turns, and every one is on the strip.
+    assert.equal(rootElement.querySelectorAll('[data-testid="chat-timeline-marker"]').length, 42)
+    assert.equal(rootElement.querySelectorAll('[data-testid="chat-mini-timeline"] button').length, 42)
     assert.equal(rootElement.querySelector('[data-chat-turn-index="0"]'), null)
 
-    let earlier = rootElement.querySelector('[data-testid="chat-timeline-earlier"]')
-    let navigationCount = 0
-    while (earlier) {
-      await act(async () => earlier.click())
-      navigationCount += 1
-      assert.ok(navigationCount < 10)
-      assert.ok(
-        rootElement.querySelectorAll('[data-testid="chat-mini-timeline"] button').length
-          <= CHAT_TIMELINE_MARKER_LIMIT + 2,
-      )
-      earlier = rootElement.querySelector('[data-testid="chat-timeline-earlier"]')
-    }
+    // The oldest turn has its own marker, so one click reaches it — it is no longer
+    // hidden behind a control that steps the strip back one window at a time.
+    await act(async () => rootElement.querySelector('[data-testid="chat-timeline-marker"]').click())
 
     assert.ok(rootElement.querySelector('[data-chat-turn-index="0"]'))
     assert.equal(

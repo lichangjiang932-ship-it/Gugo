@@ -127,6 +127,86 @@ test('SessionAdmin optional workspace mutation normalizes selections and explici
   }
 })
 
+test('SessionAdmin normalizes message-node fork boundaries before backend invocation', () => {
+  let received = null
+  const port = prepareSessionAdminPort(portDefinition({
+    forkSession(input) {
+      received = input
+      return null
+    },
+  }))
+  assert.equal(port.forkSession({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    label: '  Alternative   path ',
+    throughMessageId: '  message-2  ',
+  }), null)
+  assert.deepEqual(received, {
+    userId: 'user-1',
+    sessionId: 'session-1',
+    label: 'Alternative path',
+    throughMessageId: 'message-2',
+  })
+  for (const throughMessageId of [42, 'x'.repeat(513)]) {
+    assert.throws(
+      () => port.forkSession({ userId: 'user-1', sessionId: 'session-1', throughMessageId }),
+      (error) => error?.code === 'SESSION_ADMIN_INPUT_INVALID',
+    )
+  }
+})
+
+test('SessionAdmin branch DTO exposes only bounded durable file-operation evidence', () => {
+  const result = {
+    rootSessionId: 'root-session',
+    truncated: false,
+    branches: [{
+      id: 'root-session',
+      revision: 1,
+      depth: 0,
+      parentSessionId: null,
+      fileOperations: [{
+        path: 'workspace/result.txt',
+        action: 'created',
+        toolName: 'write_file',
+        toolCallId: 'must-not-cross-the-port',
+        privateReceipt: 'hidden',
+      }],
+      fileOperationsTruncated: false,
+    }],
+  }
+  const port = prepareSessionAdminPort(portDefinition({ getSessionBranches: () => result }))
+  const projected = port.getSessionBranches({ userId: 'user-1', sessionId: 'root-session' })
+  assert.deepEqual(projected.branches[0].fileOperations, [{
+    path: 'workspace/result.txt',
+    action: 'created',
+    toolName: 'write_file',
+  }])
+  assert.equal(Object.isFrozen(projected.branches[0].fileOperations), true)
+  assert.equal(Object.isFrozen(projected.branches[0].fileOperations[0]), true)
+
+  for (const fileOperations of [
+    [{ path: 'workspace/a.txt', action: 'invented', toolName: 'write_file' }],
+    Array.from({ length: 9 }, (_, index) => ({
+      path: `workspace/${index}.txt`, action: 'changed', toolName: 'write_file',
+    })),
+  ]) {
+    const invalid = prepareSessionAdminPort(portDefinition({
+      getSessionBranches: () => ({
+        rootSessionId: 'root-session',
+        truncated: false,
+        branches: [{
+          id: 'root-session', revision: 1, depth: 0, parentSessionId: null,
+          fileOperations, fileOperationsTruncated: false,
+        }],
+      }),
+    }))
+    assert.throws(
+      () => invalid.getSessionBranches({ userId: 'user-1', sessionId: 'root-session' }),
+      (error) => error?.code === 'SESSION_ADMIN_RESULT_INVALID',
+    )
+  }
+})
+
 test('SessionAdmin legacy import projects recovered ids and rejects mismatched recovery sessions', () => {
   const input = {
     userId: 'user-1',
@@ -442,6 +522,46 @@ test('SessionAdmin v2 enforces snapshot pagination invariants', () => {
       () => port.getSessionSnapshot({ userId: 'user-1', sessionId: 'session-1' }),
       (error) => error?.code === 'SESSION_ADMIN_RESULT_INVALID',
     )
+  }
+})
+
+test('SessionAdmin v2 accepts virtual evidence rows without treating them as durable offset positions', () => {
+  const message = (id) => ({
+    id, userId: 'user-1', sessionId: 'session-1', role: 'assistant', content: id,
+    createdAt: 1, updatedAt: 1,
+  })
+  const snapshot = {
+    session: { id: 'session-1', revision: 0 },
+    messages: [message('durable'), message('virtual')],
+    revision: 0,
+    totalMessages: 4,
+    durableMessageCount: 1,
+    durableTotalMessages: 3,
+    complete: false,
+    nextOffset: 2,
+  }
+  const input = { userId: 'user-1', sessionId: 'session-1', offset: 1, limit: 1 }
+  const port = prepareSessionAdminPort(portDefinition({ getSessionSnapshot: () => snapshot }))
+  const result = port.getSessionSnapshot(input)
+  assert.equal(result.messages.length, 2)
+  assert.equal(result.nextOffset, 2)
+  assert.equal(result.durableMessageCount, 1)
+  assert.equal(result.durableTotalMessages, 3)
+
+  for (const change of [
+    { durableMessageCount: undefined },
+    { durableTotalMessages: undefined },
+    { durableMessageCount: 2 },
+    { durableTotalMessages: 5 },
+    { nextOffset: 3 },
+    { totalMessages: 3 },
+    { complete: true, nextOffset: null },
+  ]) {
+    const invalid = prepareSessionAdminPort(portDefinition({
+      getSessionSnapshot: () => ({ ...snapshot, ...change }),
+    }))
+    assert.throws(() => invalid.getSessionSnapshot(input),
+      (error) => error.code === 'SESSION_ADMIN_RESULT_INVALID')
   }
 })
 

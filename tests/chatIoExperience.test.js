@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import { readSourceTree } from './sourceTree.js'
+import { toolFailureFacts, toolFailureSummary } from '../src/lib/toolFailurePresentation.js'
+import { toolCallLabel } from '../src/lib/toolCallPresentation.js'
+import { assistantTimelinePresentation, stableTimelineSegments } from '../src/pages/ChatSplit/chatMessages/messageRow/timelinePresentation.js'
 
 const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
 const messagesSource = readSourceTree('../src/pages/ChatSplit/chatMessages/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
@@ -31,7 +34,7 @@ test('chat composer accepts pasted files and shows managed upload state', () => 
   assert.match(composerSource, /item\.uploadStatus === 'error'/)
 })
 
-test('chat drafts persist while user edit, failure resend, and copy actions stay real', () => {
+test('chat drafts persist while failure resend and copy actions stay real', () => {
   assert.match(lifecycleSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
   assert.match(lifecycleSource, /attachments: normalizeDraftAttachments\(attachmentsRef\.current\)/)
   assert.match(lifecycleSource, /const nextDraft = readSessionDraft\(\(state\.sessionDrafts \|\| \{\}\)\[nextId\]\)/)
@@ -40,23 +43,23 @@ test('chat drafts persist while user edit, failure resend, and copy actions stay
     chatSendActionsSource,
     /await triggerSendFlow\([\s\S]{0,120}typedContent \|\| describeAttachmentPrompt\(currentAttachments, lang\),[\s\S]{0,80}currentAttachments,[\s\S]{0,120}\(\{ sessionId: acceptedSessionId \}/,
   )
-  assert.match(chatSource, /handleEditMessage/)
   assert.doesNotMatch(chatSource, /handleRegenerateMessage|canRegenerateAssistantMessage|onRegenerateMessage/)
-  assert.match(
-    chatSendActionsSource,
-    /if \(replayDraft\)[\s\S]*?type: 'TRUNCATE_MESSAGES'[\s\S]*?payload: replayDraft\.historyLimit/,
-  )
   assert.doesNotMatch(chatSource, /handleDeleteMessage/)
+  // Message editing was removed by request: there is no edit action on a sent
+  // message, no editing banner over the composer, and no replay-truncate path
+  // that only existed to rewind history for an edited resend. Asserting the
+  // absence is what keeps it from quietly coming back.
+  assert.doesNotMatch(messagesSource + composerSource, /onEditMessage|editingMessageId|message-edit-banner|edit-user-message/)
+  assert.doesNotMatch(chatSendActionsSource + chatSource, /replayDraft|handleEditMessage|handleCancelMessageEdit/)
+  assert.doesNotMatch(chatSendActionsSource, /TRUNCATE_MESSAGES/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
   assert.match(messageRowSource, /copyTextToClipboard\(copyableMessageText\(content\)\)/)
   assert.match(messageRowSource, /chatMessages\.copied/)
-  assert.match(messagesSource, /onEditMessage/)
   assert.doesNotMatch(messagesSource, /onDeleteMessage|<Trash2/)
   assert.match(messageRowSource, /isModelPreExecutionFailure\(msg\) \? onRetryModelFailure : null/)
   assert.match(messageRowSource, /data-testid="retry-model-request"/)
   assert.doesNotMatch(messageRowSource, /data-testid="edit-assistant-prompt"/)
   assert.doesNotMatch(messageRowSource, /data-testid="regenerate-assistant-message"/)
-  assert.match(messageRowSource, /data-testid="edit-user-message"/)
   assert.doesNotMatch(messageRowSource, /onDeleteMessage/)
 })
 
@@ -114,28 +117,49 @@ test('composer sends steering drafts while preserving an independent stop action
   assert.match(composerActionsSource, /<ModelPicker/)
   assert.match(composerActionsSource, /data-testid="context-ring"/)
   assert.match(composerSource, /hasDraftText=\{Boolean\(String\(input \|\| ''\)\.trim\(\)\)\}/)
-  assert.match(composerActionsSource, /const primaryActionStopsTurn = isGenerating && !hasDraftText/)
+  assert.match(composerSource, /hasAttachments=\{Array\.isArray\(attachments\) && attachments\.length > 0\}/)
+  // An empty draft during a running turn offers *pause*; any draft — typed text
+  // or an attachment — keeps send, so a stray tap cannot freeze a turn the user
+  // was still composing for.
+  assert.match(composerActionsSource, /const hasDraftContent = hasDraftText \|\| hasAttachments/)
+  assert.match(composerActionsSource, /const primaryActionPausesTurn = isGenerating && !hasDraftContent/)
   assert.match(composerActionsSource, /data-testid="composer-stop-action"[\s\S]*?onClick=\{onAbort\}/)
-  assert.match(composerActionsSource, /onClick=\{primaryActionStopsTurn \? onAbort : onSend\}/)
-  assert.match(composerActionsSource, /disabled=\{!isGenerating && sendDisabled\}/)
-  assert.match(composerActionsSource, /\{primaryActionStopsTurn[\s\S]*?<Square[\s\S]*?<Send/)
-  assert.doesNotMatch(composerActionsSource, /chatComposer\.steer|<Pause/)
+  assert.match(composerActionsSource, /onClick=\{primaryActionPausesTurn \? requestPause : onSend\}/)
+  // Pause is its own action: the primary pauses, while the independent control
+  // still cancels. Without a pause handler the primary degrades to onAbort
+  // instead of becoming a dead button.
+  assert.match(composerActionsSource, /const requestPause = typeof onPause === 'function' \? onPause : onAbort/)
+  assert.match(composerActionsSource, /disabled=\{primaryActionPausesTurn \? false : sendDisabled\}/)
+  assert.match(composerActionsSource, /\{primaryActionPausesTurn[\s\S]*?<Pause[\s\S]*?<Send/)
+  assert.match(composerActionsSource, /chatComposer\.pause/)
+  assert.doesNotMatch(composerActionsSource, /chatComposer\.steer/)
   assert.doesNotMatch(composerSource, />Enter<\/span>/)
 })
 
 test('transient tool readiness is visible in the streaming assistant without creating a tool trace', () => {
   assert.match(activityStreamSource, /activity\?\.kind === 'tool_call_ready'/)
   assert.match(activityStreamSource, /chatMessages\.toolCallReady/)
-  assert.match(activityStreamSource, /chatMessages\.toolUnknown/)
+  const t = (key) => key
+  assert.equal(toolCallLabel('', t), 'chatMessages.toolUnknown')
+  assert.equal(toolCallLabel('bash_exec', t), 'chatMessages.toolBashExec')
+  assert.equal(toolCallLabel('custom_tool', t), 'custom_tool')
+  assert.match(activityStreamSource, /toolCallLabel\(activity\.toolName, t\)/)
   assert.match(activityStreamSource, /testId="model-activity"/)
 })
 
 test('tool failures expose status, retryability, attempts, and recovery hints', () => {
-  assert.match(toolCardSource, /call\.errorCode/)
-  assert.match(toolCardSource, /call\.errorStatus/)
-  assert.match(toolCardSource, /call\.retryable/)
-  assert.match(toolCardSource, /call\.attempts/)
-  assert.match(toolCardSource, /call\.errorHint/)
+  const call = {
+    status: 'error', errorCode: 'RATE_LIMIT', errorStatus: 429,
+    retryable: true, attempts: 2, errorHint: 'Wait before retrying.',
+  }
+  const t = (key) => key === 'chatMessages.toolRetry' ? 'Retry' : key
+  assert.deepEqual(toolFailureFacts(call, t), ['RATE_LIMIT', 'HTTP 429', '2x', 'Retry'])
+  assert.equal(toolFailureSummary(call, t), 'Wait before retrying.')
+  assert.deepEqual(toolFailureFacts({ ...call, errorStatus: null, retryable: false, attempts: 0 }, t), ['RATE_LIMIT'])
+  // The JSX behavior tests exercise rendering; these checks only guard the
+  // component's connection to the shared presentation helpers.
+  assert.match(toolCardSource, /toolFailureFacts\(call, t\)/)
+  assert.match(toolCardSource, /toolFailureSummary\(call, t\)/)
 })
 
 test('selected slash skill renders as a quiet inline tag inside the composer', () => {
@@ -194,7 +218,10 @@ test('user messages stay right-aligned in a soft bubble while metadata remains o
 })
 
 test('tool activity is an inline label while command arguments and logs default collapsed', () => {
-  assert.match(toolCardSource, /toolCallLabel\(call\.name, t\)/)
+  // The row resolves its label through the traced-with-verb helper, and that
+  // helper still falls back to the human tool label for richer tool names.
+  assert.match(toolCardSource, /stepRowLabel\(call\.name, kind, t\)/)
+  assert.match(toolCardSource, /toolCallLabel\(name, t\)/)
   assert.match(toolCardSource, /chat-tool-label[^>]*>\{label\}/)
   assert.match(toolCardSource, /chat-tool-raw-name[^>]*>\{call\.name \|\| label\}/)
   assert.match(toolCardSource, /const isExpanded = expanded === true/)
@@ -206,8 +233,8 @@ test('composer stays compact, softly framed, and keeps a circular primary action
   assert.match(composerSource, /data-testid="chat-composer-surface"/)
   assert.match(composerSource, /chat-composer-surface[\s\S]{0,120}min-h-\[108px\][\s\S]{0,120}rounded-\[22px\] border/)
   assert.doesNotMatch(composerSource, /focus-within:-translate-y-px|focus-within:border-blue/)
-  assert.match(stylesSource, /\.chat-composer-surface\s*\{[\s\S]*?box-shadow:[\s\S]*?0 12px 32px/)
-  assert.match(stylesSource, /\.chat-composer-surface:focus-within\s*\{[\s\S]*?box-shadow:[\s\S]*?0 14px 38px/)
+  assert.match(stylesSource, /\.chat-composer-surface\s*\{[\s\S]*?box-shadow:[\s\S]*?0 4px 16px/)
+  assert.match(stylesSource, /\.chat-composer-surface:focus-within\s*\{[\s\S]*?box-shadow:[\s\S]*?0 6px 20px/)
   assert.match(stylesSource, /\.chat-composer-project-strip\s*\{[\s\S]*?width:\s*fit-content;[\s\S]*?margin-bottom:\s*0\.5rem/)
   assert.match(composerActionsSource, /h-8 w-8[\s\S]{0,80}rounded-full/)
 })
@@ -230,18 +257,33 @@ test('reasoning stays a compact live status while tool traces remain inspectable
 })
 
 test('one assistant turn preserves narration and tool batches in their recorded order', () => {
-  assert.match(messageRowSource, /buildMessageTimeline\(content, toolCalls\)/)
-  assert.match(messageRowSource, /assistantTimelinePresentation\(timeline\)/)
-  assert.match(messageRowSource, /segments\.map\(\(segment, index\)/)
-  assert.match(messageRowSource, /segment\.kind === 'tools'/)
-  assert.match(messageRowSource, /<ToolCallTrace[\s\S]*?calls=\{segment\.calls\}/)
-  assert.match(messageRowSource, /\{segment\.text\}/)
-  assert.match(messageRowSource, /<ExecutionDisclosure[\s\S]*?\(isCurrentStreamingMessage \|\| hasReasoningSummary\) && <ActivityStream/)
-  assert.doesNotMatch(messageRowSource, /execution-running|execution-complete/)
-  assert.match(messageRowSource, /useState\(running\)/)
-  assert.match(messageRowSource, /if \(running && !wasRunning\.current\) setExpanded\(true\)/)
-  assert.match(messageRowSource, /chatMessages\.executionToolCount/)
-  assert.doesNotMatch(messageRowSource, /compactMessagePresentation|timeline\.flatMap|\.reverse\(\)/)
+  const opening = '**Inspect**\n\nRead both files.\n\n'
+  const middle = '**Verify**\n\nCheck the edited result.\n\n'
+  const answer = '**Result**\n\nVerification passed.'
+  const content = opening + middle + answer
+  const calls = [
+    { id: 'first-read', name: 'read_file', textOffset: opening.length, status: 'success' },
+    { id: 'second-read', name: 'read_file', textOffset: opening.length, status: 'success' },
+    { id: 'verify', name: 'run_command', textOffset: opening.length + middle.length, status: 'running' },
+  ]
+  const before = structuredClone(calls)
+  const timeline = stableTimelineSegments(content, calls)
+  assert.deepEqual(timeline.map((segment) => segment.kind), ['text', 'tools', 'text', 'tools', 'text'])
+  assert.deepEqual(timeline.filter((segment) => segment.kind === 'text').map((segment) => segment.text), [opening, middle, answer])
+  const batches = timeline.filter((segment) => segment.kind === 'tools')
+  assert.deepEqual(batches.map((segment) => segment.calls.map((call) => call.id)), [['first-read', 'second-read'], ['verify']])
+  assert.deepEqual(batches.map((segment) => segment.stepOffset), [0, 2])
+  const presented = assistantTimelinePresentation(timeline)
+  assert.equal(presented.hasPublicNarration, true)
+  assert.equal(presented.answer, answer)
+  assert.deepEqual(presented.execution.map((segment) => segment.kind), ['text', 'tools', 'text', 'tools'])
+  assert.equal(presented.execution.some((segment) => segment.text === answer), false, 'final text is rendered exactly once')
+  const completed = stableTimelineSegments(content, calls.map((call) => ({ ...call, status: 'success' })))
+  assert.deepEqual(completed.map((segment) => segment.key), timeline.map((segment) => segment.key), 'completion does not reorder or remount earlier tool batches')
+  assert.deepEqual(calls, before)
+  assert.deepEqual(assistantTimelinePresentation(stableTimelineSegments(answer, [])), {
+    answer, execution: [], hasPublicNarration: false,
+  }, 'a plain final reply is not an execution or private-reasoning transcript')
 })
 
 test('reasoning does not expose raw text or character counts', () => {
@@ -267,4 +309,37 @@ test('model setup failures use one durable in-message card without a duplicate t
   assert.match(messageRowSource, /modelSetupFailure \? \([\s\S]{0,100}<ModelSetupFailureCard/)
   assert.match(messageRowSource, /testId="model-setup-error-card"/)
   assert.match(messageRowSource, /onClick=\{onManageModels\}/)
+})
+
+test('git, browser and goal tools read as words in the trace, in both languages', async () => {
+  const { translateKey } = await import('../src/i18n/translations.js')
+  // These used to print the raw tool name (`git_log`, `git_blame`) next to
+  // translated rows such as 读取, because the label table did not know them.
+  const names = ['git_log', 'git_blame', 'git_commit', 'git_push', 'git_write', 'git_rollback', 'search_tools',
+    'browser_open_url', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_snapshot',
+    'browser_console', 'browser_state', 'browser_wait', 'goal_plan_status', 'goal_plan_rewrite', 'goal_step_update']
+  for (const lang of ['zh', 'en']) {
+    const t = (key) => translateKey(key, lang)
+    for (const name of names) {
+      const label = toolCallLabel(name, t)
+      assert.notEqual(label, name, `${lang}: ${name} has a label`)
+      assert.doesNotMatch(label, /^(?:chatMessages|toolActivity)\./, `${lang}: ${name} label resolves`)
+    }
+  }
+  assert.equal(toolCallLabel('git_log', (key) => translateKey(key, 'zh')), 'Git 历史')
+  assert.equal(toolCallLabel('git_blame', (key) => translateKey(key, 'en')), 'Git blame')
+})
+
+test('a rejected-arguments failure tells the reader what happened, not the model what to do', async () => {
+  const { translateKey } = await import('../src/i18n/translations.js')
+  const t = (key) => translateKey(key, 'zh')
+  const call = {
+    status: 'error',
+    result: { ok: false, code: 'tool_arguments_validation_failed', error: '工具参数校验失败：path 必须是字符串', hint: '请按工具参数定义修正后重新调用。' },
+  }
+  const summary = toolFailureSummary(call, t)
+  assert.doesNotMatch(summary, /请按工具参数定义修正后重新调用/)
+  assert.match(summary, /没有执行/)
+  // Other failures keep their own reason.
+  assert.match(toolFailureSummary({ status: 'error', result: { ok: false, error: 'ENOENT: no such file' } }, t), /ENOENT/)
 })

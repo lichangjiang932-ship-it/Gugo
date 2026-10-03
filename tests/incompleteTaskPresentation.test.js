@@ -11,6 +11,36 @@ import {
 
 const t = (key) => key
 
+test('confirmed cancellation with absent or generic reason is stopped, never unknown or successful', () => {
+  for (const incompleteReason of [undefined, 'turn_incomplete']) {
+    const result = buildIncompleteTaskPresentation({ meta: { cancelled: true, serverConnectionState: 'cancelled',
+      serverFailure: { code: 'TURN_CANCELLED', incompleteReason, missingRequirements: ['remaining_task_steps'] },
+    } }, t)
+    assert.equal(result.reason, 'chatMessages.incompleteReasonCancelled')
+    assert.equal(result.titleKey, 'chatMessages.toolStopped')
+    assert.equal(result.code, 'TURN_CANCELLED')
+    assert.equal(result.retryable, false)
+    assert.deepEqual(result.missing, ['chatMessages.incompleteRequirementRemainingSteps'])
+  }
+})
+
+test('cancellation cannot hide concrete unknown-outcome, verification, blocked or permission reasons', () => {
+  for (const incompleteReason of ['side_effect_outcome_unknown', 'model_request_outcome_unknown',
+    'task_verification_repair_exhausted', 'permission_denied', 'recovery_blocked']) {
+    const failure = { code: 'TURN_CANCELLED', incompleteReason }
+    const normal = buildIncompleteTaskPresentation({ meta: { serverFailure: failure } }, t)
+    const cancelled = buildIncompleteTaskPresentation({ meta: { cancelled: true, serverFailure: failure } }, t)
+    assert.equal(cancelled.reason, normal.reason)
+    assert.notEqual(cancelled.reason, 'chatMessages.incompleteReasonCancelled')
+    assert.notEqual(cancelled.titleKey, 'chatMessages.toolStopped')
+  }
+  for (const failure of [{ code: 'TURN_RECOVERY_BLOCKED' }, { code: 'TOOL_PERMISSION_DENIED' }]) {
+    const value = buildIncompleteTaskPresentation({ meta: { cancelled: true, serverFailure: failure } }, t)
+    assert.notEqual(value.reason, 'chatMessages.incompleteReasonCancelled')
+    assert.notEqual(value.titleKey, 'chatMessages.toolStopped')
+  }
+})
+
 test('known incomplete reasons produce deterministic reasons, requirements, and recovery actions', () => {
   const cases = [
     ['artifact_delivery_not_converged', 'chatMessages.incompleteReasonArtifactDelivery', 'chatMessages.incompleteRequirementArtifact'],
@@ -333,4 +363,23 @@ test('a recovery dead letter explains why automation stopped and what must be re
   ])
   assert.equal(value.nextStep, 'chatMessages.incompleteNextManualRecovery')
   assert.equal(value.manualRetryable, true)
+})
+
+test('refusal and permission stops explain themselves instead of printing raw codes', async () => {
+  const { incompleteCardExplainsStop } = await import('../src/pages/ChatSplit/chatMessages/messageRow/incompleteTaskPresentation.js')
+  const { translateKey } = await import('../src/i18n/translations.js')
+  for (const lang of ['zh', 'en']) {
+    const localized = (key, values = {}) => translateKey(key, lang).replace(/\{(\w+)\}/g, (_, name) => values[name])
+    for (const reason of ['approval_denied', 'approval_required', 'approval_expired', 'tool_permission_denied',
+      'tool_authorization_unavailable', 'explicit_read_only_constraint', 'explicit_tool_free_constraint', 'tool_disabled_by_config']) {
+      const failure = normalizeTurnFailure({ code: reason.toUpperCase(), incompleteReason: reason })
+      const result = buildIncompleteTaskPresentation({ meta: { failed: true, serverFailure: failure } }, localized)
+      // The card used to say "the runtime recorded APPROVAL_DENIED" and list
+      // "the structured requirement for USER_DIRECTION".
+      assert.doesNotMatch(result.reason, /[A-Z]{3,}_[A-Z_]+/u, `${lang}/${reason} reason`)
+      for (const item of result.missing) assert.doesNotMatch(item, /[A-Z]{3,}_[A-Z_]+/u, `${lang}/${reason} missing`)
+      assert.equal(incompleteCardExplainsStop(failure), true, reason)
+    }
+  }
+  assert.equal(incompleteCardExplainsStop({ incompleteReason: 'model_call_interrupted' }), false)
 })

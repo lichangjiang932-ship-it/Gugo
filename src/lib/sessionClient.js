@@ -413,12 +413,15 @@ export async function setSessionWorkspaceRemote(
 
 export async function forkSessionRemote(
   sessionId,
-  { label = null, fetchImpl = fetch } = {},
+  { label = null, throughMessageId = null, fetchImpl = fetch } = {},
 ) {
   const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, {
     method: 'POST',
     headers: authHeaders(true),
-    body: JSON.stringify({ label }),
+    body: JSON.stringify({
+      label,
+      ...(throughMessageId ? { throughMessageId } : {}),
+    }),
   })
   return parseResponse(response)
 }

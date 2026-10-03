@@ -7,6 +7,8 @@ import test from 'node:test'
 // runtimeCapabilityHost through two paths and manufacture an ESM TDZ that the
 // real CLI entrypoint does not have.
 const { runHeadlessTurn } = await import('../server/services/headlessTurnRuntime.js')
+const { createTurnTerminalOutcomeRuntime } = await import('../server/services/turnTerminalOutcomeRuntime.js')
+const { flushCheckpoint } = await import('../server/services/loop/checkpoint.js')
 const { runBuiltinHeadlessTurn } = await import('../server/adapters/headlessTurnHost.js')
 const { SQLITE_TURN_PERSISTENCE_ADAPTER } = await import(
   '../server/adapters/sqliteTurnPersistenceAdapter.js'
@@ -960,4 +962,197 @@ test('builtin headless abort cancels once, waits for durable cancellation, and s
   assert.deepEqual(delivered, ['turn.started', 'turn.cancelled'])
   assert.equal(stopCalls, 1)
   assert.equal(abortListeners.size, 0)
+})
+
+function createHeadlessSettlementHarness() {
+  const scope = {
+    userId: 'headless-settlement-user',
+    sessionId: 'headless-settlement-session',
+    turnId: 'headless-settlement-turn',
+  }
+  const events = []
+  const delivered = []
+  const calls = { reads: 0, polls: 0, waits: 0, recoveries: 0, unsubscribes: 0, decisions: 0, releases: 0 }
+  let subscriber = () => {}
+  let resolveExecution
+  let rejectExecution
+  const execution = new Promise((resolve, reject) => {
+    resolveExecution = resolve
+    rejectExecution = reject
+  })
+  execution.catch(() => {})
+  const emit = (type, payload = {}) => {
+    const event = {
+      ...scope, id: `${scope.turnId}:${events.length}`, sequence: events.length,
+      type, payload, createdAt: events.length + 1,
+    }
+    events.push(event)
+    subscriber(event)
+    return event
+  }
+  const dependencies = {
+    configureWorkspace: (value) => value,
+    bootstrapAuth: async () => ({ authenticated: true, mode: 'local', user: { id: scope.userId } }),
+    persistenceAdapter: { id: 'test.headless-settlement' },
+    idFactory: () => scope.turnId,
+    subscribeEvents: (_scope, callback) => {
+      subscriber = callback
+      return () => {
+        calls.unsubscribes += 1
+        subscriber = () => {}
+      }
+    },
+    decideApproval: async () => { calls.decisions += 1 },
+    releaseApproval: async () => { calls.releases += 1 },
+    wait: async () => {
+      calls.polls += 1
+      assert.ok(calls.polls <= 12, 'headless must not poll forever after local execution settles')
+      await Promise.resolve()
+    },
+    engine: {
+      startTurn: async () => { emit('turn.started') },
+      recoverTurn: async () => {
+        calls.recoveries += 1
+        return { locallyActive: true, terminal: false }
+      },
+      waitForTurn: () => {
+        calls.waits += 1
+        return execution
+      },
+      listEvents: ({ after }) => {
+        calls.reads += 1
+        return events.filter((event) => event.sequence > after)
+      },
+    },
+  }
+  return {
+    scope, events, delivered, calls, emit, dependencies, resolveExecution, rejectExecution,
+    run: (input = {}) => runHeadlessTurn({
+      prompt: 'finish one isolated turn', sessionId: scope.sessionId,
+      env: {}, onEvent: (event) => delivered.push(event.type), ...input,
+    }, dependencies),
+  }
+}
+
+test('headless rejects local settlement without a terminal event instead of polling forever', async () => {
+  const harness = createHeadlessSettlementHarness()
+  harness.resolveExecution()
+  await assert.rejects(harness.run(), (error) => error.code === 'TURN_TERMINAL_EVENT_MISSING'
+    && error.exitCode === 1
+    && error.message.includes(harness.scope.turnId))
+  assert.deepEqual(harness.delivered, ['turn.started'])
+  assert.equal(harness.calls.waits, 1)
+  assert.equal(harness.calls.recoveries, 0, 'missing boundaries must not trigger side-effect replay')
+  assert.equal(harness.calls.unsubscribes, 1)
+  assert.ok(harness.calls.polls <= 1)
+})
+
+test('headless reports a missing boundary when execution cleanup removed the local waiter', async () => {
+  const harness = createHeadlessSettlementHarness()
+  // TurnEngine.waitForTurn returns an already-resolved promise once scheduling
+  // cleanup has removed its active entry. There is no retained failure to read.
+  harness.dependencies.engine.waitForTurn = () => Promise.resolve()
+  await assert.rejects(harness.run(), (error) => error.code === 'TURN_TERMINAL_EVENT_MISSING')
+  assert.deepEqual(harness.events.map((event) => event.type), ['turn.started'])
+  assert.equal(harness.calls.recoveries, 0)
+  assert.equal(harness.calls.unsubscribes, 1)
+  assert.ok(harness.calls.polls <= 1)
+})
+
+test('headless preserves a checkpoint lease fence through terminal runtime settlement', async () => {
+  const harness = createHeadlessSettlementHarness()
+  const fence = Object.assign(new Error('execution lease expired'), { code: 'TURN_EXECUTION_LEASE_STALE' })
+  let checkpointError
+  await assert.rejects(flushCheckpoint({
+    saveCheckpoint: async () => { throw fence }, state: {},
+  }), (error) => {
+    checkpointError = error
+    return error.code === 'CHECKPOINT_FLUSH_FAILED' && error.cause === fence
+  })
+  const unexpectedWrite = () => assert.fail('a stale owner must not write a terminal event')
+  const terminalRuntime = createTurnTerminalOutcomeRuntime({
+    now: unexpectedWrite,
+    writeMessage: unexpectedWrite,
+    scheduleMemoryExtraction: unexpectedWrite,
+    runMemoryModel: unexpectedWrite,
+  })
+  harness.dependencies.engine.waitForTurn = () => terminalRuntime.settleError({
+    signal: new AbortController().signal,
+    error: checkpointError,
+    evidence: { emitter: unexpectedWrite, emitFailed: unexpectedWrite },
+  })
+
+  await assert.rejects(harness.run(), (error) => error === checkpointError && error.cause === fence)
+  assert.deepEqual(harness.delivered, ['turn.started'])
+  assert.equal(harness.calls.recoveries, 0)
+  assert.equal(harness.calls.unsubscribes, 1)
+})
+
+for (const type of ['turn.completed', 'turn.failed', 'turn.blocked', 'turn.cancelled', 'turn.paused', 'turn.interrupted']) {
+  test(`headless gives a drained ${type} precedence over a local execution error`, async () => {
+    const harness = createHeadlessSettlementHarness()
+    const readEvents = harness.dependencies.engine.listEvents
+    harness.dependencies.engine.listEvents = (scope) => {
+      if (harness.calls.reads === 1) harness.emit(type, { text: 'durable outcome' })
+      return readEvents(scope)
+    }
+    harness.rejectExecution(Object.assign(new Error('old owner fenced'), { code: 'TURN_ALREADY_TERMINAL' }))
+    const result = await harness.run()
+    assert.equal(result.lastEvent.type, type)
+    assert.equal(result.exitCode, type === 'turn.completed' ? 0 : 1)
+    assert.deepEqual(harness.delivered, ['turn.started', type])
+    assert.equal(harness.calls.unsubscribes, 1)
+  })
+}
+
+test('headless continues attaching while a remote owner is active without a local waiter', async () => {
+  const harness = createHeadlessSettlementHarness()
+  harness.emit('turn.started')
+  harness.dependencies.engine.resumeTurn = async () => ({ status: 'running' })
+  harness.dependencies.engine.recoverTurn = async () => {
+    harness.calls.recoveries += 1
+    if (harness.calls.recoveries === 4) harness.emit('turn.completed', { text: 'remote completed' })
+    return { locallyActive: false, scheduled: false, terminal: false }
+  }
+  harness.dependencies.engine.waitForTurn = () => {
+    assert.equal(harness.events.at(-1).type, 'turn.completed', 'remote attach must not observe a nonexistent local waiter')
+    harness.calls.waits += 1
+    return Promise.resolve()
+  }
+
+  const result = await harness.run({ resumeTurnId: harness.scope.turnId })
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.lastEvent.payload.text, 'remote completed')
+  assert.equal(harness.calls.recoveries, 4)
+  assert.equal(harness.calls.polls, 4)
+  assert.equal(harness.calls.waits, 1)
+  assert.deepEqual(harness.delivered, ['turn.started', 'turn.completed'])
+})
+
+test('headless exits on lease loss while approval input is pending and ignores a late decision', { timeout: 1_000 }, async () => {
+  const harness = createHeadlessSettlementHarness()
+  const fence = Object.assign(new Error('approval wait lost execution lease'), { code: 'TURN_LEASE_LOST' })
+  let finishApproval
+  const approvalInput = new Promise((resolve) => { finishApproval = resolve })
+  harness.dependencies.engine.startTurn = async () => {
+    harness.emit('turn.started')
+    harness.emit('approval.required', { approvalId: 'pending-lease-approval' })
+  }
+
+  await assert.rejects(harness.run({
+    interactive: true,
+    onApproval: () => {
+      harness.rejectExecution(fence)
+      return approvalInput
+    },
+  }), (error) => error === fence)
+  assert.equal(harness.calls.decisions, 0)
+  assert.equal(harness.calls.releases, 0)
+  assert.equal(harness.calls.unsubscribes, 1)
+  assert.deepEqual(harness.delivered, ['turn.started', 'approval.required'])
+
+  finishApproval('approve')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(harness.calls.decisions, 0, 'an abandoned prompt must not write through a closed runtime')
+  assert.equal(harness.calls.releases, 0)
 })

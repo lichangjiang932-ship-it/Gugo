@@ -1056,7 +1056,9 @@ test('jobRuntime end-to-end: model calling create_pptx persists artifact under j
                 name: 'create_pptx',
                 arguments: JSON.stringify({
                   title: '季度汇报',
-                  slides: [{ title: 'Q3 概览', bullets: ['增长 12%', 'NPS +8'] }],
+                  slides: [{ title: 'Q3 概览', elements: [
+                    { type: 'text', text: '增长 12%\nNPS +8', x: 0.08, y: 0.15, w: 0.84, h: 0.5 },
+                  ] }],
                 }),
               },
             }],

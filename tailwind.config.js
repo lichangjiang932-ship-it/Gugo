@@ -12,6 +12,8 @@ export default {
         paper: 'rgb(var(--color-paper-rgb) / <alpha-value>)',
         'paper-2': 'rgb(var(--color-paper-2-rgb) / <alpha-value>)',
         'paper-dark': 'rgb(var(--color-paper-dark-rgb) / <alpha-value>)',
+        sidebar: 'rgb(var(--color-sidebar-rgb) / <alpha-value>)',
+        surface: 'rgb(var(--color-surface-rgb) / <alpha-value>)',
         ink: 'rgb(var(--color-ink-rgb) / <alpha-value>)',
         'ink-soft': 'rgb(var(--color-ink-soft-rgb) / <alpha-value>)',
         'ink-fade': 'rgb(var(--color-ink-fade-rgb) / <alpha-value>)',
@@ -54,7 +56,7 @@ export default {
         print: ['"Architects Daughter"', '"Kalam"', 'cursive'],
         mono: ['var(--font-mono)'],
         display: ['"Cormorant Garamond"', 'Georgia', 'serif'],
-        sans: ['"Inter"', '"PingFang SC"', '"Microsoft YaHei"', '"Helvetica Neue"', 'Arial', 'sans-serif'],
+        sans: ['var(--font-ui)'],
       },
       fontSize: {
         page: 'var(--type-page)',

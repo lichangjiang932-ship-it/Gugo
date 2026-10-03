@@ -1,10 +1,17 @@
-import { parseModelProviderResponse } from './modelProviderResponse.js'
+import { extractModelResponseError, extractUsage, modelHttpResponseError, parseModelProviderResponse } from './modelProviderResponse.js'
+import { getModelWireDiagnostics } from './modelWireDiagnostics.js'
 import {
   modelRequestOutcomeUnknown,
   throwIfModelRequestAbortedBeforeSend,
 } from './modelRequestOutcome.js'
 
 export function* modelProviderResponseEvents(data, profile, options = {}) {
+  const responseError = extractModelResponseError(data)
+  if (responseError) {
+    const usage = responseError.usage || extractUsage(data)
+    if (usage) yield { type: 'usage', usage }
+    throw responseError
+  }
   const parsed = parseModelProviderResponse(data, profile, options)
   if (parsed.usage) yield { type: 'usage', usage: parsed.usage }
   if (parsed.content) yield { type: 'text', delta: parsed.content }
@@ -17,10 +24,11 @@ export function* modelProviderResponseEvents(data, profile, options = {}) {
       toolCalls: parsed.toolCalls,
       finishReason: parsed.finishReason || 'tool_calls',
       usage: parsed.usage,
+      ...(parsed.providerReplay ? { providerReplay: parsed.providerReplay } : {}),
     }
     return
   }
-  yield { type: 'finish', finishReason: parsed.finishReason || 'stop', usage: parsed.usage }
+  yield { type: 'finish', finishReason: parsed.finishReason || 'stop', usage: parsed.usage, ...(parsed.providerReplay ? { providerReplay: parsed.providerReplay } : {}) }
 }
 
 async function fetchTextWithTimeout(fetchImpl, url, init, {
@@ -99,8 +107,9 @@ export async function* requestNonStreamingAsEvents({
   const { url, init } = providerRequest
   throwIfModelRequestAbortedBeforeSend(externalSignal)
   if (typeof onProviderAttempt === 'function') {
-    await onProviderAttempt({ config, profile, requestUrl: url })
+    await onProviderAttempt({ config, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
   }
+  throwIfModelRequestAbortedBeforeSend(externalSignal)
   let responseReceived = false
   let response
   let text
@@ -128,15 +137,12 @@ export async function* requestNonStreamingAsEvents({
   let data
   try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
   if (!response.ok) {
-    const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
-    const error = new Error(message)
-    error.status = response.status
-    error.fromUpstream = true
-    error.retryAfter = response.headers?.get?.('retry-after') ?? null
+    const error = modelHttpResponseError(data, response, text)
     throw modelRequestOutcomeUnknown(error, {
       modelRequestId,
       phase: 'response',
       responseReceived: true,
+      externalAborted: externalSignal?.aborted === true,
     })
   }
 
@@ -147,6 +153,7 @@ export async function* requestNonStreamingAsEvents({
       modelRequestId,
       phase: 'response',
       responseReceived: true,
+      externalAborted: externalSignal?.aborted === true,
     })
   }
 }

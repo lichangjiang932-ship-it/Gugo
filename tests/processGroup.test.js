@@ -8,7 +8,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { _testing, runProcessWithGroup, terminateProcessTree } from '../server/utils/processGroup.js'
-import { WINDOWS_PROCESS_GATE_PROTOCOL } from '../server/utils/windowsProcessGateRuntime.js'
+import {
+  WINDOWS_PROCESS_GATE_PATH,
+  WINDOWS_PROCESS_GATE_PROTOCOL,
+  windowsProcessGateEnv,
+} from '../server/utils/windowsProcessGateRuntime.js'
+import { sanitizeChildEnv } from '../server/utils/sensitiveEnv.js'
 import {
   windowsTreeKillWorkerArgs,
   windowsTreeKillWorkerPayload,
@@ -485,6 +490,75 @@ test('Windows tree-kill worker: cleanup retries transient native races within a 
   assert.doesNotMatch(source, /DateTime\.UtcNow/u)
 })
 
+async function waitForHandleStressReady(target, startMessage = null) {
+  let dispose = () => {}
+  const ready = new Promise((resolve, reject) => {
+    let output = ''
+    const onMessage = (message) => {
+      if (message?.protocol !== WINDOWS_PROCESS_GATE_PROTOCOL) return
+      if (message.operation === 'START_FAILED') reject(new Error(message.error || 'stress target failed to start'))
+      if (!startMessage && message.operation === 'READY') resolve()
+    }
+    const onData = (chunk) => {
+      output += String(chunk)
+      if (startMessage && output.includes('HANDLE-STRESS-READY\n')) resolve()
+    }
+    const onError = (error) => reject(error)
+    const onClose = () => reject(new Error('stress gate exited before its readiness handshake'))
+    target.on('message', onMessage)
+    target.stdout.on('data', onData)
+    target.once('error', onError)
+    target.once('close', onClose)
+    dispose = () => {
+      target.off('message', onMessage)
+      target.stdout.off('data', onData)
+      target.off('error', onError)
+      target.off('close', onClose)
+    }
+    if (startMessage) target.send(startMessage, (error) => { if (error) reject(error) })
+  })
+  try { await settlesWithin(ready, 15_000) } finally { dispose() }
+}
+
+async function killHandleStressTarget(manager, { sealedJob = true } = {}) {
+  const env = sanitizeChildEnv()
+  const target = spawn(node, [WINDOWS_PROCESS_GATE_PATH], {
+    env: windowsProcessGateEnv(env),
+    stdio: ['ignore', 'pipe', 'ignore', 'ipc'],
+    windowsHide: true,
+  })
+  const closed = new Promise((resolve) => target.once('close', resolve))
+  let lease = null
+  let killed = false
+  try {
+    await waitForHandleStressReady(target)
+    // Match production: the real gate cannot launch the target until BIND has
+    // sealed the job. No pre-existing descendants are assumed away by a flag.
+    lease = await manager.bind(target.pid, { sealedJob })
+    assert.ok(lease, 'worker must bind the live gate before target execution')
+    await waitForHandleStressReady(target, {
+      protocol: WINDOWS_PROCESS_GATE_PROTOCOL,
+      operation: 'START',
+      shellPath: node,
+      shellArgs: ['-e', "process.stdout.write('HANDLE-STRESS-READY\\n'); setInterval(() => {}, 1_000)"],
+      env,
+      hasStdinInput: false,
+      hasControlPipe: false,
+      windowsHide: true,
+      windowsVerbatimArguments: false,
+    })
+    killed = await manager.kill(lease)
+    await closed
+    return killed
+  } finally {
+    if (lease && !killed) await manager.release(lease).catch(() => false)
+    if (target.exitCode == null && target.signalCode == null) {
+      try { target.kill('SIGKILL') } catch { /* this fixture's gate already exited */ }
+    }
+    await closed
+  }
+}
+
 test('Windows tree-kill worker: repeated KILL reuses worker threads without leaking handles', {
   skip: process.platform !== 'win32',
   // The worker may spend up to 30s in its own readiness gate before this
@@ -495,7 +569,8 @@ test('Windows tree-kill worker: repeated KILL reuses worker threads without leak
   const manager = _testing.createWindowsTreeKillWorkerManager()
   t.after(() => manager.shutdown())
   await manager.ready({ timeoutMs: 30_000 })
-  const workerPid = manager.snapshot().pid
+  const workerSnapshot = manager.snapshot()
+  const workerPid = workerSnapshot.pid
   assert.ok(workerPid > 0)
 
   const handleCount = () => {
@@ -512,25 +587,8 @@ test('Windows tree-kill worker: repeated KILL reuses worker threads without leak
   }
 
   const killOne = async () => {
-    const target = spawn(node, ['-e', "process.stdout.write('READY\\n'); setInterval(() => {}, 1_000)"], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    })
-    const closed = new Promise((resolve) => target.once('close', resolve))
-    try {
-      await new Promise((resolve, reject) => {
-        target.stdout.once('data', resolve)
-        target.once('error', reject)
-      })
-      const lease = await manager.bind(target.pid)
-      assert.ok(lease, 'worker must bind the live target')
-      assert.equal(await manager.kill(lease), true)
-      await closed
-    } finally {
-      if (target.exitCode == null && target.signalCode == null) {
-        try { target.kill('SIGKILL') } catch { /* target already exited */ }
-      }
-    }
+    assert.equal(await killHandleStressTarget(manager), true)
+    assert.deepEqual(manager.snapshot(), workerSnapshot, 'every KILL must reuse the same idle worker generation')
   }
 
   // Warm the CLR thread pool before measuring its steady-state handle count.
@@ -538,11 +596,42 @@ test('Windows tree-kill worker: repeated KILL reuses worker threads without leak
   const before = handleCount()
   for (let index = 0; index < 40; index += 1) await killOne()
   const after = handleCount()
+  t.diagnostic(`worker generation ${workerSnapshot.generation}; 48 KILLs; handles ${before} -> ${after}`)
 
   assert.ok(
     after - before <= 8,
     `worker handles grew from ${before} to ${after}; repeated KILL must not allocate dedicated threads`,
   )
+})
+
+test('Windows tree-kill worker: sealed stress fixture retains KILL proof when ancestry snapshots are unavailable', {
+  skip: process.platform !== 'win32',
+  timeout: 45_000,
+}, async (t) => {
+  // Fault only this worker's in-memory payload. Product identity checks and the
+  // late-bound real-tree tests remain unchanged and must continue to fail closed.
+  const source = windowsTreeKillWorkerScript()
+  const snapshotSignature = 'private static List<PROCESSENTRY32> Snapshot() {'
+  assert.equal(source.includes(snapshotSignature), true)
+  const faultSource = source.replace(snapshotSignature, `${snapshotSignature}
+    if (Environment.GetEnvironmentVariable("GUGO_TEST_SNAPSHOT_DENIED") == "1")
+      throw new Win32Exception(5, "Synthetic snapshot denied for test");`)
+  const manager = _testing.createWindowsTreeKillWorkerManager({
+    workerPayload: Buffer.from(faultSource, 'utf8').toString('base64'),
+    spawnProcess: (command, args, options) => spawn(command, args, {
+      ...options,
+      env: { ...options.env, GUGO_TEST_SNAPSHOT_DENIED: '1' },
+    }),
+  })
+  t.after(() => manager.shutdown())
+  await manager.ready({ timeoutMs: 30_000 })
+  const workerSnapshot = manager.snapshot()
+  assert.equal(await killHandleStressTarget(manager, { sealedJob: false }), false,
+    'late-bound cleanup must refuse an unprovable ancestry snapshot')
+  assert.deepEqual(manager.snapshot(), workerSnapshot)
+  assert.equal(await killHandleStressTarget(manager), true,
+    'the same KILL queue must prove the sealed job and every retained identity empty')
+  assert.deepEqual(manager.snapshot(), workerSnapshot)
 })
 
 test('Windows tree-kill worker: invalid identity cutoff rejects the bind without killing the target', {

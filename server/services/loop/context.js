@@ -172,6 +172,7 @@ function buildLoopContext(inputOptions = {}, {
       reconcileRequest: options.reconcileModelRequest,
       compactionArchivePort: options.compactionArchivePort,
       contextWindow: options.contextWindow,
+      semanticSummary: options.semanticSummary,
       heartbeatIntervalMs: options.modelHeartbeatIntervalMs,
       onPhase: options.onModelPhase,
       onDelta: options.onModelDelta,

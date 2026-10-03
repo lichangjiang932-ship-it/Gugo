@@ -1,4 +1,11 @@
+// @ts-check
+
 import { isProxy, isSharedArrayBuffer } from 'node:util/types'
+
+/** @typedef {import('../../types/kernel-ports.js').LoopHostAdapterContractVersion} LoopHostAdapterContractVersion */
+/** @typedef {import('../../types/kernel-ports.js').LoopHostAdapterDeclaration} LoopHostAdapterDeclaration */
+/** @typedef {import('../../types/kernel-ports.js').LoopHostCapabilityError} LoopHostCapabilityError */
+/** @typedef {import('../../types/kernel-ports.js').LoopHostCapabilitySnapshot} LoopHostCapabilitySnapshot */
 
 export const LOOP_HOST_BROKER_API_VERSION = 1
 export const LOOP_HOST_ADAPTER_CONTRACT_VERSION = 3
@@ -15,13 +22,19 @@ const SUPPORTED_ADAPTER_CONTRACT_VERSIONS = new Set(
 )
 const CAPABILITY_KEYS = Object.freeze(['loopBroker'])
 
+/**
+ * @param {LoopHostCapabilityError['code']} code
+ * @param {string} message
+ * @returns {LoopHostCapabilityError}
+ */
 function capabilityError(code, message) {
-  const error = new TypeError(message)
+  const error = /** @type {LoopHostCapabilityError} */ (new TypeError(message))
   error.code = code
   error.retryable = false
   return error
 }
 
+/** @param {string} message @returns {LoopHostCapabilityError} */
 function invalidDeclaration(message) {
   return capabilityError(
     LOOP_HOST_CAPABILITY_ERROR_CODES.INVALID_DECLARATION,
@@ -29,6 +42,13 @@ function invalidDeclaration(message) {
   )
 }
 
+/**
+ * @param {object} target
+ * @param {string} key
+ * @param {string} label
+ * @param {{ required?: boolean }} [options]
+ * @returns {PropertyDescriptor | null}
+ */
 function ownDataDescriptor(target, key, label, { required = true } = {}) {
   let descriptor
   try {
@@ -46,21 +66,24 @@ function ownDataDescriptor(target, key, label, { required = true } = {}) {
   return descriptor
 }
 
+/** @param {unknown} value @param {string} label */
 function assertInspectableObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || isProxy(value)) {
     throw invalidDeclaration(`${label} must be a non-proxy object`)
   }
 }
 
+/** @param {unknown} value */
 function assertPlainCapabilityObject(value) {
   assertInspectableObject(value, 'adapter hostCapabilities')
-  if (isSharedArrayBuffer(value)) {
+  const candidate = /** @type {object} */ (value)
+  if (isSharedArrayBuffer(candidate)) {
     throw invalidDeclaration('adapter hostCapabilities must not contain shared memory')
   }
 
   let prototype
   try {
-    prototype = Object.getPrototypeOf(value)
+    prototype = Object.getPrototypeOf(candidate)
   } catch {
     throw invalidDeclaration('adapter hostCapabilities could not be inspected safely')
   }
@@ -70,7 +93,7 @@ function assertPlainCapabilityObject(value) {
 
   let keys
   try {
-    keys = Reflect.ownKeys(value)
+    keys = Reflect.ownKeys(candidate)
   } catch {
     throw invalidDeclaration('adapter hostCapabilities could not be inspected safely')
   }
@@ -84,6 +107,11 @@ function assertPlainCapabilityObject(value) {
   }
 }
 
+/**
+ * @param {object} adapter
+ * @param {LoopHostAdapterContractVersion} contractVersion
+ * @returns {import('../../types/kernel-ports.js').LoopHostCapabilities}
+ */
 function projectHostCapabilities(adapter, contractVersion) {
   const declaration = ownDataDescriptor(
     adapter,
@@ -95,8 +123,9 @@ function projectHostCapabilities(adapter, contractVersion) {
 
   const hostCapabilities = declaration.value
   assertPlainCapabilityObject(hostCapabilities)
+  const hostCapabilityRecord = /** @type {object} */ (hostCapabilities)
   const loopBroker = ownDataDescriptor(
-    hostCapabilities,
+    hostCapabilityRecord,
     'loopBroker',
     'adapter hostCapabilities',
     { required: contractVersion === LOOP_HOST_ADAPTER_CONTRACT_VERSION },
@@ -115,27 +144,37 @@ function projectHostCapabilities(adapter, contractVersion) {
  * adapter. This declaration is not an authority object: callers must still
  * require adapter contract v3 before granting a broker lease.
  */
+/**
+ * @param {LoopHostAdapterDeclaration} adapter
+ * @returns {LoopHostCapabilitySnapshot}
+ */
 export function prepareLoopHostCapability(adapter) {
   assertInspectableObject(adapter, 'loop adapter')
+  const adapterRecord = /** @type {object} */ (adapter)
   const contractVersionDescriptor = ownDataDescriptor(
-    adapter,
+    adapterRecord,
     'contractVersion',
     'loop adapter',
   )
+  if (!contractVersionDescriptor) {
+    throw invalidDeclaration('loop adapter must declare own data property contractVersion')
+  }
   const contractVersion = contractVersionDescriptor.value
-  if (!SUPPORTED_ADAPTER_CONTRACT_VERSIONS.has(contractVersion)) {
+  if (!SUPPORTED_ADAPTER_CONTRACT_VERSIONS.has(
+    /** @type {LoopHostAdapterContractVersion} */ (contractVersion),
+  )) {
     throw capabilityError(
       LOOP_HOST_CAPABILITY_ERROR_CODES.UNSUPPORTED_ADAPTER_VERSION,
       'loop adapter contractVersion is unsupported',
     )
   }
-
-  const hostCapabilities = projectHostCapabilities(adapter, contractVersion)
-  const snapshot = {
+  const normalizedContractVersion = /** @type {LoopHostAdapterContractVersion} */ (contractVersion)
+  const hostCapabilities = projectHostCapabilities(adapterRecord, normalizedContractVersion)
+  const snapshot = /** @type {LoopHostCapabilitySnapshot} */ ({
     apiVersion: LOOP_HOST_BROKER_API_VERSION,
-    adapterContractVersion: contractVersion,
+    adapterContractVersion: normalizedContractVersion,
     hostCapabilities,
-  }
+  })
   const encodedBytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8')
   if (encodedBytes > LOOP_HOST_CAPABILITY_DECLARATION_MAX_BYTES) {
     throw invalidDeclaration('loop host capability declaration exceeds its size limit')

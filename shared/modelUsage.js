@@ -9,15 +9,29 @@ const TOKEN_USAGE_KEYS = Object.freeze([
 ])
 
 export function normalizeOptionalUsageNumber(value) {
+  const kind = typeof value
   if (
-    value === null
-    || value === undefined
-    || typeof value === 'boolean'
-    || (typeof value === 'string' && value.trim() === '')
+    (kind !== 'number' && kind !== 'string')
+    || (kind === 'string' && value.trim() === '')
   ) return null
 
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+/** Unknown cache reads are not zero hits. Only complete a measured partition. */
+export function normalizeCacheReadUsage({ promptTokens, cacheHitTokens, cacheMissTokens } = {}) {
+  const prompt = normalizeOptionalUsageNumber(promptTokens)
+  const hit = normalizeOptionalUsageNumber(cacheHitTokens)
+  const miss = normalizeOptionalUsageNumber(cacheMissTokens)
+  if (prompt === null || (hit === null && miss === null)) return {}
+  const total = Math.floor(prompt)
+  const measuredHit = hit === null ? null : Math.floor(hit)
+  const measuredMiss = miss === null ? null : Math.floor(miss)
+  const read = measuredHit ?? total - measuredMiss
+  const unread = measuredMiss ?? total - measuredHit
+  if (read < 0 || unread < 0 || read + unread !== total) return {}
+  return { cacheHitTokens: read, cacheMissTokens: unread }
 }
 
 export function normalizeModelUsage(value) {

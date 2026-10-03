@@ -60,7 +60,7 @@ export default function CollapsedArtifactContent({
   }
   return (
     <>
-      <div className="chat-assistant-message text-[15px] leading-7" data-quotable="true">
+      <div className="chat-assistant-message text-[15px] leading-7" data-message-body="true">
         <ExecutionDisclosure
           hasExecution={Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0}
           msg={msg}

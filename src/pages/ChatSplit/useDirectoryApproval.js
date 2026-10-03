@@ -133,17 +133,13 @@ export default function useDirectoryApproval({ lang, t, toast }) {
     setDirectoryApproval({ open: true, request, requestId: requestRecord.id, busy: false, error: '' })
   }), [settleDirectoryApprovalRequest])
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-    window.__directoryApprovalGate = requestDirectoryApproval
-    return () => {
-      if (window.__directoryApprovalGate === requestDirectoryApproval) delete window.__directoryApprovalGate
-      settleDirectoryApprovalRequest(
-        directoryApprovalRequestRef.current,
-        { approved: false },
-        { close: false },
-      )
-    }
+  // Unmounting abandons a pending request rather than leaving its promise hung.
+  useEffect(() => () => {
+    settleDirectoryApprovalRequest(
+      directoryApprovalRequestRef.current,
+      { approved: false },
+      { close: false },
+    )
   }, [requestDirectoryApproval, settleDirectoryApprovalRequest])
 
   const ensureLocalPathAccess = useMemo(() => createLocalPathAccessEnsurer(requestDirectoryApproval), [requestDirectoryApproval])

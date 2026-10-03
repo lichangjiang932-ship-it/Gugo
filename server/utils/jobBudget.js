@@ -1,3 +1,5 @@
+import { resolveMaxIters } from '../services/loop/heuristics/constants.js'
+
 import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 
 export const MODEL_BUDGET_LIMIT_TYPES = Object.freeze({
@@ -9,13 +11,13 @@ export const RETIRED_DOLLAR_BUDGET_ERROR_CODE = 'JOB_BUDGET_DOLLAR_GATE_RETIRED'
 /**
  * 任务级工具预算(M3.5)。
  *
- * runToolsLoop 已经有 maxIters=6,但每 iter 可以请求 N 个 tool calls,
- * 加上 Agent 工具能 spawn 子代理(子代理又有自己的 8 iter),
+ * runToolsLoop 每 iter 可以请求 N 个 tool calls,
+ * 加上 Agent 工具能 spawn 子代理(子代理又有自己的循环),
  * 一个失控 job 实际可以炸到几百个工具调用 → token 烧爆.
  *
  * 本模块给 job 一个累积预算:
- *   - maxTotalCalls(默认 80):整个 job 所有 step + 所有子代理总和工具调用数
- *   - maxWallMs(默认 10 分钟):job 总挂钟时间
+ *   - maxTotalCalls(默认 2000):整个 job 所有 step + 所有子代理总和工具调用数
+ *   - maxWallMs(默认 6 小时):累计工作墙钟,不含模型等待和持久化的计划挂起
  *   - 任一超限 → 后续 executeTool 直接拒绝返回 { ok:false, error:'budget exceeded' }
  *
  * 由 jobRuntime 在 job 启动时 createJobBudget,挂在 job 上;
@@ -28,21 +30,30 @@ export const RETIRED_DOLLAR_BUDGET_ERROR_CODE = 'JOB_BUDGET_DOLLAR_GATE_RETIRED'
 // 光探索就可能几十次,真正改代码又是几十次,还要验证。碰到上限
 // 用户看到的就是「做到一半没后续」。用 JOB_MAX_TOOL_CALLS 可覆盖。
 function envLimit(env, name, fallback) {
-  const raw = Number(env?.[name])
+  const value = env?.[name]
+  if ((typeof value !== 'string' && typeof value !== 'number') || String(value).trim() === '') {
+    return fallback
+  }
+  const raw = Number(value)
   return Number.isFinite(raw) && raw >= 0 ? raw : fallback
 }
 
 export function resolveJobBudgetDefaults(env = process.env) {
-  const rawToolCalls = Number(env?.JOB_MAX_TOOL_CALLS)
-  const rawWallMs = Number(env?.JOB_MAX_WALL_MS)
+  const rawToolCalls = envLimit(env, 'JOB_MAX_TOOL_CALLS', 2000)
+  const rawWallMs = envLimit(env, 'JOB_MAX_WALL_MS', 6 * 60 * 60 * 1000)
+  // The iteration cap and the model-call budget bound the same loop, one model
+  // call per iteration. Untuned they are both 2000, so raising GUGO_MAX_ITERS
+  // alone would leave the budget as the real limit and the turn would stop as
+  // `execution_budget_exhausted` — surprising, because the documented knob
+  // appeared to have room. Keep the default coherent; an explicit
+  // JOB_MAX_MODEL_CALLS still wins.
+  const maxModelCallsDefault = Math.max(2000, resolveMaxIters(env))
   return {
-    maxTotalCalls: Number.isFinite(rawToolCalls) && rawToolCalls > 0
+    maxTotalCalls: rawToolCalls > 0
       ? Math.floor(rawToolCalls)
       : 2000,
-    maxWallMs: Number.isFinite(rawWallMs) && rawWallMs >= 0
-      ? Math.floor(rawWallMs)
-      : 6 * 60 * 60 * 1000,
-    maxModelCalls: envLimit(env, 'JOB_MAX_MODEL_CALLS', 2000),
+    maxWallMs: Math.floor(rawWallMs),
+    maxModelCalls: envLimit(env, 'JOB_MAX_MODEL_CALLS', maxModelCallsDefault),
     maxModelTokens: envLimit(env, 'JOB_MAX_MODEL_TOKENS', 0),
   }
 }
@@ -52,9 +63,9 @@ const DEFAULT_MAX_CALLS = DEFAULTS.maxTotalCalls
 
 // ★ 墙钟从 60 分钟提到 6 小时并可配。
 //
-// 注意这个墙钟**已经不含模型延迟**了(见下面 trackModelMs)——
-// 它只统计工具真正执行的时间。6 小时的「纯工具执行时间」意味着
-// 真的有东西卡死了,而不是「任务比较大」。
+// 注意这个墙钟不含模型等待区间的并集。多个子代理共用预算时，
+// 重叠等待只扣除一次；与模型等待重叠的工具工作也处于这段扣除区间。
+// 它不是把所有子代理的模型耗时或工具耗时分别相加。
 // 设 0 = 完全不限时间(只靠调用次数和用户手动取消收敛)。
 const DEFAULT_MAX_WALL_MS = DEFAULTS.maxWallMs
 
@@ -131,11 +142,12 @@ function mustStopForModelBudget(status, allowOverBudget) {
 /** Account for one real provider request recovered from an in-flight checkpoint. */
 export function recordRecoveredModelResult(budget, result, {
   allowOverBudget = false,
+  modelCallAlreadyCounted = false,
 } = {}) {
   // A recovered response proves the provider call already happened. Account
   // for it even when it crosses a configured limit, then surface the limit as
   // a terminal error carrying the authoritative partial result.
-  const callStatus = budget?.consumeModelCall?.({ allowOverBudget: true }) || { ok: true }
+  const callStatus = modelCallAlreadyCounted ? { ok: true } : budget?.consumeModelCall?.({ allowOverBudget: true }) || { ok: true }
   const usageStatus = budget?.trackModelUsage?.(result?.usage, result?.costUsd) || { ok: true }
   const exceededStatuses = [callStatus, usageStatus].filter((status) => status?.ok === false)
   const exceeded = exceededStatuses[0]
@@ -159,12 +171,14 @@ export async function runWithModelBudget(budget, run, {
   if (mustStopForModelBudget(callStatus, allowOverBudget)) {
     throw modelBudgetError(callStatus.reason, undefined, callStatus)
   }
-  const startedAt = now()
+  const endModelWait = budget?.beginModelWait?.()
+  const startedAt = typeof endModelWait === 'function' ? null : now()
   let result
   try {
     result = await run()
   } finally {
-    budget?.trackModelMs?.(Math.max(0, now() - startedAt))
+    if (typeof endModelWait === 'function') endModelWait()
+    else budget?.trackModelMs?.(Math.max(0, now() - startedAt))
   }
   const usageStatus = budget?.trackModelUsage?.(result?.usage, result?.costUsd) || { ok: true }
   if (mustStopForModelBudget(usageStatus, allowOverBudget)) {
@@ -215,20 +229,52 @@ function restoredCostEvidenceIsComplete({
     && (initialCostUsd === undefined || restoredCostUsd !== null)
 }
 
+function createModelWaitClock({ now, initialElapsedMs, initialModelMs }) {
+  let modelMs = Math.max(0, Number(initialModelMs) || 0)
+  // Snapshots already exclude model waits from elapsed. Restoring the two
+  // counters together preserves history without retaining in-flight leases
+  // or charging the time the old process was offline.
+  const startedAt = now() - Math.max(0, Number(initialElapsedMs) || 0) - modelMs
+  let activeWaits = 0
+  let waitStartedAt = 0
+
+  return {
+    begin() {
+      if (activeWaits === 0) waitStartedAt = now()
+      activeWaits += 1
+      let ended = false
+      return () => {
+        if (ended) return
+        ended = true
+        activeWaits -= 1
+        if (activeWaits === 0) modelMs += Math.max(0, now() - waitStartedAt)
+      }
+    },
+    // Compatibility for callers reporting an already measured, disjoint
+    // interval. Concurrent provider requests must use the paired clock above.
+    track(ms) {
+      const value = Number(ms)
+      if (Number.isFinite(value) && value > 0) modelMs += value
+    },
+    snapshot() {
+      const at = now()
+      const totalModelMs = modelMs + (activeWaits > 0 ? Math.max(0, at - waitStartedAt) : 0)
+      return {
+        modelMs: totalModelMs,
+        elapsed: Math.max(0, at - startedAt - totalModelMs),
+      }
+    },
+  }
+}
+
 export function createJobBudget(options = {}) {
   const {
     maxTotalCalls, maxWallMs, maxModelCalls, maxModelTokens,
     initialUsed, initialElapsedMs, initialModelMs, initialModelCalls,
     initialModelTokens, initialCostUsd, initialCostEvidenceComplete, now,
   } = normalizeJobBudgetOptions(options)
-  const initialWorkingMs = Math.max(0, Number(initialElapsedMs) || 0)
   let used = Math.max(0, Number(initialUsed) || 0)
-  // 花在等模型上的时间。从墙钟里扣掉 —— 见 trackModelMs。
-  let modelMs = Math.max(0, Number(initialModelMs) || 0)
-  // `initialElapsedMs` comes from snapshot().elapsed and therefore already
-  // excludes model wait time. Rewind both counters so restoring a checkpoint
-  // does not subtract the historical model time a second time.
-  const startedAt = now() - initialWorkingMs - modelMs
+  const modelWaitClock = createModelWaitClock({ now, initialElapsedMs, initialModelMs })
   let modelCalls = Math.max(0, Number(initialModelCalls) || 0)
   let modelTokens = Math.max(0, Number(initialModelTokens) || 0)
   const restoredCostUsd = normalizeOptionalUsageNumber(initialCostUsd)
@@ -273,21 +319,11 @@ export function createJobBudget(options = {}) {
     return { ok: true }
   }
 
-  const workingElapsed = () => Math.max(0, now() - startedAt - modelMs)
-
   return {
-    /**
-     * ★ 把「等模型」的时间从墙钟预算里扣掉。
-     *
-     * 墙钟预算的本意是「别让一个 job 无限占着 runtime」,针对的是工具执行时间。
-     * 但原实现把模型延迟也算进去了,于是**模型越慢,能做的事越少** ——
-     * 这个方向完全是反的:本地模型慢是常态,不是失控信号。
-     * 一个 40s/轮的本地模型跑 30 轮就被判「超预算」,然后返回空文本。
-     */
-    trackModelMs(ms) {
-      const value = Number(ms)
-      if (Number.isFinite(value) && value > 0) modelMs += value
-    },
+    // The budget owns one clock across every concurrent provider request.
+    // The returned cleanup is idempotent and must run on success or failure.
+    beginModelWait: modelWaitClock.begin,
+    trackModelMs: modelWaitClock.track,
     consumeModelCall({ allowOverBudget = false } = {}) {
       const current = modelLimitStatus()
       // `allowOverBudget` permits one deliberate wrap-up beyond call/token limits.
@@ -327,7 +363,7 @@ export function createJobBudget(options = {}) {
     },
     consume(cost = 1) {
       used += cost
-      const elapsed = workingElapsed()
+      const { elapsed } = modelWaitClock.snapshot()
       if (used > maxTotalCalls) {
         return { ok: false, reason: `tool call budget exceeded (${used}/${maxTotalCalls})` }
       }
@@ -338,10 +374,11 @@ export function createJobBudget(options = {}) {
       return { ok: true, used, remaining: maxTotalCalls - used, elapsed }
     },
     snapshot() {
+      const { elapsed, modelMs } = modelWaitClock.snapshot()
       return {
         used,
         maxTotalCalls,
-        elapsed: workingElapsed(),
+        elapsed,
         maxWallMs,
         modelMs,
         modelCalls,

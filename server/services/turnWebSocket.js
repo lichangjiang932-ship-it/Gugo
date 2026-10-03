@@ -12,12 +12,15 @@ import { decideApprovalRequest } from './approvalDecisionService.js'
 import { logWarn } from '../utils/logger.js'
 import {
   createTurnWebSocketFrame,
-  validateTurnWebSocketClientFrame,
 } from '../../shared/turnWebSocketProtocol.js'
+import {
+  decodeTurnWebSocketClientFrame,
+  encodeTurnWebSocketEvent,
+  encodeTurnWebSocketServerFrame,
+} from '../core/turnWebSocketFrameCodec.js'
 import {
   TURN_EVENT_TRANSPORT_TYPE,
   canAdvanceTurnEventCursor,
-  createTurnEventTransportEnvelope,
 } from '../../shared/turnEvents.js'
 import { isHttpServerDraining } from '../core/httpServerDrain.js'
 import { runtimeNotReadyMessage } from '../core/runtimeReadiness.js'
@@ -39,10 +42,9 @@ function closeSocket(socket, code, reason) {
 
 function send(socket, value, { maxBufferedBytes = MAX_SOCKET_BUFFERED_BYTES } = {}) {
   if (socket.readyState !== socket.OPEN) return false
-  const frame = value.type === TURN_EVENT_TRANSPORT_TYPE
-    ? createTurnEventTransportEnvelope(value.event)
-    : createTurnWebSocketFrame(value.type, value)
-  const payload = JSON.stringify(frame)
+  const payload = value.type === TURN_EVENT_TRANSPORT_TYPE
+    ? encodeTurnWebSocketEvent(value.event)
+    : encodeTurnWebSocketServerFrame(createTurnWebSocketFrame(value.type, value))
   const queuedBytes = Math.max(0, Number(socket.bufferedAmount) || 0)
   if (queuedBytes + Buffer.byteLength(payload) > maxBufferedBytes) {
     closeSocket(socket, 1013, 'Realtime client is too slow')
@@ -127,16 +129,7 @@ function logRejectedClientFrame(rejection, { userId, sink } = {}) {
 }
 
 export function parseTurnWebSocketClientFrame(raw, { userId, logSink } = {}) {
-  let message
-  try {
-    message = JSON.parse(String(raw))
-  } catch {
-    const rejection = { ok: false, code: 'INVALID_JSON' }
-    logRejectedClientFrame(rejection, { userId, sink: logSink })
-    return rejection
-  }
-
-  const validation = validateTurnWebSocketClientFrame(message)
+  const validation = decodeTurnWebSocketClientFrame(String(raw))
   if (!validation.ok) {
     logRejectedClientFrame(validation, { userId, sink: logSink })
   }

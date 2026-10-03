@@ -1,15 +1,31 @@
-import { ChevronUp, Link2, Settings, Wrench } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { Brain, ChevronUp, Link2, Settings, Wrench } from 'lucide-react'
 import BrandMark from '../BrandMark.jsx'
 import DesktopUpdateCard from '../DesktopUpdateCard.jsx'
 import { UiContributionRenderer, useUiContributions } from '../../plugins/uiContributionRegistry.js'
 
 export default function AccountArea({ compact = false, accountMenuOpen, accountMenuRef, user, onToggle, onNavigate, t }) {
   const contributedMenuItems = useUiContributions('account-menu')
+  const menuRef = useRef(null)
+  const triggerRef = useRef(null)
+  useEffect(() => {
+    if (accountMenuOpen) menuRef.current?.querySelector('button, a[href]')?.focus()
+  }, [accountMenuOpen])
   return <div ref={accountMenuRef} className="relative border-t border-ink/10 pt-2">
-    {accountMenuOpen && <div className={`absolute bottom-full z-30 mb-2 w-56 overflow-hidden rounded-card border border-ink/15 bg-paper p-1.5 shadow-xl ${compact ? 'left-0' : 'left-0 right-0'}`}>
+    {accountMenuOpen && <div ref={menuRef} data-left-rail-account-menu onKeyDown={(event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      onToggle()
+      triggerRef.current?.focus({ preventScroll: true })
+    }} className={`absolute bottom-full z-30 mb-2 w-56 max-w-[calc(100vw-16px)] overflow-hidden rounded-card border border-ink/15 bg-paper p-1.5 shadow-xl ${compact ? 'left-0' : 'left-0 right-0'}`}>
       <MenuButton icon={Link2} label={t('access.title')} onClick={() => onNavigate({ path: '/access', requiresLogin: true })} />
       <MenuButton icon={Settings} label={t('nav.settings')} onClick={() => onNavigate({ path: '/settings', requiresLogin: true })} />
       <MenuButton icon={Wrench} label={t('nav.skills')} onClick={() => onNavigate({ path: '/skills' })} />
+      {/* Memory is listed here because it has no other entry point: the rail's
+          icon row used to reach it, and removing that row would have left the
+          page reachable only by typing the URL. */}
+      <MenuButton icon={Brain} label={t('nav.memory')} onClick={() => onNavigate({ path: '/memory' })} />
       {contributedMenuItems.map((contribution) => contribution.component
         ? <UiContributionRenderer
             key={contribution.key}
@@ -24,9 +40,9 @@ export default function AccountArea({ compact = false, accountMenuOpen, accountM
           />)}
     </div>}
     <DesktopUpdateCard compact={compact} />
-    <button type="button" data-settings-focus-return onClick={onToggle} title={compact ? (user.name || t('settings.account')) : undefined} aria-label={user.name || t('settings.account')} aria-expanded={accountMenuOpen} className={`flex h-11 w-full items-center rounded-control text-left transition-colors hover:bg-paper-2 ${compact ? 'justify-center px-0' : 'gap-2.5 px-2'}`}>
+    <button ref={triggerRef} type="button" data-settings-focus-return onClick={onToggle} title={compact ? (user.name || t('settings.account')) : undefined} aria-label={user.name || t('settings.account')} aria-expanded={accountMenuOpen} className={`flex h-11 w-full items-center rounded-control text-left transition-colors hover:bg-paper-2 ${compact ? 'justify-center px-0' : 'gap-2.5 px-2'}`}>
       <BrandMark className="h-8 w-8 shrink-0 text-accent-ink" />
-      {!compact && <><span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium text-ink">{user.name || t('settings.account')}</span>{user.email && <span className="block truncate text-xs text-ink-fade">{user.email}</span>}</span><ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} /></>}
+      {!compact && <><span className="min-w-0 flex-1"><span className="block truncate text-ui font-medium text-ink">{user.name || t('settings.account')}</span>{user.email && <span className="block truncate text-xs text-ink-fade">{user.email}</span>}</span><ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} /></>}
     </button>
   </div>
 }

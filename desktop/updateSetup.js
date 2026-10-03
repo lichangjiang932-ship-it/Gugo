@@ -14,9 +14,9 @@ export function configureDesktopUpdates({
   // and NSIS installation, while the desktop runtime owns resumable downloads.
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
-  // Production packages derive publisherName from their signing certificate so
-  // electron-updater verifies the installer signer. Unsigned local packages keep
-  // relying on release HTTPS plus latest.yml SHA-512 integrity checks.
+  // Signed installations retain their certificate-derived publisher policy.
+  // Explicitly unsigned installations rely on release HTTPS and SHA-512 for
+  // integrity, without a Windows publisher identity guarantee.
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
 

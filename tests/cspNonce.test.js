@@ -67,6 +67,46 @@ test('securityHeaders creates a per-response CSP nonce without script unsafe-inl
   assert.ok(!scriptSrc.includes("'unsafe-inline'"))
 })
 
+test('connect-src never allows a bare scheme source', () => {
+  const createRes = () => {
+    const headers = new Map()
+    return {
+      headers,
+      setHeader(name, value) {
+        headers.set(name.toLowerCase(), value)
+      },
+    }
+  }
+
+  const previousEndpoints = process.env.ALLOWED_MODEL_ENDPOINTS
+  const previousPureLocal = process.env.GUGO_PURE_LOCAL_MODE
+  delete process.env.GUGO_PURE_LOCAL_MODE
+  try {
+    const allowed = createRes()
+    securityHeaders({ headers: {}, connection: {} }, allowed, () => {})
+    const connectSrc = getDirective(allowed.headers.get('content-security-policy'), 'connect-src')
+    const sources = connectSrc.split(/\s+/u).slice(1)
+    assert.ok(sources.includes("'self'"), connectSrc)
+    for (const source of sources) {
+      assert.doesNotMatch(source, /^(?:ws|wss|https?):$/u, connectSrc)
+    }
+
+    process.env.ALLOWED_MODEL_ENDPOINTS = 'https://models.example/v1,ws://models.example'
+    const extra = createRes()
+    securityHeaders({ headers: {}, connection: {} }, extra, () => {})
+    const extraConnect = getDirective(extra.headers.get('content-security-policy'), 'connect-src')
+    // An operator-supplied entry stays an exact source; it is never widened into
+    // a scheme source such as a bare `ws:`.
+    assert.ok(extraConnect.includes('https://models.example/v1'), extraConnect)
+    assert.ok(extraConnect.includes('ws://models.example'), extraConnect)
+  } finally {
+    if (previousEndpoints === undefined) delete process.env.ALLOWED_MODEL_ENDPOINTS
+    else process.env.ALLOWED_MODEL_ENDPOINTS = previousEndpoints
+    if (previousPureLocal === undefined) delete process.env.GUGO_PURE_LOCAL_MODE
+    else process.env.GUGO_PURE_LOCAL_MODE = previousPureLocal
+  }
+})
+
 test('static index response injects CSP nonce into every script tag', async () => {
   const fixture = createStaticFixture()
   const server = createAppServer({ getEnv: () => ({}), staticDir: fixture.staticDir })

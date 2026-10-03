@@ -22,6 +22,10 @@ const TEST_ENV_KEYS = [
   'TMPDIR',
   'TMP',
   'TEMP',
+  'npm_config_cache',
+  'npm_config_userconfig',
+  'npm_config_globalconfig',
+  'npm_config_update_notifier',
 ]
 
 function runSetup({ cwd, root } = {}) {
@@ -58,6 +62,10 @@ function assertIsolated(snapshot, checkout) {
     assert.equal(path.resolve(snapshot[key]), path.resolve(snapshot.APP_DATA_DIR), key)
   }
   assert.equal(path.resolve(snapshot.osTempDir), path.resolve(snapshot.APP_DATA_DIR))
+  assert.equal(snapshot.npm_config_cache, path.join(snapshot.APP_DATA_DIR, 'npm-cache'))
+  assert.equal(snapshot.npm_config_userconfig, path.join(snapshot.APP_DATA_DIR, 'empty-user.npmrc'))
+  assert.equal(snapshot.npm_config_globalconfig, path.join(snapshot.APP_DATA_DIR, 'empty-global.npmrc'))
+  assert.equal(snapshot.npm_config_update_notifier, 'false')
   assert.deepEqual(snapshot.emergencyJournalPaths, [
     path.join(snapshot.APP_DATA_DIR, 'turn-emergency-failures.jsonl'),
     path.join(snapshot.APP_DATA_DIR, 'gugo-turn-emergency-failures.jsonl'),

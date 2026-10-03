@@ -65,6 +65,45 @@ test('default workload guardrails allow long tasks without a 100-call cutoff', (
   })
 })
 
+test('blank and invalid environment limits fall back instead of disabling workload guardrails', () => {
+  const defaults = resolveJobBudgetDefaults({})
+  for (const value of [undefined, null, '', ' ', '\t\r\n', 'not-a-number', 'NaN', 'Infinity', '-1', '1e999', false, [], {}]) {
+    assert.deepEqual(resolveJobBudgetDefaults({
+      JOB_MAX_TOOL_CALLS: value,
+      JOB_MAX_WALL_MS: value,
+      JOB_MAX_MODEL_CALLS: value,
+      JOB_MAX_MODEL_TOKENS: value,
+    }), defaults, `invalid limit ${JSON.stringify(value)} must use defaults`)
+  }
+})
+
+test('explicit numeric limits and supported zero values retain their existing meaning', () => {
+  assert.deepEqual(resolveJobBudgetDefaults({
+    JOB_MAX_TOOL_CALLS: ' 12000 ',
+    JOB_MAX_WALL_MS: ' 86400000 ',
+    JOB_MAX_MODEL_CALLS: ' 4000 ',
+    JOB_MAX_MODEL_TOKENS: ' 800000 ',
+  }), {
+    maxTotalCalls: 12000,
+    maxWallMs: 86400000,
+    maxModelCalls: 4000,
+    maxModelTokens: 800000,
+  })
+  for (const zero of ['0', ' 0 ', 0]) {
+    assert.deepEqual(resolveJobBudgetDefaults({
+      JOB_MAX_TOOL_CALLS: zero,
+      JOB_MAX_WALL_MS: zero,
+      JOB_MAX_MODEL_CALLS: zero,
+      JOB_MAX_MODEL_TOKENS: zero,
+    }), {
+      maxTotalCalls: 2000,
+      maxWallMs: 0,
+      maxModelCalls: 0,
+      maxModelTokens: 0,
+    })
+  }
+})
+
 test('retired dollar gates are rejected instead of silently changing BYOK execution', () => {
   for (const maxCostUsd of [0, 0.01, 100]) {
     assert.throws(
@@ -323,4 +362,24 @@ test('a recovered response is fully accounted and retained when it crosses a bud
   assert.equal(budget.snapshot().modelCalls, 1)
   assert.equal(budget.snapshot().modelTokens, 29)
   assert.equal(budget.snapshot().costUsd, 0.03)
+})
+
+test('raising the iteration cap keeps the model-call budget coherent', () => {
+  // The two bounds govern the same loop, one model call per iteration. If only
+  // GUGO_MAX_ITERS moves, the budget silently becomes the binding limit and the
+  // turn ends as `execution_budget_exhausted` despite the documented headroom.
+  const defaults = resolveJobBudgetDefaults({})
+  assert.equal(defaults.maxModelCalls, defaults.maxTotalCalls,
+    'untuned, the model-call budget must not undercut the loop')
+
+  for (const env of [{ GUGO_MAX_ITERS: '5000' }, { JOB_MAX_ITERS: '5000' }]) {
+    assert.equal(resolveJobBudgetDefaults(env).maxModelCalls, 5000)
+  }
+  // An explicit budget still wins: the coherence rule is a default, not a floor.
+  assert.equal(
+    resolveJobBudgetDefaults({ GUGO_MAX_ITERS: '5000', JOB_MAX_MODEL_CALLS: '10' }).maxModelCalls,
+    10,
+  )
+  // Lowering the cap must not raise the budget.
+  assert.equal(resolveJobBudgetDefaults({ GUGO_MAX_ITERS: '50' }).maxModelCalls, 2000)
 })

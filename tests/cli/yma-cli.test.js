@@ -203,6 +203,8 @@ test('--help prints usage and exits 0', () => {
   assert.match(r.stdout, /agent list/)
   assert.match(r.stdout, /skill list/)
   assert.match(r.stdout, /gugo run/)
+  assert.match(r.stdout, /GUGO_CLI_INPUT\s+readline \(default\) or optional ink/u)
+  assert.match(r.stdout, /auto is a legacy alias for readline; no automatic selection/u)
 })
 
 test('no args prints help', () => {
@@ -864,6 +866,18 @@ test('run parser supports prompt, model, Provider, mode, cwd, session and resume
   assert.equal(parsed.sessionId, 'session-1')
   assert.equal(parsed.timeoutMs, 2500)
   assert.equal(parsed.outputFormat, 'text')
+  assert.equal(parsed.cwdExplicit, true, '--cwd marks an explicit workspace selection')
+  assert.equal(parseRunArgs(['prompt']).cwdExplicit, false, 'a default cwd is not an explicit --cwd')
+  assert.equal(parseRunArgs(['prompt']).progress, false)
+  assert.equal(parseRunArgs(['prompt', '--progress']).progress, true)
+  assert.throws(
+    () => parseRunArgs(['prompt', '--progress=yes']),
+    (error) => error?.code === 'CLI_OPTION_VALUE_REQUIRED' && error?.exitCode === 2,
+  )
+  assert.throws(
+    () => parseRunArgs(['prompt', '--progress', '--progress']),
+    (error) => error?.code === 'CLI_OPTION_DUPLICATE' && error?.exitCode === 2,
+  )
   assert.equal(parseRunArgs(['plain prompt']).mode, 'normal')
   assert.equal(parseRunArgs(['plain prompt']).outputFormat, 'jsonl')
   assert.equal(parseRunArgs(['--', '--output', 'text']).prompt, '--output text')
@@ -1678,4 +1692,21 @@ test('headless runtime resolves session and recovers an interrupted turn', async
   assert.equal(recovered.turnId, 'turn-1')
   assert.equal(result.status, 'completed')
   assert.deepEqual(output, ['turn.started', 'turn.interrupted', 'turn.resumed', 'turn.completed'])
+})
+
+test('a server-backed command explains how to recover when no server is running', async () => {
+  // `fetch failed` on its own was the first thing a new user saw. The CLI must
+  // name the URL it tried and the offline alternatives.
+  const result = await runCliProcess(['status'], {
+    env: {
+      GUGO_SERVER_URL: 'http://127.0.0.1:1',
+      GUGO_LOAD_DOTENV: '0',
+      GUGO_API_TIMEOUT_MS: '5000',
+    },
+  })
+  assert.notEqual(result.code, 0)
+  assert.match(result.stderr, /cannot reach the Gugo server/u, result.stderr)
+  assert.match(result.stderr, /127\.0\.0\.1:1/u, 'the attempted URL must be named')
+  assert.match(result.stderr, /doctor --headless/u, 'an offline alternative must be offered')
+  assert.doesNotMatch(result.stderr, /Error \[REQUEST_FAILED\]/u)
 })

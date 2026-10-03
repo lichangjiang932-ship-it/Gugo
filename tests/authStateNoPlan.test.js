@@ -72,3 +72,16 @@ test('authentication state has no subscription plan field', () => {
   const failed = reduceAuthState(initial, { type: 'AUTH_BOOTSTRAP_FAILED' })
   assert.equal(Object.hasOwn(failed.user, 'plan'), false)
 })
+
+test('canonical user identity is available for account-scoped UI preferences and cleared on logout', () => {
+  const initial = createInitialState()
+  const loggedIn = reduceAuthState(initial, { type: 'LOGIN', payload: { id: 'user-a', email: 'a@example.test' } })
+  assert.equal(loggedIn.user.id, 'user-a')
+  const bootstrapped = reduceAuthState(loggedIn, {
+    type: 'AUTH_BOOTSTRAP', payload: { authenticated: true, user: { id: 'user-b', email: 'b@example.test' } },
+  })
+  assert.equal(bootstrapped.user.id, 'user-b')
+  assert.equal(reduceAuthState(bootstrapped, { type: 'LOGOUT' }).user.id, null)
+  assert.equal(reduceAuthState(bootstrapped, { type: 'AUTH_BOOTSTRAP_FAILED' }).user.id, null)
+  assert.equal(reduceAuthState(loggedIn, { type: 'LOGIN', payload: { email: 'b@example.test' } }).user.id, null)
+})

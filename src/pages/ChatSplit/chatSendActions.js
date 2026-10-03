@@ -15,12 +15,10 @@ export function useChatSendActions({
   inputRef,
   isGenerating,
   lang,
-  messageEdit,
   modelReadiness,
   navigateInputHistory,
   setAttachments,
   setInput,
-  setMessageEdit,
   setWorkbenchMessage,
   showAuthenticationRequired,
   showModelUnavailable,
@@ -30,7 +28,6 @@ export function useChatSendActions({
   stateRef,
   steerActiveTurn,
   t,
-  toast,
   triggerSendFlow,
 }) {
   const handleWorkbenchSend = async (content) => {
@@ -79,7 +76,6 @@ export function useChatSendActions({
         return
       }
       setInput('')
-      setMessageEdit(null)
       executeSlashEntry(slashEntry, parsedSlash.args)
       return
     }
@@ -90,23 +86,11 @@ export function useChatSendActions({
     const inputSnapshot = input
     const currentAttachments = [...attachments]
     const draftSessionId = state.activeSessionId
-    const replayDraft = messageEdit?.sessionId === draftSessionId ? messageEdit : null
-    if (replayDraft) {
-      const truncated = await dispatch({
-        type: 'TRUNCATE_MESSAGES',
-        payload: replayDraft.historyLimit,
-      })
-      if (truncated === false) {
-        toast.error({ title: t('toast.chatSendFailed'), body: t('errors.chatFailure') })
-        return
-      }
-    }
     await triggerSendFlow(
       typedContent || describeAttachmentPrompt(currentAttachments, lang),
       currentAttachments,
-      replayDraft?.historyLimit ?? null,
+      null,
       ({ sessionId: acceptedSessionId } = {}) => {
-        if (replayDraft) setMessageEdit(null)
         applyAcceptedChatDraft({
           acceptedSessionId,
           activeSessionId: stateRef.current.activeSessionId,

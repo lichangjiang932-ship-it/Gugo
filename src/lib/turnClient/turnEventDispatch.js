@@ -1,7 +1,11 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { modelContextDiagnosticsSchema } from '../../../shared/modelContextDiagnostics.js'
+import { modelWireDiagnosticsSchema } from '../../../shared/modelWireDiagnostics.js'
 import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
+import { announceGoalPlanChanged, inspectGoalPlanSignal } from '../goalPlanSignals.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
+import { modelActivityFromPhase } from './modelActivityProgress.js'
 import {
   CLEARED_SERVER_FAILURE_META,
   CLEARED_SERVER_RECOVERY_META,
@@ -46,6 +50,24 @@ const TERMINAL_TOOL_CALL_STATUS = new Map([
   ['turn.blocked', TOOL_CALL_STATUS.CANCELLED],
   ['turn.failed', TOOL_CALL_STATUS.ERROR],
 ])
+
+const CLEARED_MODEL_DIAGNOSTICS = Object.freeze({
+  modelContextDiagnostics: null, modelWireDiagnostics: null,
+  modelRequestId: null, modelPhysicalAttempt: null, modelUsage: null,
+})
+
+function preparedModelDiagnostics(payload) {
+  const context = payload.phase === 'context_prepared'
+  const parsed = (context ? modelContextDiagnosticsSchema : modelWireDiagnosticsSchema)
+    .safeParse(context ? payload.contextDiagnostics : payload.wireDiagnostics)
+  return {
+    ...(context ? CLEARED_MODEL_DIAGNOSTICS : { modelUsage: null }),
+    [context ? 'modelContextDiagnostics' : 'modelWireDiagnostics']: parsed.success ? parsed.data : null,
+    modelRequestId: typeof payload.modelRequestId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/u.test(payload.modelRequestId)
+      ? payload.modelRequestId : null,
+    modelPhysicalAttempt: Number.isSafeInteger(payload.physicalAttempt) && payload.physicalAttempt > 0 ? payload.physicalAttempt : null,
+  }
+}
 
 function dispatchToolOutput(activity, { dispatch, messageTarget } = {}) {
   if (!activity?.toolCallId || typeof activity.chunk !== 'string' || !activity.chunk) return false
@@ -127,6 +149,18 @@ export async function dispatchTurnEvent(sourceEvent, {
 } = {}) {
   const event = projectTurnEventForClient(sourceEvent)
   const payload = event.payload || {}
+  // Every turn event passes through here exactly once, so this is the one place a
+  // plan change has to be announced from. The plan itself lives on the server —
+  // the agent edits it with tool calls inside the turn — so a reader showing a
+  // plan has to be told to re-read rather than guess from the transcript.
+  const planSignal = inspectGoalPlanSignal(event)
+  if (planSignal.changed) {
+    announceGoalPlanChanged({
+      reason: planSignal.reason,
+      toolName: planSignal.toolName,
+      turnId: event.turnId || '',
+    })
+  }
   if (TOOL_OUTPUT_FLUSH_EVENT_TYPES.has(event.type)) await flushToolOutput?.()
   const dispatchMessage = (action) => dispatch?.({ ...action, ...(messageTarget || {}) })
   const streamCursor = { serverTurnId: event.turnId, serverSequence: event.sequence }
@@ -160,10 +194,12 @@ export async function dispatchTurnEvent(sourceEvent, {
         ...CLEARED_SERVER_RECOVERY_META,
         ...CLEARED_SERVER_FAILURE_META,
         ...CLEARED_TERMINAL_STATE_META,
+        ...CLEARED_MODEL_DIAGNOSTICS,
         streaming: true,
         turnCompletedAt: null,
         latency: null,
         serverPartialText: '',
+        publicTimeline: null,
         serverArtifactIds: [],
         modelActivity: null,
       },
@@ -187,12 +223,19 @@ export async function dispatchTurnEvent(sourceEvent, {
     })
     cursorCommitted = true
   } else if (event.type === 'model.phase') {
+    if (payload.phase === 'context_prepared' || payload.phase === 'wire_prepared') {
+      dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: preparedModelDiagnostics(payload), ...streamCursor })
+      return { cursorCommitted: true }
+    }
     const labels = {
       started: 'Calling model',
       waiting_first_token: 'Waiting for model output',
       streaming: 'Receiving model output',
-      idle: 'Model output paused; task is still running',
+      tool_arguments: 'Receiving tool arguments; the tool has not run yet',
+      idle: 'Waiting for the model to continue',
       retrying: 'Retrying model call',
+      compacting: 'Compacting conversation context',
+      compaction_fallback: 'Using a mechanical context summary',
       failed: 'Model call failed',
       completed: 'Model response completed',
     }
@@ -201,17 +244,17 @@ export async function dispatchTurnEvent(sourceEvent, {
     const modelUsage = payload.phase === 'completed'
       ? normalizeModelUsage(payload.usage)
       : null
-    if (payload.phase === 'streaming') {
+    if (payload.phase === 'streaming' || payload.phase === 'tool_arguments') {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
-        payload: { progress: null, modelActivity: { kind: 'responding', phase: payload.phase, iteration: payload.iteration } },
+        payload: { progress: null, modelActivity: modelActivityFromPhase(payload, event.createdAt) },
         ...streamCursor,
       })
       cursorCommitted = true
-    } else if (['started', 'waiting_first_token', 'idle', 'retrying'].includes(payload.phase)) {
+    } else if (['started', 'waiting_first_token', 'idle', 'retrying', 'compacting', 'compaction_fallback'].includes(payload.phase)) {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
-        payload: { progress: null, modelActivity: { kind: 'model', phase: payload.phase, iteration: payload.iteration } },
+        payload: { progress: null, modelActivity: modelActivityFromPhase(payload, event.createdAt) },
         ...streamCursor,
       })
       cursorCommitted = true
@@ -271,6 +314,7 @@ export async function dispatchTurnEvent(sourceEvent, {
         name: payload.name,
         ...(payload.args !== undefined ? { arguments: JSON.stringify(payload.args) } : {}),
         ...(payload.outputReplay ? { outputReplay: payload.outputReplay } : {}),
+        ...(event.type === 'tool.started' ? { startedAt: event.createdAt } : {}),
         status: TOOL_CALL_STATUS.RUNNING,
       },
       meta: { modelActivity: null },
@@ -316,6 +360,7 @@ export async function dispatchTurnEvent(sourceEvent, {
               id: payload.artifactId || payload.result.artifactId,
               filename: payload.result?.filename || '',
               url: payload.result?.url || '',
+              ...(payload.result?.previewRevision ? { previewRevision: payload.result.previewRevision } : {}),
             }]
           : []
     for (const artifact of completedArtifacts) {
@@ -438,6 +483,10 @@ export async function dispatchTurnEvent(sourceEvent, {
         interrupted: false,
         paused: false,
         serverConnectionState: 'cancelled',
+        serverClarification: null,
+        serverResumeResolution: null,
+        directoryAuthorizationPending: false,
+        directoryAuthorizationError: null,
         ...(artifactIds?.length > 0 ? { serverArtifactIds: artifactIds } : {}),
         serverDeliveryArtifactIds: deliveryArtifactIds || [],
         ...(partialText ? { serverPartialText: partialText } : {}),
@@ -508,9 +557,7 @@ export async function dispatchTurnEvent(sourceEvent, {
                 ...(sideEffectUnknown ? {
                   serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
                   serverRecoveryToolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : null,
-                  serverRecoveryActionPath: payload.recoveryAction?.path === '/settings?tab=recovery'
-                    ? payload.recoveryAction.path
-                    : '/settings?tab=recovery',
+                  serverRecoveryActionPath: null,
                 } : {}),
                 ...(modelRequestUnknown ? {
                   serverRecoveryKind: MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND,

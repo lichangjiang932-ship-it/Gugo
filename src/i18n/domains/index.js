@@ -18,6 +18,8 @@ import approvals from './approvals.js'
 import toolApproval from './toolApproval.js'
 import access from './access.js'
 import chatMessages from './chatMessages.js'
+import agentReport from './agentReport.js'
+import toolActivity from './toolActivity.js'
 import history from './history.js'
 import hooks from './hooks.js'
 import workbench from './workbench.js'
@@ -28,6 +30,8 @@ import chatSteering from './chatSteering.js'
 import chatPreview from './chatPreview.js'
 import chatWindow from './chatWindow.js'
 import chatTimeline from './chatTimeline.js'
+import codeBlock from './codeBlock.js'
+import welcome from './welcome.js'
 import chatAttachments from './chatAttachments.js'
 import localFiles from './localFiles.js'
 import mcp from './mcp.js'
@@ -57,6 +61,7 @@ import chat from './chat.js'
 import foundation from './foundation.js'
 import settingsTools from './settingsTools.js'
 import reasonix from './reasonix.js'
+import usage from './usage.js'
 
 const domains = [
   ['webSearch', webSearch],
@@ -79,6 +84,8 @@ const domains = [
   ['toolApproval', toolApproval],
   ['access', access],
   ['chatMessages', chatMessages],
+  ['agentReport', agentReport],
+  ['toolActivity', toolActivity],
   ['history', history],
   ['hooks', hooks],
   ['workbench', workbench],
@@ -89,6 +96,8 @@ const domains = [
   ['chatPreview', chatPreview],
   ['chatWindow', chatWindow],
   ['chatTimeline', chatTimeline],
+  ['codeBlock', codeBlock],
+  ['welcome', welcome],
   ['chatAttachments', chatAttachments],
   ['localFiles', localFiles],
   ['mcp', mcp],
@@ -118,6 +127,7 @@ const domains = [
   ['foundation', foundation],
   ['settingsTools', settingsTools],
   ['reasonix', reasonix],
+  ['usage', usage],
 ]
 
 export const translations = { zh: {}, en: {} }

@@ -1,36 +1,39 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, Folder, GitFork, MoreHorizontal, Pin, PinOff, Search, SquarePen, X } from 'lucide-react'
-import { groupSessionsByProject } from './sessionListUtils.js'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Archive, ArchiveRestore, Folder, FolderOpen, GitFork, MoreHorizontal, Pin, PinOff, Search, X } from 'lucide-react'
+import NewChatGlyph from './NewChatGlyph.jsx'
+import { groupSessionsByProject, pinnedTimestampOf, sessionTimePresentation } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
 const CONTEXT_MENU_HEIGHT = 160
 const VIEWPORT_MARGIN = 8
 
-function contextMenuPosition(event) {
-  const bounds = event.currentTarget.getBoundingClientRect()
-  const desiredLeft = event.clientX || bounds.left + 12
-  const desiredTop = event.clientY || bounds.top + 12
+function clampMenuPosition(desiredLeft, desiredTop, measured = {}) {
+  const width = Math.min(measured.width || CONTEXT_MENU_WIDTH, window.innerWidth - VIEWPORT_MARGIN * 2)
+  const height = Math.min(measured.height || CONTEXT_MENU_HEIGHT, window.innerHeight - VIEWPORT_MARGIN * 2)
   return {
-    left: Math.max(VIEWPORT_MARGIN, Math.min(desiredLeft, window.innerWidth - CONTEXT_MENU_WIDTH - VIEWPORT_MARGIN)),
-    top: Math.max(VIEWPORT_MARGIN, Math.min(desiredTop, window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_MARGIN)),
+    left: Math.max(VIEWPORT_MARGIN, Math.min(desiredLeft, window.innerWidth - width - VIEWPORT_MARGIN)),
+    top: Math.max(VIEWPORT_MARGIN, Math.min(desiredTop, window.innerHeight - height - VIEWPORT_MARGIN)),
   }
 }
 
-let relativeTimeFormatter = null
-function formatSessionRelativeTime(timestamp) {
-  if (!Number.isFinite(timestamp)) return ''
-  try {
-    relativeTimeFormatter ||= new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-    const diffMinutes = Math.round((timestamp - Date.now()) / 60000)
-    if (Math.abs(diffMinutes) < 60) return relativeTimeFormatter.format(diffMinutes, 'minute')
-    const diffHours = Math.round((timestamp - Date.now()) / 3600000)
-    if (Math.abs(diffHours) < 24) return relativeTimeFormatter.format(diffHours, 'hour')
-    const diffDays = Math.round((timestamp - Date.now()) / 86400000)
-    if (Math.abs(diffDays) < 30) return relativeTimeFormatter.format(diffDays, 'day')
-    return relativeTimeFormatter.format(Math.round(diffDays / 30), 'month')
-  } catch {
-    return ''
-  }
+function contextMenuPosition(event) {
+  const bounds = event.currentTarget.getBoundingClientRect()
+  return clampMenuPosition(event.clientX || bounds.left + 12, event.clientY || bounds.top + 12)
+}
+
+function triggerMenuPosition(element, measured = {}) {
+  const bounds = element?.getBoundingClientRect()
+  if (!bounds) return clampMenuPosition(VIEWPORT_MARGIN, VIEWPORT_MARGIN)
+  const width = measured.width || CONTEXT_MENU_WIDTH
+  const height = measured.height || CONTEXT_MENU_HEIGHT
+  const below = bounds.bottom + 4
+  const top = below + height <= window.innerHeight - VIEWPORT_MARGIN
+    ? below : bounds.top - height - 4
+  return clampMenuPosition(bounds.right - width, top, measured)
+}
+
+function sessionTooltip(title, time) {
+  return time ? `${title}\n${time.full}` : title
 }
 
 function moveMenuFocus(event) {
@@ -62,10 +65,16 @@ export default function SessionList({
   onArchiveToggle,
   onDelete,
   storedProjects = [],
+  showSearchAction = true,
+  locale = 'zh',
   t,
 }) {
+  const listRef = useRef(null)
   const menuRef = useRef(null)
   const menuOriginRef = useRef(null)
+  const menuOriginIdRef = useRef(null)
+  const menuTriggersRef = useRef(new Map())
+  const restoreMenuFocusRef = useRef(null)
   const [contextMenu, setContextMenu] = useState(null)
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState(() => new Set())
   const { projects, ungrouped: orderedSessions } = useMemo(
@@ -82,40 +91,97 @@ export default function SessionList({
     const closeOnEscape = (event) => {
       if (event.key !== 'Escape') return
       event.preventDefault()
+      event.stopPropagation()
       onMenuClose()
-      menuOriginRef.current?.focus?.()
+      menuOriginRef.current?.focus?.({ preventScroll: true })
+    }
+    const closeOnViewportChange = (event) => {
+      if (!menuRef.current?.contains(event.target)) onMenuClose()
     }
     document.addEventListener('pointerdown', closeOutside)
     document.addEventListener('keydown', closeOnEscape)
+    document.addEventListener('scroll', closeOnViewportChange, true)
+    window.addEventListener('resize', closeOnViewportChange)
     return () => {
       document.removeEventListener('pointerdown', closeOutside)
       document.removeEventListener('keydown', closeOnEscape)
+      document.removeEventListener('scroll', closeOnViewportChange, true)
+      window.removeEventListener('resize', closeOnViewportChange)
     }
   }, [onMenuClose, openMenuId])
 
-  useEffect(() => {
-    if (openMenuId == null) return
-    menuRef.current?.querySelector('[role="menuitem"]')?.focus()
+  useLayoutEffect(() => {
+    if (openMenuId == null) {
+      const request = restoreMenuFocusRef.current
+      if (!request) return
+      restoreMenuFocusRef.current = null
+      const rows = [...(listRef.current?.querySelectorAll('[data-session-open]') || [])]
+        .filter((element) => !element.closest('[hidden]'))
+      const target = request.origin?.isConnected && !request.origin.closest('[hidden]') ? request.origin
+        : rows[Math.min(Math.max(request.index, 0), rows.length - 1)] || listRef.current
+      target?.focus?.({ preventScroll: true })
+      return
+    }
+    if (menuOriginIdRef.current !== openMenuId) {
+      menuOriginIdRef.current = openMenuId
+      menuOriginRef.current = menuTriggersRef.current.get(openMenuId)
+    }
+    if (menuRef.current) {
+      const measured = menuRef.current.getBoundingClientRect()
+      const pointerPosition = contextMenu?.sessionId === openMenuId && !contextMenu.anchored
+        ? contextMenu : null
+      const position = pointerPosition
+        ? clampMenuPosition(pointerPosition.left, pointerPosition.top, measured)
+        : triggerMenuPosition(menuOriginRef.current, measured)
+      menuRef.current.style.left = `${position.left}px`
+      menuRef.current.style.top = `${position.top}px`
+    }
+    menuRef.current?.querySelector('[role="menuitem"]')?.focus({ preventScroll: true })
   }, [openMenuId, contextMenu])
+
+  const closeMenuAfterAction = () => {
+    const origin = menuOriginRef.current
+    const rows = [...(listRef.current?.querySelectorAll('[data-session-row]') || [])]
+      .filter((element) => !element.closest('[hidden]'))
+    restoreMenuFocusRef.current = { origin, index: rows.indexOf(origin?.closest('[data-session-row]')) }
+    onMenuClose()
+  }
+
+  const handleMenuKeyDown = (event) => {
+    if (event.key === 'Tab') {
+      onMenuClose()
+      // Let the browser continue Tab traversal from the opener once the menu
+      // is gone; do not override a mobile drawer's existing focus fence.
+      if (!event.defaultPrevented) menuOriginRef.current?.focus?.({ preventScroll: true })
+      return
+    }
+    moveMenuFocus(event)
+  }
 
   const renderSession = (session, index) => {
     const isActive = session.id === activeSessionId
     const isMenuOpen = openMenuId === session.id
+    const isPinned = pinnedTimestampOf(session) > 0
+    const title = String(session.title || '').trim() || t('nav.untitledSession')
+    const time = sessionTimePresentation(session, { locale })
     const contextPosition = contextMenu?.sessionId === session.id ? contextMenu : null
     const menuId = `session-actions-${session.id}`
     return <div
       key={session.id ?? index}
-      className={`group relative flex min-h-[2.75rem] items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.055]' : 'hover:bg-ink/[0.035]'}`}
+      className="left-rail-session-row left-rail-action-scope"
+      data-session-row={session.id}
+      data-active={isActive ? 'true' : 'false'}
+      data-pinned={isPinned ? 'true' : 'false'}
       onContextMenu={(event) => {
         if (menuRef.current?.contains(event.target)) return
         event.preventDefault()
         event.stopPropagation()
         menuOriginRef.current = event.currentTarget.querySelector('[data-session-open]')
+        menuOriginIdRef.current = session.id
         setContextMenu({ sessionId: session.id, ...contextMenuPosition(event) })
         onMenuOpen(session.id)
       }}
     >
-      {isActive && <span aria-hidden="true" className="absolute left-0 top-1/2 h-4 w-[2.5px] -translate-y-1/2 rounded-full bg-accent" />}
       <button
         type="button"
         data-session-open
@@ -125,62 +191,63 @@ export default function SessionList({
           event.preventDefault()
           event.stopPropagation()
           menuOriginRef.current = event.currentTarget
+          menuOriginIdRef.current = session.id
           setContextMenu({ sessionId: session.id, ...contextMenuPosition(event) })
           onMenuOpen(session.id)
         }}
         aria-current={isActive ? 'page' : undefined}
+        aria-label={isPinned ? `${title} · ${t('nav.pinnedSession')}` : title}
         aria-keyshortcuts="Shift+F10"
-        className="flex min-w-0 flex-1 items-center rounded-lg py-1.5 pl-2.5 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
+        title={sessionTooltip(title, time)}
+        className="left-rail-session-open"
       >
-        <span className="min-w-0 flex-1">
-          <span className={`block truncate text-[13px] leading-[18px] ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
-          {(() => {
-            const relative = formatSessionRelativeTime(session.updatedAt)
-            return relative ? (
-              <span className="mt-0.5 block truncate text-[11px] leading-[14px] text-ink-fade/90 tabular-nums" data-compact-numeric-badge>{relative}</span>
-            ) : null
-          })()}
-        </span>
+        {isPinned && <span title={t('nav.pinnedSession')} className="left-rail-session-pin" aria-hidden="true"><Pin data-session-pinned className="h-3 w-3" strokeWidth={1.65} /></span>}
+        <span data-session-title className={`block min-w-0 flex-1 truncate text-ui leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{title}</span>
+        {time && <time className="left-rail-session-time" dateTime={time.dateTime} aria-hidden="true">{time.compact}</time>}
       </button>
       <button
         type="button"
-        ref={isMenuOpen && !contextPosition ? menuOriginRef : null}
+        ref={(element) => {
+          if (element) menuTriggersRef.current.set(session.id, element)
+          else menuTriggersRef.current.delete(session.id)
+        }}
         onClick={(event) => {
           event.stopPropagation()
-          setContextMenu(null)
+          setContextMenu({ sessionId: session.id, anchored: true, ...triggerMenuPosition(event.currentTarget) })
           menuOriginRef.current = event.currentTarget
+          menuOriginIdRef.current = session.id
           onMenuToggle(session.id)
         }}
         title={t('nav.sessionMenu')}
-        aria-label={t('nav.sessionMenu')}
+        aria-label={t('nav.sessionMenuFor', { title })}
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
         aria-controls={isMenuOpen ? menuId : undefined}
-        className={`absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+        className="left-rail-action"
       >
-        <MoreHorizontal className="h-4 w-4" />
+        <MoreHorizontal className="h-4 w-4" strokeWidth={1.65} aria-hidden="true" />
       </button>
       {isMenuOpen && <div
         ref={menuRef}
         id={menuId}
         role="menu"
-        aria-label={t('nav.sessionMenu')}
-        onKeyDown={moveMenuFocus}
+        aria-label={t('nav.sessionMenuFor', { title })}
+        onKeyDown={handleMenuKeyDown}
         style={contextPosition ? { left: contextPosition.left, top: contextPosition.top } : undefined}
-        className={`${contextPosition ? 'fixed' : 'absolute right-0 top-9'} z-50 min-w-44 rounded-card border border-ink/10 bg-paper p-1.5 shadow-xl`}
+        className="left-rail-session-menu fixed z-50 rounded-card border border-ink/10 bg-paper p-1.5 shadow-xl"
       >
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onPinToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
-          {session.pinnedAt ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-          {session.pinnedAt ? t('nav.unpinSession') : t('nav.pinSession')}
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onPinToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+          {isPinned ? <PinOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Pin className="h-3.5 w-3.5" aria-hidden="true" />}
+          {isPinned ? t('nav.unpinSession') : t('nav.pinSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           {session.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
           {session.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onFork?.(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onFork?.(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           <GitFork className="h-3.5 w-3.5" />{t('nav.forkSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onDelete(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onDelete(session) }} className="left-rail-menu-danger flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs focus:outline-none">
           <X className="h-3.5 w-3.5" />{t('nav.deleteSession')}
         </button>
       </div>}
@@ -189,8 +256,10 @@ export default function SessionList({
 
   const projectSections = projects.map((project) => {
     const isCollapsed = collapsedProjectKeys.has(project.key)
+    const ProjectIcon = isCollapsed ? Folder : FolderOpen
+    const regionId = `session-project-${encodeURIComponent(project.key)}`
     return <section key={project.key} aria-label={project.name} data-session-project={project.path} className="mb-0.5">
-      <div className="group/project flex h-8 items-center rounded-lg transition-colors hover:bg-ink/[0.035]">
+      <div className="left-rail-project-header left-rail-action-scope">
         <button
           type="button"
           onClick={() => {
@@ -204,53 +273,55 @@ export default function SessionList({
             })
           }}
           aria-expanded={!isCollapsed}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
+          aria-controls={regionId}
+          aria-label={t(isCollapsed ? 'nav.expandProject' : 'nav.collapseProject', { project: project.name, count: project.sessions.length })}
+          title={`${t(isCollapsed ? 'nav.expandProject' : 'nav.collapseProject', { project: project.name, count: project.sessions.length })}\n${project.path}`}
+          className="left-rail-project-toggle"
           data-project-toggle={project.path}
         >
-          <Folder className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-[18px] text-ink" title={project.path}>{project.name}</span>
+          <ProjectIcon data-project-state-icon={isCollapsed ? 'collapsed' : 'expanded'} className="left-rail-folder-icon h-4 w-4 shrink-0 text-ink-fade" strokeWidth={1.45} fill="currentColor" fillOpacity={0.1} aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-ui font-medium leading-5 text-ink" title={project.path}>{project.name}</span>
         </button>
         <button
           type="button"
           onClick={() => { onMenuClose(); onNewInProject?.(project) }}
           title={t('nav.newChatInProject', { project: project.name })}
           aria-label={t('nav.newChatInProject', { project: project.name })}
-          className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade opacity-0 transition-opacity hover:bg-paper hover:text-ink focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 group-hover/project:opacity-100"
+          className="left-rail-action"
           data-new-project-chat={project.path}
         >
-          <SquarePen className="h-3.5 w-3.5" aria-hidden="true" />
+          <NewChatGlyph className="h-[15px] w-[15px]" />
         </button>
       </div>
-      {!isCollapsed && project.sessions.length > 0 && (
-        <div className="ml-5" data-project-sessions={project.path}>
-          {project.sessions.map((session, index) => renderSession(session, index))}
-        </div>
-      )}
+      <div id={regionId} hidden={isCollapsed} className="left-rail-project-sessions" data-project-sessions={project.path}>
+        {project.sessions.length ? project.sessions.map((session, index) => renderSession(session, index))
+          : <p className="px-2 py-2 text-xs text-ink-fade">{t('nav.emptyProject')}</p>}
+      </div>
     </section>
   })
 
-  return <div className="space-y-3">
-    <section aria-label={t('chatMessages.workspaceProjects')}>
-      <div className="mb-1 px-1.5 text-[13px] font-medium leading-[18px] tracking-[0.01em] text-ink-fade">
+  return <div ref={listRef} tabIndex={-1} className="left-rail-session-list">
+    {projects.length > 0 && <section aria-label={t('chatMessages.workspaceProjects')}>
+      <div className="left-rail-section-heading">
         {t('chatMessages.workspaceProjects')}
       </div>
       {projectSections}
-    </section>
+    </section>}
     <section aria-label={t('chatMessages.workspaceRecent')}>
-      <div className="mb-1 flex h-6 items-center px-1.5">
-        <span className="min-w-0 flex-1 text-[13px] font-medium leading-[18px] tracking-[0.01em] text-ink-fade">
+      <div className="left-rail-section-heading left-rail-action-scope">
+        <span className="min-w-0 flex-1">
           {t('chatMessages.workspaceRecent')}
         </span>
-        <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.04] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">
+        {showSearchAction && <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="left-rail-action">
           <Search className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" onClick={() => { onMenuClose(); onNewRecent?.() }} title={t('nav.newChat')} aria-label={t('nav.newChat')} className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.04] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30" data-new-recent-chat>
-          <SquarePen className="h-3.5 w-3.5" />
+        </button>}
+        <button type="button" onClick={() => { onMenuClose(); onNewRecent?.() }} title={t('nav.newChat')} aria-label={t('nav.newChat')} className="left-rail-action" data-new-recent-chat>
+          <NewChatGlyph className="h-[15px] w-[15px]" />
         </button>
       </div>
       {orderedSessions.length
         ? <div>{orderedSessions.map((session, index) => renderSession(session, index))}</div>
-        : <div className="px-2 py-1 text-[13px] leading-[18px] text-ink-fade">{t('nav.emptyTitle')}</div>}
+        : <div className="px-2 py-1 text-ui leading-5 text-ink-fade">{t('nav.emptyTitle')}</div>}
     </section>
   </div>
 }

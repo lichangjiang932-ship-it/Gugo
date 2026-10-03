@@ -10,6 +10,7 @@ import {
   SETTINGS_TAB_PERMISSIONS,
   SETTINGS_TAB_PLUGINS,
   SETTINGS_TAB_RECOVERY,
+  SETTINGS_TAB_USAGE,
   SETTINGS_TAB_WEB_SEARCH,
 } from '../../lib/settingsNavigation.js'
 
@@ -37,6 +38,7 @@ const SETTINGS_NAV_GROUPS = [
     items: [
       SETTINGS_TAB_INTEGRATIONS,
       SETTINGS_TAB_DATA,
+      SETTINGS_TAB_USAGE,
       SETTINGS_TAB_RECOVERY,
       SETTINGS_TAB_ABOUT,
     ],
@@ -56,6 +58,7 @@ function navLabel(item, t) {
     case SETTINGS_TAB_INTEGRATIONS: return t('settings.integrations')
     case SETTINGS_TAB_DATA: return t('settings.dataExport')
     case SETTINGS_TAB_RECOVERY: return t('sideEffectRecovery.navTitle')
+    case SETTINGS_TAB_USAGE: return t('usage.navTitle')
     case SETTINGS_TAB_ABOUT: return t('settings.about')
     default: return item
   }

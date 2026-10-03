@@ -7,6 +7,38 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-skill-routes-tests', Stri
 
 const { createAppServer } = await import('../server/appServer.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { upsertMemory } = await import('../server/services/memoryStore.js')
+
+test('installing a memory skill uses the selected interface language for generated boilerplate', async () => {
+  const { token, userId } = issueTestSession()
+  const memory = upsertMemory({
+    userId,
+    type: 'reference',
+    title: `readback-${process.pid}`,
+    body: 'Read each generated file back and verify its structure.',
+    frontmatter: { source: 'experience_abstraction', proposal: 'skill' },
+  })
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const installed = await fetch(`http://127.0.0.1:${port}/api/skills/from-memory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ memoryId: memory.id, locale: 'en' }),
+    })
+    assert.equal(installed.status, 200)
+    const { skillId } = await installed.json()
+    const prompt = await fetch(`http://127.0.0.1:${port}/api/skills/${encodeURIComponent(skillId)}/assets/prompts%2Fsystem.md`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((response) => response.text())
+    assert.match(prompt, /This skill was distilled from local experience/u)
+    assert.doesNotMatch(prompt, /这个技能由本机经验日志抽象而来/u)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
 
 test('skill import endpoint installs and lists imported skills', async () => {
   const { token } = issueTestSession()

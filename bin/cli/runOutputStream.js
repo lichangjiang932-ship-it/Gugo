@@ -116,7 +116,11 @@ export function createSerializedWriter(stream, streamName) {
     }
   })
 
+  let disposed = false
   const write = (chunk) => {
+    if (disposed) return handled(Promise.reject(new CliOutputError(
+      'CLI_OUTPUT_WRITER_DISPOSED', `${streamName} writer has been disposed`,
+    )))
     const operation = tail.then(async () => {
       assertWritable()
       await writeOne(chunk)
@@ -131,5 +135,16 @@ export function createSerializedWriter(stream, streamName) {
     return handled(barrier)
   }
 
-  return Object.freeze({ write, flush })
+  let disposePromise = null
+  const dispose = () => {
+    if (disposePromise) return disposePromise
+    disposed = true
+    disposePromise = handled(tail.then(() => {
+      stream.removeListener('error', onError)
+      stream.removeListener('close', onClose)
+    }))
+    return disposePromise
+  }
+
+  return Object.freeze({ write, flush, dispose })
 }

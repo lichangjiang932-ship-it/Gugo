@@ -505,7 +505,7 @@ export async function handlePluginRequest(req, res, {
     const userId = authenticateRequest(req)
     if (!userId) return sendJson(res, 401, { error: 'Unauthorized' })
     const existingIds = listAllRuntimeSkillIds()
-    const result = installPluginAsSkill({ pluginId: installMatch[1], userId, existingIds })
+    const result = await installPluginAsSkill({ pluginId: installMatch[1], userId, existingIds })
     if (!result.ok) {
       const status = /not found/i.test(result.reason) ? 404
         : /类型必须|缺少|路径越界|文件过大|超限/.test(result.reason) ? 400

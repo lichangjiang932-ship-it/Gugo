@@ -36,10 +36,10 @@ test('loadPlugins 扫到 example-skill-bundle 且 type 正确', () => {
   assert.ok(hit.rootDir, '插件应带 rootDir')
 })
 
-test('installPluginAsSkill: 成功路径', () => {
+test('installPluginAsSkill: 成功路径', async () => {
   const userId = `test-skill-bundle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   try {
-    const res = installPluginAsSkill({
+    const res = await installPluginAsSkill({
       pluginId: 'example-skill-bundle',
       userId,
       existingIds: [],
@@ -60,8 +60,8 @@ test('installPluginAsSkill: 成功路径', () => {
   }
 })
 
-test('installPluginAsSkill: pluginId 不存在 → ok:false', () => {
-  const res = installPluginAsSkill({
+test('installPluginAsSkill: pluginId 不存在 → ok:false', async () => {
+  const res = await installPluginAsSkill({
     pluginId: 'does-not-exist-xyz',
     userId: 'test-u-nope',
     existingIds: [],
@@ -70,10 +70,10 @@ test('installPluginAsSkill: pluginId 不存在 → ok:false', () => {
   assert.match(res.reason, /not found/i)
 })
 
-test('installPluginAsSkill: 非 skill-bundle 类型 → ok:false', () => {
+test('installPluginAsSkill: 非 skill-bundle 类型 → ok:false', async () => {
   // example-agent-coach 是 agent-template 类型
   assert.ok(getPlugin('example-agent-coach'), '前置：example-agent-coach 应存在')
-  const res = installPluginAsSkill({
+  const res = await installPluginAsSkill({
     pluginId: 'example-agent-coach',
     userId: 'test-u-wrongtype',
     existingIds: [],
@@ -82,8 +82,8 @@ test('installPluginAsSkill: 非 skill-bundle 类型 → ok:false', () => {
   assert.match(res.reason, /skill-bundle/)
 })
 
-test('installPluginAsSkill: 缺 userId → ok:false', () => {
-  const res = installPluginAsSkill({ pluginId: 'example-skill-bundle' })
+test('installPluginAsSkill: 缺 userId → ok:false', async () => {
+  const res = await installPluginAsSkill({ pluginId: 'example-skill-bundle' })
   assert.equal(res.ok, false)
   assert.match(res.reason, /userId/)
 })

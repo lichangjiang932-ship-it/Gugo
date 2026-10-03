@@ -6,6 +6,7 @@
  */
 import { getDb } from '../db.js'
 import { buildRememberedGrant, DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from '../utils/approvalPolicy.js'
+import { resolveTurnPermissionMode, withTurnPermissionContext } from './turnPermissionContext.js'
 
 const RISK_CLASSES = new Set(['read', 'write_local', 'exec', 'external'])
 export const INITIAL_USER_PERMISSION_MODE = 'normal'
@@ -55,9 +56,26 @@ export function getApprovalMode({ userId } = {}) {
   return PERMISSION_MODES.includes(row.mode) ? row.mode : DEFAULT_PERMISSION_MODE
 }
 
+export function getApprovalModeSnapshot({ userId } = {}) {
+  if (!userId) return { mode: DEFAULT_PERMISSION_MODE, revision: 0 }
+  const row = getDb().prepare('SELECT mode, updated_at FROM user_approval_settings WHERE user_id = ?').get(userId)
+  return {
+    mode: row && PERMISSION_MODES.includes(row.mode) ? row.mode : INITIAL_USER_PERMISSION_MODE,
+    revision: row ? Number(row.updated_at) : 0,
+  }
+}
+
+export function getEffectiveApprovalMode({ userId } = {}) {
+  return resolveTurnPermissionMode({ userId, account: getApprovalModeSnapshot({ userId }) })
+}
+
+export function withTurnApprovalMode(scope, operation) {
+  return withTurnPermissionContext({ ...scope, account: getApprovalModeSnapshot(scope) }, operation)
+}
+
 /** Keep path and execution scopes aligned with the effective UI mode. */
 export function isApprovalBypassEnabled({ userId } = {}) {
-  return !!userId && getApprovalMode({ userId }) === 'bypass'
+  return !!userId && getEffectiveApprovalMode({ userId }) === 'bypass'
 }
 
 export function setApprovalMode({ userId, mode } = {}) {
@@ -67,7 +85,7 @@ export function setApprovalMode({ userId, mode } = {}) {
   getDb().prepare(`
     INSERT INTO user_approval_settings (user_id, mode, updated_at)
     VALUES (@userId, @mode, @now)
-    ON CONFLICT(user_id) DO UPDATE SET mode = @mode, updated_at = @now
+    ON CONFLICT(user_id) DO UPDATE SET mode = @mode, updated_at = MAX(user_approval_settings.updated_at + 1, @now)
   `).run({ userId, mode, now })
   return getApprovalMode({ userId })
 }
@@ -100,7 +118,7 @@ export function changeApprovalMode({
     db.prepare(`
       INSERT INTO user_approval_settings (user_id, mode, updated_at)
       VALUES (@userId, @mode, @now)
-      ON CONFLICT(user_id) DO UPDATE SET mode = @mode, updated_at = @now
+      ON CONFLICT(user_id) DO UPDATE SET mode = @mode, updated_at = MAX(user_approval_settings.updated_at + 1, @now)
     `).run({ userId, mode, now })
     db.prepare(`
       INSERT INTO permission_mode_events
@@ -243,4 +261,9 @@ export function getApprovalSettings({ userId } = {}) {
     modes: PERMISSION_MODES,
     modeHistory: listPermissionModeEvents({ userId }),
   }
+}
+
+/** Execution view only; account-management APIs keep their persisted semantics. */
+export function getEffectiveApprovalSettings({ userId } = {}) {
+  return { ...getApprovalSettings({ userId }), mode: getEffectiveApprovalMode({ userId }) }
 }

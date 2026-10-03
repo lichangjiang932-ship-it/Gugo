@@ -86,7 +86,9 @@ function forgedArtifactArgs(name) {
 
 function validArtifactArgs(name) {
   if (name === 'create_pptx') {
-    return { title: 'Presentation', slides: [{ title: 'Summary', body: 'Done' }] }
+    return { title: 'Presentation', slides: [{ title: 'Summary', elements: [
+      { type: 'text', text: 'Done', x: 0.08, y: 0.15, w: 0.84, h: 0.3 },
+    ] }] }
   }
   if (name === 'create_docx') {
     return { title: 'Document', paragraphs: [{ text: 'Done' }] }

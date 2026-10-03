@@ -30,6 +30,7 @@ const labels = {
   'settings.pureLocalMode': '纯本地模式',
   'settings.pureLocalModeDescription': '阻止公网连接',
   'settings.pureLocalModeLockedDescription': '由部署锁定',
+  'settings.pureLocalModeBoundary': '这是应用层限制，不是操作系统网络隔离。',
   'settings.pureLocalModeOn': '仅本地',
   'settings.pureLocalModeOff': '允许联网',
   'settings.pureLocalModeSaving': '正在保存',
@@ -96,6 +97,7 @@ test('pure-local Settings toggle reads authoritative state and renders the saved
     assert.ok(toggle)
     assert.equal(toggle.getAttribute('aria-checked'), 'true')
     assert.match(container.textContent, /仅本地/)
+    assert.match(container.textContent, /不是操作系统网络隔离/)
     assert.equal(requests[0].url, '/api/system/network-policy')
     assert.equal(requests[0].options.credentials, 'same-origin')
 
@@ -138,6 +140,7 @@ test('deployment-locked pure-local state is read back with a disabled toggle', a
     assert.equal(toggle.getAttribute('aria-checked'), 'true')
     assert.equal(toggle.disabled, true)
     assert.match(container.textContent, /由部署锁定/)
+    assert.match(container.textContent, /不是操作系统网络隔离/)
   } finally {
     await act(async () => root.unmount())
     globalThis.fetch = previousFetch

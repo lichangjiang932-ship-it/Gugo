@@ -38,6 +38,22 @@ test('capability block directs concrete file, shell, and PDF work through expose
   assert.match(text, /call the tool now/i)
 })
 
+test('capability block identifies Docker isolation and its workspace-relative contract', () => {
+  const docker = buildRuntimeCapabilityBlock({
+    toolSpecs: [spec('bash_exec')],
+    shellIsolation: 'docker',
+  })
+  const host = buildRuntimeCapabilityBlock({
+    toolSpecs: [spec('bash_exec')],
+    shellIsolation: 'host',
+  })
+  assert.match(docker, /fresh no-network Docker sandbox/i)
+  assert.match(docker, /workspace-relative paths/i)
+  assert.match(docker, /do not request persistent session reuse/i)
+  assert.match(host, /Host mode is not an OS sandbox/i)
+  assert.doesNotMatch(host, /fresh no-network Docker sandbox/i)
+})
+
 test('bypass capability block forbids redundant directory authorization prompts', () => {
   const text = buildRuntimeCapabilityBlock({
     toolSpecs: [spec('read_file'), spec('write_file'), spec('request_directory')],

@@ -1,5 +1,16 @@
+import {
+  collectMissingRequiredKeyConstraints, REQUIRED_AUTOINCREMENT_PRIMARY_KEYS,
+  keyConstraintApplies, hasInlineAutoincrementPrimaryKey,
+} from './dbKeySchemaContract.js'
+export { REQUIRED_PRIMARY_KEYS, REQUIRED_UNIQUE_KEYS, collectMissingRequiredKeyConstraints } from './dbKeySchemaContract.js'
+
 import { collectAgentEventOutboxSchemaProblems } from './agentEventOutboxSchemaContract.js'
 import { collectAgentEventSubscriptionSchemaProblems } from './agentEventSubscriptionSchemaContract.js'
+import { collectSessionTranscriptRecoverySchemaProblems } from './sessionTranscriptRecoverySchemaContract.js'
+import { collectMemorySearchSchemaProblems } from './memorySearchSchemaContract.js'
+import { databaseSchemaIncompleteError } from './dbSchemaErrors.js'
+
+export { databaseSchemaIncompleteError } from './dbSchemaErrors.js'
 
 const REQUIRED_TABLE_COLUMNS = Object.freeze({
   meta: ['key', 'value'],
@@ -87,6 +98,55 @@ const REQUIRED_TABLE_COLUMNS = Object.freeze({
     'attempts',
     'failed_at',
   ],
+  session_transcript_recovery_fences: ['user_id', 'session_id', 'turn_id', 'suppressed_through_sequence'],
+  memory_embeddings: ['memory_id', 'user_id', 'model', 'dimensions', 'vector', 'content_fingerprint', 'updated_at'],
+  memory_search_index: [
+    'memory_id',
+    'user_id',
+    'agent_id',
+    'type',
+    'source_auto',
+    'memory_order',
+    'search_title',
+    'search_slug',
+    'search_body',
+    'search_tags_json',
+    'exact_title_key',
+    'dedup_title_key',
+    'dedup_body_key',
+    'source_fingerprint',
+  ],
+  memory_search_pending: ['memory_id', 'user_id', 'agent_id', 'memory_order'],
+  goal_plans: [
+    'id',
+    'user_id',
+    'session_id',
+    'objective',
+    'status',
+    'revision',
+    'version',
+    'supersedes_plan_id',
+    'approved_at',
+    'approved_by',
+    'created_at',
+    'updated_at',
+  ],
+  goal_plan_steps: [
+    'id',
+    'plan_id',
+    'user_id',
+    'ordinal',
+    'title',
+    'acceptance_json',
+    'status',
+    'evidence_json',
+    'evidence_verified',
+    'evidence_turn_id',
+    'evidence_tool_call_id',
+    'created_at',
+    'updated_at',
+  ],
+  goal_plan_events: ['id', 'plan_id', 'user_id', 'revision', 'type', 'payload_json', 'created_at'],
   turn_artifacts: ['id', 'user_id', 'session_id', 'turn_id', 'type', 'title', 'url', 'filename', 'created_at'],
   session_meters: ['session_id', 'user_id', 'tokens_in', 'tokens_out', 'tokens_cached', 'turns', 'updated_at'],
   subagent_runs: ['id', 'user_id', 'status', 'model_provider_id', 'model_config_revision'],
@@ -166,136 +226,6 @@ const REQUIRED_TABLE_COLUMNS = Object.freeze({
   evolution_promotions: ['id', 'decision_origin', 'automation_run_id'],
 })
 
-export const REQUIRED_PRIMARY_KEYS = Object.freeze({
-  meta: ['key'],
-  users: ['id'],
-  sessions: ['token'],
-  connector_idempotency: ['user_id', 'idempotency_key'],
-  login_codes: ['email'],
-  messages: ['id'],
-  user_tool_permissions: ['user_id', 'tool_name'],
-  pinned_memories: ['id'],
-  todos: ['id'],
-  effort_settings: ['user_id'],
-  turn_events: ['id'],
-  agent_event_outbox: ['cursor'],
-  agent_event_stream_metadata: ['stream_key'],
-  agent_event_subscriptions: ['subscription_key'],
-  agent_event_subscription_dlq: ['dlq_id'],
-  session_meters: ['session_id'],
-  memory_links: ['from_id', 'to_slug'],
-  side_effect_executions: ['owner_id', 'scope_key', 'tool_call_id'],
-  channel_agents: ['channel_id', 'agent_id'],
-  bridge_contacts: ['user_id', 'integration_id', 'provider', 'external_user_id'],
-  local_file_access_settings: ['user_id'],
-  local_file_grants: ['id'],
-  user_approval_settings: ['user_id'],
-  approval_tool_grants: ['user_id', 'tool_name', 'command_prefix'],
-  job_turn_checkpoints: ['step_id'],
-  job_wakeups: ['job_id'],
-  mcp_oauth_credentials: ['server_id'],
-  workspace_trust: ['user_id', 'root_path'],
-  user_tool_risk_overrides: ['user_id', 'tool_name'],
-  webhook_replay_guard: ['integration_id', 'signature_digest'],
-  job_execution_leases: ['job_id'],
-  turn_execution_leases: ['user_id', 'session_id', 'turn_id'],
-  turn_checkpoints: ['user_id', 'session_id', 'turn_id'],
-  runtime_plugin_states: ['plugin_id'],
-  evolution_evidence_exclusions: ['user_id', 'evidence_id'],
-  turn_recovery_states: ['user_id', 'session_id', 'turn_id'],
-  runtime_plugin_release_pins: ['plugin_id', 'release_id', 'reference_kind', 'reference_id'],
-  turn_execution_fences: ['user_id', 'session_id', 'turn_id'],
-  runtime_plugin_permission_grants: ['plugin_id'],
-  evolution_auto_configs: ['user_id'],
-  evolution_canary_outcome_snapshots: ['outcome_id'],
-  evolution_promotion_outcome_snapshots: ['outcome_id'],
-})
-
-export const REQUIRED_UNIQUE_KEYS = Object.freeze({
-  users: [['email']],
-  evolution_operations: [['user_id', 'kind', 'idempotency_key']],
-  evolution_canary_assignments: [['user_id', 'session_id', 'turn_id']],
-  evolution_canary_outcomes: [['assignment_id']],
-  evolution_canary_online_grades: [['outcome_id']],
-  evolution_canary_online_guard_evaluations: [['trigger_grade_id']],
-  evolution_canary_rollbacks: [['release_id']],
-  evolution_canary_rollback_evaluations: [['outcome_id']],
-  evolution_promotion_assignments: [['user_id', 'session_id', 'turn_id']],
-  evolution_promotion_outcomes: [['assignment_id']],
-  evolution_promotion_online_grades: [['outcome_id']],
-  evolution_promotion_online_guard_evaluations: [['trigger_grade_id']],
-  evolution_promotion_rollbacks: [['promotion_id']],
-  side_effect_executions: [['owner_id', 'scope_key', 'idempotency_key']],
-  turn_events: [['user_id', 'session_id', 'turn_id', 'sequence']],
-  agent_event_outbox: [['event_id']],
-  agent_event_subscription_dlq: [['subscription_key', 'cursor']],
-  session_content_outbox: [['event_id']],
-})
-
-/** Return exact PK/UNIQUE conflicts that would make a runtime UPSERT unsafe. */
-const REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS = Object.freeze({
-  agent_event_outbox: 113,
-  agent_event_stream_metadata: 113,
-  agent_event_subscriptions: 115,
-  agent_event_subscription_dlq: 114,
-})
-
-const REQUIRED_AUTOINCREMENT_PRIMARY_KEYS = Object.freeze({
-  agent_event_outbox: 'cursor',
-  agent_event_subscription_dlq: 'dlq_id',
-})
-
-function keyConstraintApplies(table, expectedVersion) {
-  const minimumVersion = REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS[table] || 1
-  return expectedVersion === null || expectedVersion >= minimumVersion
-}
-
-export function collectMissingRequiredKeyConstraints(db, { expectedVersion = null } = {}) {
-  const missing = []
-  for (const [table, expectedColumns] of Object.entries(REQUIRED_PRIMARY_KEYS)) {
-    if (!keyConstraintApplies(table, expectedVersion)) continue
-    const actualColumns = db.prepare('SELECT name, pk FROM pragma_table_info(?)').all(table)
-      .filter((row) => Number(row.pk) > 0)
-      .sort((left, right) => Number(left.pk) - Number(right.pk))
-      .map((row) => row.name)
-    if (actualColumns.length !== expectedColumns.length
-      || actualColumns.some((column, position) => column !== expectedColumns[position])) {
-      missing.push(`primary-key:${table}`)
-    }
-  }
-
-  for (const [table, expectedKeys] of Object.entries(REQUIRED_UNIQUE_KEYS)) {
-    if (!keyConstraintApplies(table, expectedVersion)) continue
-    const indexes = db.prepare(`
-      SELECT name, "unique" AS is_unique, partial
-      FROM pragma_index_list(?)
-    `).all(table)
-    for (const expectedColumns of expectedKeys) {
-      const exists = indexes.some((index) => {
-        if (Number(index.is_unique) !== 1 || Number(index.partial) !== 0) return false
-        const actualColumns = db.prepare('SELECT name FROM pragma_index_info(?) ORDER BY seqno')
-          .all(index.name)
-          .map((row) => row.name)
-        return actualColumns.length === expectedColumns.length
-          && actualColumns.every((column, position) => column === expectedColumns[position])
-      })
-      if (!exists) missing.push(`unique-key:${table}.${expectedColumns.join(',')}`)
-    }
-  }
-  return missing
-}
-
-function hasInlineAutoincrementPrimaryKey(db, table, column) {
-  const source = db.prepare(`
-    SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?
-  `).get(table)?.sql || ''
-  const escapedColumn = column.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  return new RegExp(
-    `(?:\\(|,)\\s*(?:"${escapedColumn}"|${escapedColumn})\\s+INTEGER\\s+PRIMARY\\s+KEY\\s+AUTOINCREMENT\\b`,
-    'iu',
-  ).test(source)
-}
-
 const REQUIRED_INDEXES = Object.freeze({
   idx_sessions_user: { table: 'sessions', columns: ['user_id'] },
   idx_sessions_expires: { table: 'sessions', columns: ['expires_at'] },
@@ -325,6 +255,20 @@ const REQUIRED_INDEXES = Object.freeze({
     table: 'agent_event_subscription_dlq',
     columns: ['subscription_key', 'failed_at', 'dlq_id'],
   },
+  // v121: one tool call must not be citable as proof for two different steps.
+  // This index is the enforcement; its absence used to silently disable the rule
+  // on databases created before the evidence columns existed.
+  idx_goal_plan_steps_evidence: {
+    table: 'goal_plan_steps',
+    columns: ['user_id', 'evidence_turn_id', 'evidence_tool_call_id'],
+    unique: true,
+    partial: true,
+  },
+  idx_goal_plans_user_updated: { table: 'goal_plans', columns: ['user_id', 'status', 'updated_at'] },
+  idx_goal_plans_user_session: { table: 'goal_plans', columns: ['user_id', 'session_id', 'updated_at'] },
+  idx_goal_plan_steps_plan: { table: 'goal_plan_steps', columns: ['plan_id', 'ordinal'] },
+  idx_goal_plan_events_plan: { table: 'goal_plan_events', columns: ['plan_id', 'id'] },
+  idx_memory_embeddings_user: { table: 'memory_embeddings', columns: ['user_id', 'updated_at'] },
   idx_turn_artifacts_turn: { table: 'turn_artifacts', columns: ['user_id', 'session_id', 'turn_id', 'created_at'] },
   idx_turn_artifacts_filename: { table: 'turn_artifacts', columns: ['filename'], unique: true },
   idx_runtime_plugin_mutation_barriers_heartbeat: {
@@ -471,23 +415,6 @@ function hasHistoricalLedgerSchema(db) {
     && foreignKeys[0].on_delete === 'CASCADE'
 }
 
-export function databaseSchemaIncompleteError({ expectedVersion, stage, missing }) {
-  return Object.assign(
-    new Error(
-      `Database schema is incomplete for version ${expectedVersion}: ${missing.join(', ')}.`,
-    ),
-    {
-      code: 'DB_SCHEMA_INCOMPLETE',
-      retryable: false,
-      details: {
-        expectedVersion,
-        stage,
-        missing: [...missing],
-      },
-    },
-  )
-}
-
 /**
  * Verify stable schema sentinels and every runtime UPSERT key. This is
  * intentionally read-only: a database that claims the current version must
@@ -593,6 +520,8 @@ export function assertCurrentSchemaContract(db, expectedVersion, { stage = 'post
   if (expectedVersion >= 114) {
     missing.push(...collectAgentEventSubscriptionSchemaProblems(db))
   }
+  if (expectedVersion >= 116) missing.push(...collectSessionTranscriptRecoverySchemaProblems(db))
+  if (expectedVersion >= 120) missing.push(...collectMemorySearchSchemaProblems(db))
 
   if (missing.length > 0) {
     throw databaseSchemaIncompleteError({ expectedVersion, stage, missing })

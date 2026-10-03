@@ -6,6 +6,118 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Preparing 0.11.68. It carries the preview panel and its verification loop (unreleased since
+0.11.66) and a pass over the agent's behaviour and the interface to bring both closer to Claude Code
+and Codex. The Windows build remains explicitly unsigned through the version-bound
+`scripts/release/policy.json`; verification of checksums and build provenance stays required.
+
+`v0.11.67` (main commit `f48c948`) stopped at the required-gates stage: the production dependency
+audit found advisories published after 0.11.66 shipped — `undici` 7.29.0, `fast-uri` 3.1.6 and `ajv`
+8.17.1. 0.11.68 pins the patched releases within the same majors (`undici` 7.30.0, `fast-uri` 3.1.8,
+`ajv` 8.20.0). The same run's Linux test job failed one session-search test that ran a real 100 ms
+scan budget over 2012 rows on a loaded runner; that test is about owner and session scope, and now
+runs its scan on a frozen clock. No Release or release assets were published for `v0.11.67`, and
+the tag is not moved or reused.
+
+### Added
+
+- A preview panel that owns the dev server declared in `.gugo/launch.json`: argument-vector spawn with no shell, readiness from the declared pattern, tree kill on stop, a bounded log, and eight preview tools whose observations ride the edit that triggered them. The docked browser opens by itself when the server becomes ready.
+- Refusing an approval can carry a note ("do it another way…"): the note is handed to the model with the refusal, so it changes course instead of starting over.
+- Plan mode allows research the way Claude Code's does: web search, GET fetches and explore/plan subagents. A subagent started in plan mode is bound read-only, so it cannot write or run commands even with the general tool set.
+- Subagents get `search_tools`: tools they are authorized for but rarely need are found on demand instead of shown up front, and every mounted tool still goes through the same approval gate. `load_skill` reaches subagents through the main agent's own activation and ownership check.
+- The workbench's files tool (Ctrl+Alt+F) replaces the side chat; the task card shows only progress.
+- A unified diff with folded context in the change review and diff previews, and a `+a −d` line count on the header's change chip; a progress ring with a `2/5` count on the task chip.
+- The browser's address bar reads input the way a browser does: local hosts open over http, words become a search, and recent sites are one click away (Ctrl+L focuses it).
+- Context-aware starter cards on the welcome page, a redesigned new-chat icon with Alt+N, a project glyph beside the conversation title, and long code blocks folded after 24 lines.
+
+### Changed
+
+- A refused tool call goes back to the model as its result instead of ending the turn. Each refusal costs one more model call; two consecutive refused rounds end the turn, and declining a check a write still needs ends it at once.
+- The file tools' HTTP face carries only what the app itself uses — listing, reading and the terminal's shell — with exact path matching. Writing and editing files are model tools executed in-process behind the approval gate and have no HTTP route.
+- Esc pauses a running turn from the composer; tool names, rejected arguments and authorization stops read as words in the trace, in both languages.
+
+### Fixed
+
+- A subagent's `git_log` and `git_blame` reach the Git history adapter instead of falling through as unknown tools.
+- A turn whose last event was left non-terminal reports itself as interrupted instead of still running.
+- Inline code no longer renders literal backticks; popovers above the composer no longer hide behind it; terminal transcripts normalize CRLF line endings.
+- A file request written in a language the intent vocabulary cannot read is still offered the edit tools.
+
+### Removed
+
+- The unused standalone tool client under `src/lib/tools/` (its executors, spec builder and approval wrapper) and the tests that only exercised it. Model tool calls never went through it.
+
+### Security
+
+- Production dependencies move to patched releases within their majors: `undici` 7.30.0 (denial-of-service, response-splitting, cookie-disclosure and TLS-option advisories), `fast-uri` 3.1.8 (authority and host-confusion advisories) and `ajv` 8.20.0 (`$data` ReDoS). The two `image-size` advisories under `pptxgenjs` stay on their version-locked, expiring exceptions.
+
+## [0.11.66] - 2026-09-28
+
+Preparing 0.11.66. `v0.11.65` was published and is broken: it starts, then the main process
+crashes with `ERR_MODULE_NOT_FOUND` for `desktop/updateErrors.js`. The 0.11.65 work split
+`desktop/updateRuntime.js` into `desktop/updatePlan.js` and `desktop/updateErrors.js` and added
+`desktop/terminalHost.js`, but `electron-builder.yml` packs desktop modules from an explicit list, so
+the two new modules were never copied into `app.asar`. Install 0.11.66 over it; do not install
+0.11.65.
+
+The packaging guard missed it because it walked the entry import closure two levels deep and stopped:
+`main.js -> updateSetup.js -> updateRuntime.js -> updateErrors.js` is the third. It now walks until
+the set stops growing, and it fails on the 0.11.65 configuration — verified by removing each entry in
+turn and watching it fail.
+
+Earlier attempts, none of them moved or reused:
+
+
+- `v0.11.62` (main commit `d353d78`) stopped at the required-gates stage: the offline capability eval
+  requires the plugin host version to match the package version, a sync the bump left behind, and the
+  test runner excludes that eval file — so the local suite could not catch it.
+- `v0.11.63` (main commit `7d3afa5`) stopped at the same stage on a platform-bound test: the desktop
+  terminal host's assertion compared the reported ConPTY metadata against a literal Windows build
+  number, which no Linux runner can produce. The test now compares against the resolver's own answer
+  for that platform.
+- `v0.11.64` (main commit `93535cb`) passed every gate except the Windows test job, where the first
+  background-process kill in that file raced the tree-kill worker's cold start and the store — by
+  design — refused to call an unverified cleanup killed. Production warms that worker before it
+  spawns anything it may have to kill; the test now does the same, and the offline eval is part of
+  the verified-green line in every release commit.
+
+No Release and no release assets were published for `v0.11.62`, `v0.11.63` or `v0.11.64`; 0.11.66
+carries its own release verification.
+
+This release carries the desktop browser and sidebar work, the real terminal, the conversation change
+review, the experience-to-memory pipeline, and the Git workbench's commit and push actions. The
+Windows build remains explicitly unsigned through the version-bound `scripts/release/policy.json`;
+verification of checksums and build provenance stays required.
+
+### Added
+
+- A real terminal in the desktop app: `node-pty` and xterm in the workbench's terminal tab, one shell per panel, opened in the project the reader selected, with the whole process tree released when the panel closes or the app quits. The web build keeps its command console.
+- A docked Chromium browser beside the conversation in the desktop app, with an http(s)/loopback-only URL policy, a hardened partition that denies every permission request, reviewed external opens, and an honest iframe fallback elsewhere.
+- The conversation's change review: a header indicator and a read-only panel listing the files this session's tool calls changed, with the executor's per-file line counts, the recorded edits behind them, and no commit or push action anywhere in it.
+- An experience pipeline: the agent records episodes to `.agent/experience.md` while it works; once the journal has earned it, one model call generalizes the entries into long-term memory, project memory and skill proposals, each item citing the entries it came from; consumed entries move to `experience.archive.md`.
+- One-click installation of a proposed skill from the memory page, through the validated skill-pack path, recording on the proposal which skill it became.
+- Commit and push on the Git workbench page: choose files, write the message, commit; pushing stays a separate, deliberate press.
+- Local model context windows are discovered from the endpoint itself (LM Studio's own catalog), so compaction follows the window the server is actually serving instead of a conservative default.
+- A local usage report with its own routes and settings panel.
+- Semantic code search over a JavaScript/TypeScript symbol index, and Git history tools for the agent.
+- DOCX preview in the direct file preview, and a desktop-only "open in default app / show in folder" menu for local files.
+
+### Changed
+
+- Token estimation charges Han characters at a tokenizer's real rate, shared by the compaction planner and the interface's context meter, instead of one token per character. Chinese conversations are no longer over-estimated by roughly half, which was refusing requests the endpoint had already been serving.
+- The workbench panel is a row with its tool switch in the header; the removed files and Git tabs live on as the panel's front door and the full Git page.
+
+### Fixed
+
+- The attachment budget guard's refusal is recoverable: it is classified as a context-length overflow, so the existing bounded compaction summarizes and retries instead of failing the whole turn.
+- A killed terminal session releases its process tree on Windows and always releases the pty, so a build started in the shell cannot outlive the panel holding file locks.
+- The updater keeps only the pending installer it is about to run, instead of accumulating every version it has ever downloaded.
+- Goal plan schema repair (v121) adds the columns the plan features need to databases created before them.
+
+### Security
+
+- Local files are never rendered through the embedded browser: it refuses any non-http(s) URL, and the preview pane's open/reveal actions go through the signed desktop file-action path with the app's own fingerprint check.
+
 ## [0.11.54] - 2026-09-06
 
 ### Added

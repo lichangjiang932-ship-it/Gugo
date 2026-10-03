@@ -6,6 +6,11 @@ import {
 } from './loop/modelInvocationCheckpoint.js'
 import { assertValidCompletedModelResponse } from '../utils/modelResponseValidation.js'
 import { lastModelProviderAttemptForClient } from './modelRequestRecoveryProjection.js'
+import {
+  modelInvocationAtSlot,
+  selectModelRequestRecoverySlot,
+  withModelInvocationAtSlot,
+} from './modelRequestInvocationSlots.js'
 
 const MAX_RESPONSE_BYTES = 512 * 1024
 const MAX_RECEIPT_BYTES = 64 * 1024
@@ -74,15 +79,7 @@ function boundedModelResponse(value) {
 }
 
 function checkpointInvocation(checkpoint, { includeMaterialized = false } = {}) {
-  const invocation = normalizeModelInvocation(checkpoint?.state?.modelInvocation)
-  if (invocation?.status === 'in_flight') return invocation
-  if (includeMaterialized
-    && ['completed', 'not_sent'].includes(invocation?.status)
-    && invocation.reconciliation?.source === 'manual'
-    && invocation.reconciliation.outcome === invocation.status) {
-    return invocation
-  }
-  return null
+  return selectModelRequestRecoverySlot(checkpoint?.state, { includeMaterialized })?.invocation || null
 }
 
 function rawCheckpoint(db, { userId, jobId, stepId }) {
@@ -186,7 +183,7 @@ function materializedInvocation(row, invocation) {
   }
 }
 
-function recordForClient({ checkpoint, invocation, row = null }) {
+function recordForClient({ checkpoint, invocation, row = null, slot = 'main' }) {
   const lastProviderAttempt = lastModelProviderAttemptForClient(invocation)
   return {
     scopeKind: 'job',
@@ -194,6 +191,7 @@ function recordForClient({ checkpoint, invocation, row = null }) {
     stepId: checkpoint.stepId,
     checkpointRevision: checkpoint.revision,
     checkpointUpdatedAt: checkpoint.updatedAt,
+    ...(slot === 'compaction' ? { modelRequestSlot: slot } : {}),
     ...identityFromInvocation(invocation),
     ...(lastProviderAttempt ? { lastProviderAttempt } : {}),
     status: row?.resolution === 'completed' || row?.resolution === 'not_sent'
@@ -213,7 +211,8 @@ export function getPendingJobModelRequestRecovery({ userId, jobId, stepId, db = 
     jobId: normalizedJobId,
     stepId: normalizedStepId,
   })
-  const invocation = checkpointInvocation(checkpoint, { includeMaterialized: true })
+  const selected = selectModelRequestRecoverySlot(checkpoint?.state, { includeMaterialized: true })
+  const invocation = selected?.invocation
   if (!checkpoint || !invocation) return null
   const row = resolutionRow(db, {
     userId: ownerId,
@@ -243,7 +242,7 @@ export function getPendingJobModelRequestRecovery({ userId, jobId, stepId, db = 
       409,
     )
   }
-  return recordForClient({ checkpoint, invocation, row })
+  return recordForClient({ checkpoint, invocation, row, slot: selected.slot })
 }
 
 export function readJobModelRequestRecoveryResolution({
@@ -400,7 +399,8 @@ function loadPendingJobModelRequestState({
   if (checkpoint.revision !== checkpointRevision) {
     throw recoveryError('JOB_MODEL_REQUEST_RECOVERY_CONFLICT', 'job checkpoint advanced before confirmation', 409)
   }
-  const invocation = checkpointInvocation(checkpoint)
+  const selected = selectModelRequestRecoverySlot(checkpoint.state)
+  const invocation = selected?.invocation
   if (!invocation) {
     throw recoveryError('JOB_MODEL_REQUEST_RECOVERY_CONFLICT', 'job model request is no longer in flight', 409)
   }
@@ -425,7 +425,7 @@ function loadPendingJobModelRequestState({
       409,
     )
   }
-  return { checkpoint, invocation, existing }
+  return { checkpoint, invocation, existing, slot: selected.slot }
 }
 
 function materializeResolvedJobCheckpoint({
@@ -433,6 +433,7 @@ function materializeResolvedJobCheckpoint({
   checkpoint,
   stored,
   invocation,
+  slot,
   ownerId,
   jobId,
   stepId,
@@ -440,12 +441,9 @@ function materializeResolvedJobCheckpoint({
   resolvedAt,
 }) {
   if (!['completed', 'not_sent'].includes(stored?.resolution)) {
-    return recordForClient({ checkpoint, invocation, row: stored })
+    return recordForClient({ checkpoint, invocation, row: stored, slot })
   }
-  const nextState = {
-    ...checkpoint.state,
-    modelInvocation: materializedInvocation(stored, invocation),
-  }
+  const nextState = withModelInvocationAtSlot(checkpoint.state, slot, materializedInvocation(stored, invocation))
   const updated = db.prepare(`
     UPDATE job_turn_checkpoints
        SET state_json = ?, updated_at = ?, revision = revision + 1
@@ -466,8 +464,9 @@ function materializeResolvedJobCheckpoint({
   const materialized = rawCheckpoint(db, { userId: ownerId, jobId, stepId })
   return recordForClient({
     checkpoint: materialized,
-    invocation: checkpointInvocation(materialized, { includeMaterialized: true }),
+    invocation: modelInvocationAtSlot(materialized?.state, slot),
     row: stored,
+    slot,
   })
 }
 
@@ -513,7 +512,7 @@ export function resolvePendingJobModelRequest({
   })
 
   return db.transaction(() => {
-    const { checkpoint, invocation, existing } = loadPendingJobModelRequestState({
+    const { checkpoint, invocation, existing, slot } = loadPendingJobModelRequestState({
       db,
       ownerId,
       jobId: normalizedJobId,
@@ -570,6 +569,7 @@ export function resolvePendingJobModelRequest({
       checkpoint,
       stored,
       invocation,
+      slot,
       ownerId,
       jobId: normalizedJobId,
       stepId: normalizedStepId,

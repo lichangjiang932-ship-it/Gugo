@@ -231,11 +231,18 @@ export const _internals = { RULES }
  */
 export function shellTrustWarning(env = process.env) {
   if (env.WORKSPACE_SHELL_ENABLED !== '1') return null
+  if (String(env.SHELL_SANDBOX_MODE || 'host').toLowerCase() === 'docker') {
+    return (
+      'WORKSPACE_SHELL_ENABLED=1: bash_exec 已开启 Docker 隔离模式。' +
+      '每次命令禁网、禁 pull、使用只读 rootfs、降权和资源限制；' +
+      '安全仍依赖受审计镜像、Docker daemon 与宿主内核。'
+    )
+  }
   return (
-    'WORKSPACE_SHELL_ENABLED=1: bash_exec 已开启。' +
+    'WORKSPACE_SHELL_ENABLED=1: bash_exec 已开启 host 模式。' +
     '危险命令黑名单仅防手滑,不是安全边界——开启 shell 等同于完全信任能调用该接口的用户' +
     '(可在 server 进程权限下执行任意命令)。不信任用户请勿开此 env,' +
-    '不可信场景须上 OS 级隔离(容器 / nsjail / seccomp)。'
+    '可配置 SHELL_SANDBOX_MODE=docker 并设置 SHELL_REQUIRE_OS_ISOLATION=1 来禁止 host 回退。'
   )
 }
 

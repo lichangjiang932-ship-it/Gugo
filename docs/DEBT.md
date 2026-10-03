@@ -249,51 +249,94 @@ previews, and streaming updates.
 
 ## DEBT-TYPE-001 — Runtime contract type coverage
 
-**Status:** Closed
+**Status:** Open
 **Priority:** P2  
 **Area:** Type safety
 
-**Evidence / reproduction:** Runtime ports and event contracts previously had
-runtime validation only, with no checked-in static declarations or CI typecheck.
+**Evidence / reproduction:** The original `types/runtime-contracts.ts` remains a
+useful schema-derived event/payload index and structural port-method check, but
+`tsconfig.contracts.json` has `checkJs: false`: it did not check the JavaScript
+implementations end-to-end. Compiler inspection also finds `any` return types
+for the unchecked SessionAdmin, managed-attachment-runtime and subagent ports.
+Before the pilot, the Turn Event discriminator widened to `string`; its opaque
+JSON payload intentionally remains `Record<string, unknown>` after parsing.
 
-**Exit criteria:** Stable event payload and kernel-port types are derived from
-their existing authorities and checked by an unconditional required CI step,
-without creating a second event schema.
+**Exit criteria:** Incrementally check the stable event/protocol and kernel-port
+implementations together with their production callers, deriving their types
+from the existing runtime authorities. Each covered boundary must have positive
+calls and negative compile fixtures; unsafe port inference and uncovered callers
+must remain explicitly tracked before this debt can close.
 
-**Resolution:** `types/runtime-contracts.ts` derives Turn Event and payload types
-directly from the authoritative Zod schemas and derives stable kernel port types
-from their implementation factories and method constants. This avoids a second
-event schema while adding compile-time method coverage for attachment, Session,
-compaction, and subagent persistence boundaries. `tsconfig.contracts.json` keeps
-the migration incremental instead of enabling repository-wide `checkJs`.
+**Progress:** `tsconfig.protocol-pilot.json` enables `checkJs: true`, `strict` and
+`noEmit` for nine real runtime modules: inline-skill bounds, Turn Activity, Turn
+Events, SSE transport, WebSocket protocol, the server WebSocket frame codec,
+the managed-attachment governance port, the Loop host capability handshake and
+durable Agent Event consumer host support. Protocol JSDoc imports use
+`types/turn-protocol.ts`, derived from the same Zod schemas; checked core ports
+use `types/kernel-ports.ts`. Literal event/activity kinds, type-dependent
+constructor payloads, validation-result narrowing, governance adapter shape and
+owner/operation inputs, the Loop v2/v3 broker capability declaration, and the
+durable store/listener support boundary are checked. The production WebSocket
+service uses the checked codec, while user-data clearing consumes the checked
+governance port;
+v1 SSE/WS and durable Agent Event v2 retain their separate authorities. No
+repository-wide switch or diagnostic-suppression directive is used.
 
-**Verification:** `npm run typecheck` is an unconditional required CI step on
-the cross-platform Node 22 test matrix. Existing event, adapter, persistence,
-and code-debt suites remain the runtime baseline.
+**Remaining scope:** The complete WebSocket service, remaining kernel-port
+factories and their other callers, UI, model invocation and persistence modules
+are not covered by this pilot. Legacy structural aliases are not a substitute
+for migrating these implementations; the debt is deliberately open rather than
+claiming whole-repo type safety.
+
+**Verification:** The existing unconditional CI `npm run typecheck` now runs the
+original index, the strict implementation pilot and 14 registered negative call
+fixtures. Every negative fixture must fail with its intended TypeScript error;
+unresolved imports or unrelated errors cannot count as a successful check.
+`tests/protocolTypecheck.test.js` also injects a wrong protocol version into the
+real codec in an in-memory compiler host and requires an implementation error,
+without changing the file. Protocol, codec and real WebSocket tests remain the
+runtime regression baseline.
 
 ## DEBT-RELEASE-001 — Desktop signing and provenance
 
-**Status:** Closed
+**Status:** Open
 **Priority:** P1  
 **Area:** Distribution
 
-**Evidence / reproduction:** The Windows release job now requires code-signing
-secrets before packaging, enables electron-builder `forceCodeSigning`, verifies
-timestamped signatures from one certificate on both the installer and packaged
-application, pins that signer to the configured production publisher identity,
-and requires the same certificate-derived updater publisher identity. Direct
-publishing is blocked and published tag assets cannot be overwritten.
-It also publishes a deterministic `SHA256SUMS.txt` and creates GitHub build
-provenance for every published release asset. Missing credentials, invalid
-signatures, checksum generation failures, or attestation failures stop the
-release before upload.
+**Evidence / reproduction:** This item was previously marked closed for the
+implementation of a strict signed-release pipeline, not evidence of configured
+production certificates. That path still requires credentials, electron-builder
+`forceCodeSigning`, valid timestamped signatures from one certificate on the
+installer and packaged application, and matching publisher/updater identities.
+It still fails closed when signing prerequisites or checks fail.
 
-**Exit criteria:** Production desktop artifacts are signed, CI fails closed when
-credentials or signature verification are unavailable, and published checksums
-and provenance are independently verifiable.
+On 2026-09-07 the user explicitly selected unsigned Windows distribution for
+0.11.55. Version 0.11.56 explicitly retains that choice without configuring
+certificates. The current `scripts/release/policy.json` binds 0.11.56 to
+`windowsSigning: "unsigned"`; missing credentials do not select or downgrade
+the mode. Unsigned builds require `NotSigned` on the installer and application,
+retain icon/version resources, and preserve CI, the complete five-asset set,
+checksums, GitHub attestations, and immutable published assets. These controls
+do not satisfy the original Authenticode publisher-identity exit criterion,
+so this item is open rather than claiming signing safety is complete.
 
-**Verification:** `tests/desktopPackaging.test.js`, release-pipeline tests, and a
-signature verification smoke test against the produced installer.
+**Current release decision:** The absence of publisher identity is an explicitly
+accepted risk for this version, not a blocker for a release that passes the
+committed unsigned policy. SmartScreen/unknown-publisher warnings remain possible;
+disabling OS protection is not a mitigation. A correctly enforcing signed client
+rejects unsigned updates and requires a deliberate manual migration. The updater
+retains its configured signature check after SHA-512 verification and before
+cache/ready state; historical distributed clients cannot be repaired retroactively.
+
+**Exit criteria:** A version explicitly selects the signed policy and provides
+verified production artifacts with valid timestamped publisher signatures;
+signature/publisher failures remain fail-closed in both release and update paths.
+Checksums and provenance remain independently verifiable, but cannot substitute
+for Authenticode identity or establish an unsigned binary's safety.
+
+**Verification:** `tests/desktopPackaging.test.js`, release-policy/pipeline and
+updater regressions, plus policy-specific checks against the actual installer
+and packaged application. A successful unsigned build does not close this item.
 
 ## DEBT-EXEC-001 — Code-mode reachability and authorization parity
 
@@ -685,6 +728,63 @@ intentional temporary exception requires a separately reviewed debt record.
 **Verification:** `npm run debt:check` discovers JavaScript and TypeScript
 implementation files under `server/`, `shared/`, `desktop/`, and `bin/`; rejects
 new oversized files and requires the closed inventory to remain empty.
+
+## DEBT-NET-002 — OS-level isolation for arbitrary external code
+
+**Status:** Open
+**Priority:** P2
+**Area:** Local-first execution
+
+**Evidence / reproduction:** `server/utils/shellPolicy.js` explicitly implements
+an application-level command tripwire, not a security sandbox. Arbitrary Node,
+Python or PowerShell programs, trusted runtime plugins and MCP stdio processes
+can use networking outside the guarded HTTP APIs. Windows process-tree binding
+controls lifecycle and cancellation, not network access. Renderer image proxy
+and CSP enforcement close application-controlled resource bypasses but do not
+make arbitrary external code air-gapped.
+
+**Exit criteria:** A supported, explicitly selected execution backend enforces
+and verifies OS/container network isolation for every relevant process and
+plugin boundary, with clear unsupported-platform behavior and preserved local
+tool functionality. No expansion of lexical blacklists alone can close this item.
+
+**Verification:** Current `tests/shellPolicy.test.js`, outbound-policy and
+remote-image tests verify the narrower application policy. Closure also requires
+real network-canary tests for inline/encoded programs, explicit executable paths,
+background children and stdio/plugin execution under the selected sandbox.
+
+## DEBT-RELEASE-002 — Production signing configuration is absent
+
+**Status:** Open
+**Priority:** P1
+**Area:** Release operations
+
+**Evidence / reproduction:** On 2026-09-07 the repository Secrets and Variables
+metadata lists were empty. Release run `34021618396` failed at `Require Windows
+code-signing credentials`. The signing/provenance code gate in
+`DEBT-RELEASE-001` exists, but deployment prerequisites were not configured.
+This remains the historical signed-path failure; it is not evidence that
+credentials were later supplied or that signed distribution now works.
+
+**Current release decision:** The user subsequently chose not to configure
+signing for 0.11.55 and explicitly accepted unsigned distribution through the
+version-bound release policy; 0.11.56 explicitly retains that decision. The
+0.11.55 draft-publication failure did not configure or validate production
+certificates. This open operations risk does not block the current
+unsigned release when its CI, `NotSigned`, asset, checksum and provenance gates
+pass. It still blocks any selected signed release until the prerequisites are
+met. Future versions must explicitly review and update the policy version;
+absence of secrets is never an implicit fallback. See `docs/DESKTOP_RELEASES.md`
+for the missing publisher identity, SmartScreen and manual-migration limitations.
+
+**Exit criteria:** Configure `WINDOWS_CSC_LINK`, `WINDOWS_CSC_KEY_PASSWORD` and
+the matching `WINDOWS_PUBLISHER_NAME`, then produce a verified main-line release
+with valid timestamped signatures, the complete asset set, checksums and GitHub
+build provenance. Published tags/assets must remain immutable.
+
+**Verification:** Repository configuration metadata, a successful Release run,
+Authenticode verification and independent `gh attestation verify`. A draft or
+unsigned local installer is not proof that this item is closed.
 
 ## Maintenance rules
 

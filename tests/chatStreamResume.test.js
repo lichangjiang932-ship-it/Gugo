@@ -9,6 +9,7 @@ import {
   buildStreamResumeStateFromMessages,
   getStreamResumeStateForSession,
   isStreamResumeStateForSession,
+  streamResumeDismissalKey,
   updateStreamResumeStates,
   updateStreamResumeStatesFromTurnResult,
 } from '../src/pages/ChatSplit/streamResumeState.js'
@@ -167,6 +168,66 @@ test('a persisted failed-retry checkpoint rejection stays closed after refresh',
   )
   assert.equal(snapshot.messages[0]?.meta?.serverFailure?.retryable, false)
   assert.equal(Object.hasOwn(snapshot.messages[0]?.meta?.serverFailure || {}, 'message'), false)
+})
+
+function incompleteMessage(turnId = 'turn-old', sequence = 7) {
+  return {
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: 'saved partial answer',
+    meta: {
+      serverTurnId: turnId,
+      serverLastSequence: sequence,
+      failed: true,
+      serverFailure: { code: 'TURN_INCOMPLETE', retryable: true },
+    },
+  }
+}
+
+test('a new user message closes an older failed-turn recovery candidate', () => {
+  assert.equal(buildStreamResumeStateFromMessages([
+    incompleteMessage(),
+    { id: 'new-user', role: 'user', content: 'hi' },
+  ], { sessionId: 'session-a' }), null)
+})
+
+test('a later successful local assistant closes an older server failure', () => {
+  assert.equal(buildStreamResumeStateFromMessages([
+    incompleteMessage(),
+    { id: 'local-answer', role: 'assistant', content: 'Hello!' },
+  ], { sessionId: 'session-a' }), null)
+})
+
+test('steering within the same turn preserves recovery without crossing an unrelated user boundary', () => {
+  const failure = incompleteMessage()
+  const steering = {
+    role: 'user', content: 'also check the tests',
+    meta: { steering: true, serverTurnId: 'turn-old' },
+  }
+  const expected = buildStreamResumeStateFromMessages([failure], { sessionId: 'session-a' })
+  assert.ok(expected)
+  assert.deepEqual(buildStreamResumeStateFromMessages([
+    failure, steering, { role: 'tool', content: 'saved tool output' },
+  ], { sessionId: 'session-a' }), expected)
+  assert.equal(buildStreamResumeStateFromMessages([
+    failure, { role: 'user', content: 'new question' }, steering,
+  ], { sessionId: 'session-a' }), null)
+  assert.equal(buildStreamResumeStateFromMessages([
+    failure, { ...steering, meta: { steering: true, serverTurnId: 'turn-other' } },
+  ], { sessionId: 'session-a' }), null)
+})
+
+test('legacy failures without a durable sequence use their completion boundary for dismissal', () => {
+  const message = incompleteMessage('legacy-turn', -1)
+  message.meta.turnCompletedAt = 100
+  const options = {
+    sessionId: 'session-a',
+    dismissedKeys: new Set([streamResumeDismissalKey(message, { sessionId: 'session-a' })]),
+  }
+  assert.equal(buildStreamResumeStateFromMessages([structuredClone(message)], options), null)
+  const newFailure = { ...message, meta: { ...message.meta, turnCompletedAt: 101 } }
+  assert.ok(buildStreamResumeStateFromMessages([newFailure], options))
+  assert.ok(buildStreamResumeStateFromMessages([message], { ...options, sessionId: 'session-b' }))
 })
 
 test('resume state updates are isolated per session', () => {

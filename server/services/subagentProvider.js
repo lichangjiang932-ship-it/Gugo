@@ -1,4 +1,4 @@
-import { invokePluginService } from '../plugins/pluginRegistry.js'
+import { hasPluginService, invokePluginService } from '../plugins/pluginRegistry.js'
 
 export const SUBAGENT_PROVIDER_SERVICE = 'subagent-provider'
 export const SUBAGENT_PROVIDER_TIMEOUT_MS = 2 * 60 * 60 * 1_000
@@ -258,6 +258,17 @@ export async function invokeRuntimeSubagentProvider(input = {}, dependencies = {
     }),
     provenance: provenance({ providerPluginId, decision: 'handled' }),
   })
+}
+
+/** Opaque providers have no host tool broker with which to enforce inherited constraints. */
+export function constrainedSubagentProviderResolution(invoke) {
+  if (invoke === invokeRuntimeSubagentProvider && !hasPluginService(SUBAGENT_PROVIDER_SERVICE)) {
+    return Object.freeze({ kind: 'builtin', provenance: provenance({ decision: 'absent' }) })
+  }
+  const code = 'SUBAGENT_PROVIDER_POLICY_UNSUPPORTED'
+  throw providerError(code,
+    'The selected subagent provider cannot enforce the inherited goal or read-only policy. No provider task was started.',
+    provenance({ decision: 'error', error: code }))
 }
 
 export const _testing = Object.freeze({

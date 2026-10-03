@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { sanitizeChildEnv } from './sensitiveEnv.js'
+import { getDiagnosticRuntimeScope } from '../core/diagnosticRuntimeScope.js'
 
 const VAULT_VERSION = 1
 const VAULT_MARKER = '__yma_credential_vault'
@@ -189,6 +190,8 @@ export function requireSafeCredentialKeyPermissions(permissionResult) {
 }
 
 function loadVaultKey(env = process.env) {
+  const diagnostic = getDiagnosticRuntimeScope()
+  if (diagnostic) env = { ...env, ...diagnostic.env }
   const configured = String(env.CREDENTIAL_ENCRYPTION_KEY || '').trim()
   if (configured) {
     const cacheId = `env:${crypto.createHash('sha256').update(configured).digest('hex')}`
@@ -197,6 +200,9 @@ function loadVaultKey(env = process.env) {
   }
 
   const keyPath = defaultKeyPath(env)
+  // A diagnostic may read an existing key, but must not create a directory,
+  // generate/replace a key, harden ACLs or trust a stale normal-runtime cache.
+  if (diagnostic) return readKeyFile(keyPath)
   const cacheId = `file:${keyPath}`
   if (keyCache.has(cacheId)) return keyCache.get(cacheId)
   fs.mkdirSync(path.dirname(keyPath), { recursive: true })

@@ -16,6 +16,7 @@ import {
   assertSafeOfficeEntryNames,
   validateOfficeArtifactSafety,
 } from './officeArtifactSafety.js'
+import { validateOfficePassiveMetadataImages } from './officePassiveMetadata.js'
 
 const MAX_ZIP_ENTRIES = 20_000
 const MAX_ZIP_EXPANDED_BYTES = 512 * 1024 * 1024
@@ -429,6 +430,7 @@ export async function validateGeneratedArtifactOffice(bytes, format) {
     format,
     reject: invalid,
   })
+  await validateOfficePassiveMetadataImages({ entries, format, reject: invalid })
   const rootRelationships = relationshipSets.get('_rels/.rels')
   const officeRelationship = [...(rootRelationships?.values() || [])]
     .find((item) => item.type.endsWith('/officeDocument'))

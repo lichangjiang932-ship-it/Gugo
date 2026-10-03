@@ -1,38 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  buildToolSpecs,
-  getBuiltinToolRuntimeStatus,
-  getStandaloneToolClientStatus,
-  listToolNames,
-} from '../src/lib/tools/index.js'
-import { listBuiltinSpecs } from '../server/services/toolRegistry.js'
+import { getBuiltinSpec, resolveSpecsForMode } from '../server/services/toolRegistry.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS, isTaskStatus, isToolCallStatus } from '../src/store/taskStatus.js'
 
-const SERVER_CATALOG = listBuiltinSpecs()
-const buildFromServerCatalog = (names) => buildToolSpecs(names, SERVER_CATALOG)
-
-test('buildToolSpecs canonicalizes equivalent tool sets by function name', () => {
-  const first = buildFromServerCatalog(['web_search', 'fetch_url', 'read_file'])
-  const second = buildFromServerCatalog(['read_file', 'web_search', 'fetch_url'])
-
-  assert.deepEqual(first, second)
-  assert.deepEqual(first.map((spec) => spec.function.name), ['fetch_url', 'read_file', 'web_search'])
-})
-
-test('every built-in executor and model-facing spec has a matching counterpart', () => {
-  assert.deepEqual(getBuiltinToolRuntimeStatus(), {
-    missingExecutors: [],
-    missingSpecs: [],
-  })
-  assert.deepEqual(getStandaloneToolClientStatus(), {
-    scope: 'standalone_client',
-    missingExecutors: [],
-    missingSpecs: [],
-  })
-})
-
-test('code-search and agent-support executors are exposed with their canonical arguments', () => {
+test('code-search and agent-support tools are exposed with their canonical arguments', () => {
   const expectedRequired = {
     run_code: ['code'],
     grep_code: ['pattern'],
@@ -43,13 +14,13 @@ test('code-search and agent-support executors are exposed with their canonical a
     request_clarification: ['question'],
     remember: ['type', 'title', 'body'],
   }
-  const specs = buildFromServerCatalog(Object.keys(expectedRequired))
-
-  assert.deepEqual(specs.map((spec) => spec.function.name), Object.keys(expectedRequired).sort())
-  for (const spec of specs) {
-    assert.deepEqual(spec.function.parameters.required, expectedRequired[spec.function.name])
+  for (const [name, required] of Object.entries(expectedRequired)) {
+    const spec = getBuiltinSpec(name)
+    assert.ok(spec, `${name} should be in the server catalog`)
+    assert.equal(spec.function.name, name)
+    assert.deepEqual(spec.function.parameters.required, required)
   }
-  const runCode = specs.find((spec) => spec.function.name === 'run_code')
+  const runCode = getBuiltinSpec('run_code')
   assert.deepEqual(Object.keys(runCode.function.parameters.properties).sort(), ['code', 'description'])
 })
 
@@ -68,53 +39,9 @@ test('isTaskStatus / isToolCallStatus 正确判别', () => {
   assert.ok(!isToolCallStatus('weird'))
 })
 
-test('buildToolSpecs 接受 Array', () => {
-  const specs = buildFromServerCatalog(['web_search'])
-  assert.equal(specs.length, 1)
-  assert.equal(specs[0].function.name, 'web_search')
-})
-
-test('buildToolSpecs 接受 Set', () => {
-  const specs = buildFromServerCatalog(new Set(['web_search', 'fetch_url']))
-  assert.equal(specs.length, 2)
-})
-
-test('buildToolSpecs 去重', () => {
-  const specs = buildFromServerCatalog(['web_search', 'web_search', 'web_search'])
-  assert.equal(specs.length, 1)
-})
-
-test('buildToolSpecs 忽略未知工具', () => {
-  // console.warn 也容忍
-  const specs = buildFromServerCatalog(['web_search', 'shell_exec'])
-  assert.equal(specs.length, 1)
-  assert.equal(specs[0].function.name, 'web_search')
-})
-
-test('buildToolSpecs 忽略非字符串', () => {
-  const specs = buildFromServerCatalog(['web_search', null, undefined, 42, {}])
-  assert.equal(specs.length, 1)
-})
-
-test('buildToolSpecs 接受空/null', () => {
-  assert.deepEqual(buildFromServerCatalog(null), [])
-  assert.deepEqual(buildFromServerCatalog(undefined), [])
-  assert.deepEqual(buildFromServerCatalog([]), [])
-})
-
-test('listToolNames 返回所有内置工具', () => {
-  const names = listToolNames(SERVER_CATALOG)
-  assert.ok(names.includes('web_search'))
-  assert.ok(names.includes('fetch_url'))
-})
-
-
 test('chat tools expose Claude/Codex style workspace tools', () => {
-  const names = listToolNames(SERVER_CATALOG)
-  assert.ok(names.includes('read_file'))
-  assert.ok(names.includes('write_file'))
-  assert.ok(names.includes('edit_file'))
-  assert.ok(names.includes('bash_exec'))
-  const specs = buildFromServerCatalog(['read_file', 'write_file', 'edit_file', 'bash_exec'])
-  assert.deepEqual(specs.map((s) => s.function.name), ['bash_exec', 'edit_file', 'read_file', 'write_file'])
+  const names = new Set(resolveSpecsForMode('chat').map((entry) => entry.name))
+  for (const name of ['web_search', 'fetch_url', 'read_file', 'write_file', 'edit_file', 'bash_exec']) {
+    assert.ok(names.has(name), `${name} should be in the chat catalog`)
+  }
 })

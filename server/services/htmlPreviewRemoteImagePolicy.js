@@ -1,4 +1,5 @@
 import { JSDOM, VirtualConsole } from 'jsdom'
+import { isPureLocalModeEnabled } from '../utils/outboundNetworkGuard.js'
 
 export const HTML_PREVIEW_REMOTE_IMAGE_ORIGINS_ENV = 'HTML_PREVIEW_REMOTE_IMAGE_ORIGINS'
 const MAX_REMOTE_IMAGE_ORIGINS = 32
@@ -22,6 +23,7 @@ function configuredValue(envOrValue) {
 
 /** Parse a bounded list of exact HTTPS origins. Invalid entries fail closed. */
 export function htmlPreviewRemoteImageOrigins(envOrValue = process.env) {
+  if (isPureLocalModeEnabled() || (typeof envOrValue === 'object' && isPureLocalModeEnabled(envOrValue))) return []
   const origins = []
   const seen = new Set()
   for (const candidate of configuredValue(envOrValue).split(/[\s,]+/)) {

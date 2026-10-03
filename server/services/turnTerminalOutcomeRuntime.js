@@ -49,7 +49,7 @@ async function cancelBeforeExecution(runtime, {
   turnStartedAt,
 }) {
   if (!signal?.aborted) return false
-  if (lostTurnLease(signal)) return true
+  if (lostTurnLease(signal)) throw signal.reason
   const { userId, sessionId, turnId } = scope
   const cancelledAt = runtime.ports.now()
   const message = createInitialCancellationMessage({
@@ -141,6 +141,7 @@ async function settleInterruptedResult(runtime, context) {
     : missingRequirementsForIncompleteReason(incompleteReason)
   const failure = normalizeTurnFailure({
     code: result.code,
+    modelRequestDiagnostics: result.modelRequestDiagnostics,
     incompleteReason,
     missingRequirements,
     retryable: true,
@@ -257,6 +258,7 @@ async function settlePausedResult(runtime, context) {
     userId, sessionId, turnId, text, clarification,
     pausedEventSequence: event.sequence,
     checkpointMessages: state.checkpointMessages,
+    publicTimeline: state.publicTimeline,
     baselineToolCallIds: state.baselineToolCallIds,
     verifiedLocalFiles, retainedLocalFiles, artifactIds, deliveryArtifactIds, iterations,
     pluginPromptBlockIds: state.promptContextSnapshot?.pluginPromptBlockIds,
@@ -289,6 +291,7 @@ async function settleCompletedResult(runtime, context) {
   const message = createCompletedTurnMessage({
     userId, sessionId, turnId, text,
     checkpointMessages: state.checkpointMessages,
+    publicTimeline: state.publicTimeline,
     baselineToolCallIds: state.baselineToolCallIds,
     verifiedLocalFiles, retainedLocalFiles, artifactIds, deliveryArtifactIds, iterations,
     pluginPromptBlockIds: state.promptContextSnapshot?.pluginPromptBlockIds,
@@ -338,11 +341,21 @@ async function settleCompletedResult(runtime, context) {
   } catch (error) {
     logWarn('turn.memory_extraction_schedule', error, { userId, sessionId, turnId })
   }
+  try {
+    // The journal accumulates one episode at a time; this only pays for a model
+    // call once it has earned one (see experienceAbstraction).
+    runtime.ports.scheduleExperienceAbstraction?.({
+      userId,
+      callModel: ({ messages }) => runtime.ports.runMemoryModel({ messages, userId }),
+    })
+  } catch (error) {
+    logWarn('turn.experience_abstraction_schedule', error, { userId, sessionId, turnId })
+  }
 }
 
 async function settleResult(runtime, context) {
   if (context.signal.aborted) {
-    if (lostTurnLease(context.signal)) return
+    if (lostTurnLease(context.signal)) throw context.signal.reason
     return settleCancelledResult(runtime, context)
   }
   context.result = normalizedIncompleteResult(context.result)
@@ -354,8 +367,16 @@ async function settleResult(runtime, context) {
 
 async function settleError(runtime, context) {
   const { signal, error, state, evidence, recordCanaryTerminal } = context
-  if (lostTurnLease(signal, error)) return
-  if (isManualRecoveryBlock(error)) return evidence.emitBlocked(error)
+  // A fenced owner cannot write a terminal event, but local callers still need
+  // the execution failure. Preserve its identity and any checkpoint cause chain.
+  if (lostTurnLease(signal, error)) throw lostTurnLease(null, error) ? error : signal.reason
+  // Cancelling the user's task does not settle the upstream model request.
+  // Only an explicit abort of this host's controller may change the terminal
+  // presentation; the UNKNOWN error and in-flight checkpoint remain intact.
+  const cancelledModelRequest = signal?.aborted === true
+    && ['TURN_CANCEL_REQUESTED', 'USER_STOPPED'].includes(String(signal.reason?.code || '').trim().toUpperCase())
+    && String(error?.code || '').trim().toUpperCase() === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+  if (isManualRecoveryBlock(error) && !cancelledModelRequest) return evidence.emitBlocked(error)
   if (String(error?.code || '').trim().toUpperCase() === TURN_TERMINAL_PERSISTENCE_FAILURE_CODE) {
     throw error
   }
@@ -398,6 +419,7 @@ export function createTurnTerminalOutcomeRuntime({
   commitTurnBoundary = null,
   dispatchHooks = null,
   scheduleMemoryExtraction,
+  scheduleExperienceAbstraction = null,
   runMemoryModel,
 } = {}) {
   const runtime = {
@@ -407,6 +429,10 @@ export function createTurnTerminalOutcomeRuntime({
       commitTurnBoundary: typeof commitTurnBoundary === 'function' ? commitTurnBoundary : null,
       dispatchHooks: typeof dispatchHooks === 'function' ? dispatchHooks : null,
       scheduleMemoryExtraction: requirePort('scheduleMemoryExtraction', scheduleMemoryExtraction),
+      // Optional: the experience journal lives in a workspace that may not be
+      // writable, and a missing abstraction hook must not fail a finished turn.
+      scheduleExperienceAbstraction: typeof scheduleExperienceAbstraction === 'function'
+        ? scheduleExperienceAbstraction : null,
       runMemoryModel: requirePort('runMemoryModel', runMemoryModel),
     },
   }

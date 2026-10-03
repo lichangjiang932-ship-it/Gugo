@@ -1,10 +1,22 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import { CliError, CliUsageError } from './cli/errors.js'
+import { resolveCommandHelp, SERVER_COMMAND_OPTIONS } from './cli/commandHelp.js'
+import { cmdConfig } from './cli/configCommand.js'
+import { parseCliRuntimeArgs, resolveCliRuntimeSelection } from './cli/runtimeSelection.js'
+import { cmdDoctorHeadless, parseDoctorArgs } from './cli/headlessDoctor.js'
+import { cmdTrace } from './cli/traceCommand.js'
+import { cmdGoal } from './cli/goalCommand.js'
+import { cmdMemory } from './cli/memoryCommand.js'
+import { cmdUsage } from './cli/usageCommand.js'
+import { startInteractiveSession } from './cli/interactiveSession.js'
+import { loadBuiltinHeadlessRuntime } from './cli/headlessRuntimeLoader.js'
+import { createRunInteractionPorts } from './cli/runInteractionPorts.js'
+import { createRunTerminalObserver } from './cli/runDiagnostics.js'
+import { resolveRunDeadlineOutcome } from './cli/runDeadline.js'
 import {
   createRunOutputFormatter,
   formatRunError,
@@ -24,50 +36,18 @@ import {
   parseCommandFlags,
   sessionShowArgs,
 } from './cli/serverCommands.js'
+import { collectAttachmentRequests } from './cli/cliAttachments.js'
 
 export { CliError, CliUsageError }
 export { resolveServerUrl } from './cli/serverCommands.js'
 
-const HELP = `gugo — server-first CLI for Gugo (legacy alias: yma-cli)
-
-Usage:
-  gugo login --email <email>
-  gugo verify --email <email> --code <code>
-  gugo session list [--archived true|false|all] [--limit <n>] [--offset <n>]
-  gugo session search --query <text> [--session-id <id>]
-                      [--limit <n>] [--offset <n>]
-  gugo session show <session-id> [--limit <n>] [--offset <n>]
-  gugo model list [--provider <id>] [--search <text>]
-  gugo agent list
-  gugo skill list
-  gugo status
-  gugo doctor
-  gugo run "<prompt>" [--model <name>] [--provider <id>]
-                     [--mode normal|acceptEdits|plan|bypass]
-                     [--cwd <dir>] [--session-id <id>]
-                     [--timeout <ms>]
-                     [--output jsonl|text]
-  gugo run --resume <turnId> [--session-id <id>] [--cwd <dir>]
-                     [--timeout <ms>]
-                     [--output jsonl|text]
-  echo "<prompt>" | gugo run [options]
-  gugo --help
-  gugo --version
-
-Environment:
-  GUGO_SERVER_URL  absolute server URL (overrides SERVER_HOST/SERVER_PORT)
-  GUGO_CLI_HTTP_TIMEOUT_MS  API request timeout in milliseconds (default 10000)
-  GUGO_CLI_RUN_TIMEOUT_MS   optional Turn execution timeout in milliseconds
-  SERVER_PORT   server port (default 5173)
-  SERVER_HOST   server host (default 127.0.0.1)
-
-Auth tokens are isolated per server under ~/.yma-cli/tokens/ (chmod 0600).
-Run defaults to durable TurnEngine JSONL; use --output text for final text only.
-`
-
 const RUN_VALUE_FLAGS = new Set([
   'model', 'provider', 'mode', 'cwd', 'session-id', 'resume', 'timeout', 'output',
+  'file', 'image',
 ])
+/** Value flags that may be repeated; every other one is single-use. */
+const RUN_REPEATABLE_VALUE_FLAGS = new Set(['file', 'image'])
+const RUN_BOOLEAN_FLAGS = new Set(['progress'])
 const RUN_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
 const MAX_STDIN_PROMPT_BYTES = 1024 * 1024
 const MAX_TIMER_TIMEOUT_MS = 2_147_483_647
@@ -82,15 +62,19 @@ export function parseRunArgs(argv = []) {
     model: null,
     modelProviderId: null,
     mode: 'normal',
+    modeExplicit: false,
     cwd: process.cwd(),
+    cwdExplicit: false,
     sessionId: null,
     resumeTurnId: null,
     timeoutMs: null,
     outputFormat: 'jsonl',
+    progress: false,
+    files: [],
+    images: [],
   }
   const positional = []
   let positionalOnly = false
-  let modeSpecified = false
   const specifiedValueFlags = new Set()
   for (let i = 0; i < argv.length; i++) {
     const raw = String(argv[i])
@@ -101,11 +85,16 @@ export function parseRunArgs(argv = []) {
     if (!positionalOnly && raw.startsWith('--')) {
       const equalAt = raw.indexOf('=')
       const key = raw.slice(2, equalAt >= 0 ? equalAt : undefined)
-      if (!RUN_VALUE_FLAGS.has(key)) throw new CliUsageError('CLI_OPTION_UNKNOWN', `unknown run option: --${key}`)
-      if (specifiedValueFlags.has(key)) {
+      if (!RUN_VALUE_FLAGS.has(key) && !RUN_BOOLEAN_FLAGS.has(key)) throw new CliUsageError('CLI_OPTION_UNKNOWN', `unknown run option: --${key}`)
+      if (specifiedValueFlags.has(key) && !RUN_REPEATABLE_VALUE_FLAGS.has(key)) {
         throw new CliUsageError('CLI_OPTION_DUPLICATE', `--${key} may only be specified once`)
       }
       specifiedValueFlags.add(key)
+      if (RUN_BOOLEAN_FLAGS.has(key)) {
+        if (equalAt >= 0) throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', `--${key} does not take a value`)
+        options[key] = true
+        continue
+      }
       const value = equalAt >= 0 ? raw.slice(equalAt + 1) : argv[++i]
       const normalizedValue = value === undefined ? '' : String(value).trim()
       if (!normalizedValue || String(value).startsWith('--')) {
@@ -115,13 +104,18 @@ export function parseRunArgs(argv = []) {
       if (key === 'provider') options.modelProviderId = normalizedValue
       if (key === 'mode') {
         options.mode = normalizedValue
-        modeSpecified = true
+        options.modeExplicit = true
       }
-      if (key === 'cwd') options.cwd = resolve(normalizedValue)
+      if (key === 'cwd') {
+        options.cwd = resolve(normalizedValue)
+        options.cwdExplicit = true
+      }
       if (key === 'session-id') options.sessionId = normalizedValue
       if (key === 'resume') options.resumeTurnId = normalizedValue
       if (key === 'timeout') options.timeoutMs = resolveRunTimeoutMs(normalizedValue, {})
       if (key === 'output') options.outputFormat = normalizeRunOutputFormat(normalizedValue)
+      if (key === 'file') options.files.push(normalizedValue)
+      if (key === 'image') options.images.push(normalizedValue)
       continue
     }
     positional.push(raw)
@@ -133,7 +127,10 @@ export function parseRunArgs(argv = []) {
   if (options.resumeTurnId && options.prompt) {
     throw new CliUsageError('CLI_RESUME_PROMPT_CONFLICT', 'prompt cannot be combined with --resume')
   }
-  if (options.resumeTurnId && modeSpecified) {
+  if (options.resumeTurnId && (options.files.length || options.images.length)) {
+    throw new CliUsageError('CLI_RESUME_ATTACHMENT_CONFLICT', 'attachments cannot be combined with --resume')
+  }
+  if (options.resumeTurnId && options.modeExplicit) {
     throw new CliUsageError(
       'CLI_RESUME_MODE_CONFLICT',
       '--mode cannot be combined with --resume; the persisted turn permission mode is restored',
@@ -151,7 +148,7 @@ export function parseRunArgs(argv = []) {
       '--model cannot be combined with --resume; the persisted model is restored',
     )
   }
-  if (options.resumeTurnId && !modeSpecified) options.mode = null
+  if (options.resumeTurnId && !options.modeExplicit) options.mode = null
   return options
 }
 
@@ -203,65 +200,31 @@ export async function readPromptFromStdin(input = process.stdin) {
   return prompt.trim()
 }
 
-function createApprovalPrompt(input, diagnostics, signal = null) {
-  return async (event) => {
-    if (signal?.aborted) return { decision: 'deny' }
-    const tool = event?.payload?.toolName || 'unknown'
-    const args = JSON.stringify(event?.payload?.args || {})
-    const rl = createInterface({ input, output: diagnostics })
-    try {
-      const answer = await new Promise((done) => {
-        let settled = false
-        const finish = (value = '') => {
-          if (settled) return
-          settled = true
-          signal?.removeEventListener('abort', abort)
-          done(value)
-        }
-        const abort = () => {
-          finish('')
-          rl.close()
-        }
-        signal?.addEventListener('abort', abort, { once: true })
-        rl.once('close', () => finish(''))
-        rl.question(`[approval] tool=${tool} args=${args} [y/N] `, finish)
-      })
-      return { decision: /^y(?:es)?$/i.test(String(answer).trim()) ? 'approve' : 'deny' }
-    } finally {
-      rl.close()
-    }
-  }
-}
-
-async function loadBuiltinHeadlessRuntime({
+export async function cmdChat(options, {
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  runTurn = null,
   runtimeCwd = process.cwd(),
   env = process.env,
+  signal = null,
+  lines = null,
 } = {}) {
-  // Keep the CLI entry free of eager backend imports. Trusted persistence is
-  // selected before preflight can open the distribution's remaining SQLite
-  // stores, and ordinary runtime plugin state cannot influence this choice.
-  // A CLI may be launched inside an untrusted project, so cwd/.env must never
-  // select executable host code. Deployment-owned process env remains explicit.
-  const persistenceEnv = Object.freeze({ ...env })
-  const { resolveBuiltinSqliteTurnPersistenceBootstrap } = await import(
-    '../server/adapters/builtinSqliteTurnPersistenceBootstrap.js'
-  )
-  const persistenceBootstrap = await resolveBuiltinSqliteTurnPersistenceBootstrap({
-    cwd: runtimeCwd,
-    env: persistenceEnv,
-  })
-  const { runRuntimeConfigStartupPreflight } = await import(
-    '../server/services/runtimeConfigStartupService.js'
-  )
-  const { runtimeEnv } = runRuntimeConfigStartupPreflight({ cwd: runtimeCwd, env })
-  const { runBuiltinHeadlessTurn } = await import('../server/adapters/headlessTurnHost.js')
-  return (options) => runBuiltinHeadlessTurn({
-    ...options,
-    runtimeCwd,
-    runtimeEnv,
-    env: runtimeEnv,
-    turnPersistenceAdapter: persistenceBootstrap.adapter,
-    turnPersistenceProvenance: persistenceBootstrap.provenance,
+  if (options.resumeTurnId) {
+    throw new CliUsageError(
+      'CLI_CHAT_RESUME_CONFLICT',
+      'gugo chat keeps its own session; use `gugo run --resume <turnId>` to continue a specific turn',
+    )
+  }
+  if (options.prompt) {
+    throw new CliUsageError(
+      'CLI_CHAT_PROMPT_CONFLICT',
+      `gugo chat takes no prompt argument; drop "${String(options.prompt).slice(0, 40)}" and type it inside the session`,
+    )
+  }
+  return startInteractiveSession({
+    options: { ...options, timeoutMs: options.timeoutMs ?? resolveRunTimeoutMs(null, env) },
+    stdin, stdout, stderr, runTurn, runtimeCwd, env, signal, lines,
   })
 }
 
@@ -274,14 +237,21 @@ export async function cmdRun(argv, {
   env = process.env,
   signal = null,
 } = {}) {
+  // A run without two live terminals cannot answer an approval prompt. The
+  // runtime then denies every approval-requiring tool, and the failure summary
+  // must say that instead of reporting a user decision.
+  const interactive = stdin.isTTY === true && stderr.isTTY === true
   const output = createRunOutputFormatter({
     format: requestedRunOutputFormat(argv),
+    progress: argv.includes('--progress'),
+    interactive,
     stdout,
     stderr,
   })
   let timeoutTimer = null
   let timeoutTriggered = false
   let timeoutError = null
+  const terminalObserver = createRunTerminalObserver()
   try {
     const options = parseRunArgs(argv)
     const stdinPrompt = stdin.isTTY === true ? '' : await readPromptFromStdin(stdin)
@@ -293,7 +263,19 @@ export async function cmdRun(argv, {
     }
     if (!options.resumeTurnId) {
       options.prompt = [options.prompt, stdinPrompt].filter(Boolean).join('\n\n')
-      if (!options.prompt) throw new CliUsageError('PROMPT_REQUIRED', 'prompt is required')
+      if (!options.prompt && !options.files.length && !options.images.length) throw new CliUsageError('PROMPT_REQUIRED', 'prompt is required')
+    }
+    if (options.files.length > 0 || options.images.length > 0) {
+      // A resumed turn replays its own prompt; folding attachments in would invent one.
+      if (options.resumeTurnId) {
+        throw new CliUsageError(
+          'CLI_RESUME_ATTACHMENT_CONFLICT',
+          'attachments cannot be combined with --resume',
+        )
+      }
+      // Only the trusted headless host reads files, after establishing the local
+      // identity. Bytes become managed attachment IDs, never giant prompt strings.
+      options.attachmentRequests = collectAttachmentRequests({ files: options.files, images: options.images })
     }
     const timeoutMs = options.timeoutMs ?? resolveRunTimeoutMs(null, env)
     const timeoutController = timeoutMs > 0 ? new AbortController() : null
@@ -313,34 +295,60 @@ export async function cmdRun(argv, {
       ? (signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal)
       : signal
     const runtime = runTurn || await loadBuiltinHeadlessRuntime({ runtimeCwd, env })
-    const interactive = stdin.isTTY === true && stderr.isTTY === true
+    const interactionPorts = createRunInteractionPorts({
+      stdin, diagnostics: stderr, signal: runtimeSignal,
+    })
     const runtimeOptions = { ...options }
+    runtimeOptions.workspaceExplicit = options.cwdExplicit === true
+    delete runtimeOptions.cwdExplicit
+    delete runtimeOptions.progress
     delete runtimeOptions.outputFormat
     delete runtimeOptions.timeoutMs
-    const result = await runtime({
+    // Raw flags are replaced by the bounded, explicit attachment request list.
+    delete runtimeOptions.files
+    delete runtimeOptions.images
+    let result = await runtime({
       ...runtimeOptions,
       // HTTP credentials belong to a server URL. Headless execution binds to
       // the local runtime/database and must never consume a remote token.
       token: '',
       interactive,
       signal: runtimeSignal,
-      onEvent: output.onEvent,
+      onEvent: (event) => {
+        terminalObserver.observe(event)
+        return output.onEvent(event)
+      },
       onToken: () => {},
       onDiagnostic: (message) => stderr.write(`${message}\n`),
-      onApproval: createApprovalPrompt(stdin, stderr, runtimeSignal),
+      ...interactionPorts,
     })
+    if (timeoutTimer) clearTimeout(timeoutTimer)
     if (timeoutTriggered) {
-      await output.writeError(timeoutError)
-      return timeoutError.exitCode
+      const outcome = resolveRunDeadlineOutcome({ result, timeoutError,
+        observedTerminal: terminalObserver.terminal, terminalConflict: terminalObserver.conflict })
+      if (Object.hasOwn(outcome, 'error')) throw outcome.error
+      result = outcome.result
     }
+    if (timeoutTriggered) stderr.write('[deadline elapsed; preserving the runtime outcome]\n')
     await output.finish(result)
     return output.resolveExitCode(result)
   } catch (error) {
-    const resolvedError = timeoutTriggered ? timeoutError : error
-    await output.writeError(resolvedError)
-    return Number.isInteger(resolvedError?.exitCode) ? resolvedError.exitCode : 1
+    if (timeoutTimer) clearTimeout(timeoutTimer)
+    // A deadline requests cooperative cancellation; it cannot prove that a
+    // concurrent persistence, output or unknown-result failure was cancelled.
+    const outcome = timeoutTriggered
+      ? resolveRunDeadlineOutcome({ error, didThrow: true, timeoutError,
+        observedTerminal: terminalObserver.terminal, terminalConflict: terminalObserver.conflict }) : { error }
+    if (Object.hasOwn(outcome, 'result')) {
+      stderr.write('[deadline elapsed; preserving the runtime outcome]\n')
+      await output.finish(outcome.result)
+      return output.resolveExitCode(outcome.result)
+    }
+    await output.writeError(outcome.error)
+    return Number.isInteger(outcome.error?.exitCode) ? outcome.error.exitCode : 1
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer)
+    await output.dispose()
   }
 }
 
@@ -396,13 +404,22 @@ export function createRunShutdownController({
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  if (argv.length === 0) {
-    process.stdout.write(HELP)
-    return 0
+  const invocation = parseCliRuntimeArgs(argv)
+  argv = invocation.argv
+  let help
+  try {
+    help = resolveCommandHelp(argv, { parseRunArgs })
+  } catch (error) {
+    if (argv[0] !== 'run') throw error
+    // A rejected run help request keeps run's existing JSONL/text error
+    // contract, without installing signal handlers or touching stdin/runtime.
+    const output = formatRunError(error, { format: requestedRunOutputFormat(argv.slice(1)) })
+    if (output.stdout) process.stdout.write(output.stdout)
+    if (output.stderr) process.stderr.write(output.stderr)
+    return Number.isInteger(error?.exitCode) ? error.exitCode : 1
   }
-  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') {
-    parseCommandFlags(argv.slice(1), { command: 'help' })
-    process.stdout.write(HELP)
+  if (help !== null) {
+    process.stdout.write(help)
     return 0
   }
   if (argv[0] === '--version' || argv[0] === '-V') {
@@ -412,43 +429,49 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   const [cmd, sub, ...rest] = argv
+  // Capture launcher authority before startup can apply project/runtime layers.
+  const launcherEnv = Object.freeze({ ...process.env })
+  const runtime = resolveCliRuntimeSelection({ runtimeDir: invocation.runtimeDir, env: launcherEnv })
+  if (invocation.runtimeDir !== null && ['login', 'verify', 'session', 'model', 'agent', 'skill', 'status'].includes(cmd)) {
+    throw new CliUsageError('CLI_RUNTIME_DIR_LOCAL_ONLY', '--runtime-dir selects local commands; HTTP commands use GUGO_SERVER_URL')
+  }
+
+  if (cmd === 'config') return cmdConfig(argv.slice(1), { runtime, env: launcherEnv })
 
   if (cmd === 'login') {
-    const flags = parseCommandFlags(argv.slice(1), { command: 'login', valueFlags: ['email'] })
+    const flags = parseCommandFlags(argv.slice(1), SERVER_COMMAND_OPTIONS.login)
     if (!flags.email) throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', '--email is required')
     await cmdLogin(flags)
     return 0
   }
   if (cmd === 'verify') {
-    const flags = parseCommandFlags(argv.slice(1), { command: 'verify', valueFlags: ['email', 'code'] })
+    const flags = parseCommandFlags(argv.slice(1), SERVER_COMMAND_OPTIONS.verify)
     if (!flags.email || !flags.code) {
       throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', '--email and --code are required')
     }
     await cmdVerify(flags)
     return 0
   }
+  if (cmd === 'chat' || cmd === 'i') {
+    const options = parseRunArgs(argv.slice(1))
+    return await cmdChat(options, { runtimeCwd: runtime.cwd, env: launcherEnv })
+  }
   if (cmd === 'run') {
     const shutdown = createRunShutdownController()
     try {
-      const exitCode = await cmdRun(argv.slice(1), { signal: shutdown.signal })
+      const exitCode = await cmdRun(argv.slice(1), { signal: shutdown.signal, runtimeCwd: runtime.cwd, env: launcherEnv })
       return shutdown.exitCode ?? exitCode
     } finally {
       shutdown.dispose()
     }
   }
   if (cmd === 'session' && sub === 'list') {
-    const flags = parseCommandFlags(rest, {
-      command: 'session list',
-      valueFlags: ['archived', 'limit', 'offset'],
-    })
+    const flags = parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['session list'])
     await cmdSessionList(flags)
     return 0
   }
   if (cmd === 'session' && sub === 'search') {
-    const flags = parseCommandFlags(rest, {
-      command: 'session search',
-      valueFlags: ['query', 'session-id', 'limit', 'offset'],
-    })
+    const flags = parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['session search'])
     await cmdSessionSearch(flags)
     return 0
   }
@@ -458,30 +481,44 @@ export async function main(argv = process.argv.slice(2)) {
     return 0
   }
   if (cmd === 'model' && sub === 'list') {
-    const flags = parseCommandFlags(rest, {
-      command: 'model list',
-      valueFlags: ['provider', 'search'],
-    })
+    const flags = parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['model list'])
     await cmdModelList(flags)
     return 0
   }
   if (cmd === 'agent' && sub === 'list') {
-    parseCommandFlags(rest, { command: 'agent list' })
+    parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['agent list'])
     await cmdAgentList()
     return 0
   }
   if (cmd === 'skill' && sub === 'list') {
-    parseCommandFlags(rest, { command: 'skill list' })
+    parseCommandFlags(rest, SERVER_COMMAND_OPTIONS['skill list'])
     await cmdSkillList()
     return 0
   }
   if (cmd === 'status') {
-    parseCommandFlags(argv.slice(1), { command: 'status' })
+    parseCommandFlags(argv.slice(1), SERVER_COMMAND_OPTIONS.status)
     return cmdStatus()
   }
   if (cmd === 'doctor') {
-    parseCommandFlags(argv.slice(1), { command: 'doctor' })
-    return cmdDoctor()
+    const options = parseDoctorArgs(argv.slice(1))
+    if (!options.headless) {
+      if (invocation.runtimeDir !== null) throw new CliUsageError('CLI_RUNTIME_DIR_LOCAL_ONLY', 'doctor requires --headless with --runtime-dir')
+      return cmdDoctor()
+    }
+    return cmdDoctorHeadless({ ...options, runtimeCwd: runtime.cwd, env: launcherEnv })
+  }
+
+  if (cmd === 'trace') {
+    return cmdTrace(argv.slice(1), { cwd: runtime.cwd, env: launcherEnv })
+  }
+  if (cmd === 'goal') {
+    return cmdGoal(argv.slice(1), { cwd: runtime.cwd, inputCwd: process.cwd(), env: launcherEnv })
+  }
+  if (cmd === 'memory') {
+    return cmdMemory(argv.slice(1), { cwd: runtime.cwd, env: launcherEnv })
+  }
+  if (cmd === 'usage') {
+    return cmdUsage(argv.slice(1), { cwd: runtime.cwd, env: launcherEnv })
   }
 
   throw new CliUsageError('CLI_COMMAND_UNKNOWN', `Unknown command: ${argv.join(' ')}`)

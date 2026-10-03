@@ -1,3 +1,6 @@
+import { assertPptxPreviewPackage, readPptxFilePreview } from './pptxFilePreview.js'
+import { PPTX_PREVIEW_BYTE_LIMITS, readPptxXmlText } from './pptxPreviewArchive.js'
+
 const TEXT_PREVIEW_LIMIT = 4 * 1024 * 1024
 const OFFICE_PREVIEW_LIMIT = 64 * 1024 * 1024
 
@@ -113,16 +116,20 @@ export async function parseDocxPreview(input, filename = 'document.docx') {
 
 export async function parsePptxPreview(input, filename = 'presentation.pptx') {
   const zip = await loadZip(input)
+  assertPptxPreviewPackage(zip)
+  const original = await readPptxFilePreview(zip)
   const names = Object.keys(zip.files)
     .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
     .sort((left, right) => Number(left.match(/slide(\d+)/i)?.[1]) - Number(right.match(/slide(\d+)/i)?.[1]))
   if (!names.length) throw new Error('Invalid PPTX: no slides were found')
-  const slides = []
-  for (const name of names) {
-    const xml = await zip.files[name].async('string')
+  if (names.length > 200) throw new Error('PPTX slide count exceeds the preview limit')
+  const slides = original?.slides || []
+  const xmlBudget = { bytes: 0, limit: PPTX_PREVIEW_BYTE_LIMITS.xmlTotal }
+  for (const name of original ? [] : names) {
+    const xml = await readPptxXmlText(zip.files[name], xmlBudget)
     const paragraphs = xml.match(/<a:p\b[\s\S]*?<\/a:p>/g) || []
     const lines = paragraphs.map((paragraph) => collectXmlText(paragraph, 'a:t').trim()).filter(Boolean)
-    slides.push({ title: lines[0] || `Slide ${slides.length + 1}`, lines: lines.slice(1) })
+    slides.push({ title: lines[0] || `Slide ${slides.length + 1}`, lines: lines.slice(1), layout: null })
   }
   const title = String(filename).replace(/\.pptx?$/i, '') || slides[0]?.title || 'Presentation'
   const content = slides.map((slide, index) => [
@@ -130,7 +137,7 @@ export async function parsePptxPreview(input, filename = 'presentation.pptx') {
     index === 0 && slide.title !== title ? `## ${slide.title}` : '',
     ...slide.lines.map((line) => `- ${line}`),
   ].filter(Boolean).join('\n\n')).join('\n\n---\n\n')
-  return { title, slides, content }
+  return { title, slides, content, width: original?.width, height: original?.height }
 }
 
 export async function parseXlsxPreview(input) {
@@ -185,7 +192,7 @@ function decodeText(bytes) {
 export async function loadDirectFilePreview({ file = {}, url = '', fetchImpl = fetch } = {}) {
   const kind = classifyDirectFile(file)
   if (['pdf', 'image', 'audio', 'video', 'unsupported'].includes(kind)) return { kind, url }
-  const response = await fetchImpl(url, { credentials: 'same-origin' })
+  const response = await fetchImpl(url, { credentials: 'same-origin', cache: 'no-store' })
   if (!response.ok) throw new Error(`Could not load file preview (${response.status})`)
   const office = ['docx', 'xlsx', 'pptx'].includes(kind)
   assertPreviewSize(response, office ? OFFICE_PREVIEW_LIMIT : TEXT_PREVIEW_LIMIT)

@@ -1,4 +1,8 @@
 import { assertRuntimeStage } from './runtimeContract.js'
+import { captureMutationVerificationIntent } from './mutationVerificationRecovery.js'
+import { localizeForState as localize } from './incompleteTerminalPresentation.js'
+import { toolFreeResponseError, toolStopBoundary } from './runtimeToolStop.js'
+import { pptxExecutionInputError, preparePptxRepairToolInput, withNativePptxPreflightReceipt } from './pptxRepairRuntime.js'
 import {
   createCallSideEffectBoundary,
   createDynamicRegistrationGuard,
@@ -6,29 +10,8 @@ import {
   createToolAuditLifecycle,
   executeAuthorizedTool,
   finalizeToolCallOutcome,
+  truncatedToolOutcome,
 } from './runtime-toolCallExecution.js'
-
-function truncatedToolOutcome(s, call) {
-  const { name, args } = call
-  const result = s.d.createTruncatedToolCallResult(call, {
-    reason: call.modelOutputTruncationReason,
-  })
-  const { auditStage, auditOutcomeStatus } = createToolAuditLifecycle({
-    state: s, call, toolName: name, args, writeToolAudit: s.d.writeToolAudit,
-  })
-  auditStage('proposed')
-  auditStage('filtered', { auditResult: result, status: auditOutcomeStatus(result) })
-  return {
-    call,
-    executionArgs: args,
-    result,
-    artifactId: null,
-    artifactIds: [],
-    clarification: null,
-    budgetExceeded: null,
-    noProgressReason: null,
-  }
-}
 
 async function prepareToolCallExecution(s, call) {
   if (s.signal?.aborted) {
@@ -36,7 +19,10 @@ async function prepareToolCallExecution(s, call) {
     error.name = 'AbortError'
     throw error
   }
-  const preparedCall = await s.d.runPreTool({
+  const inputResolutionError = call.parseError || (s.explicitToolFree ? null : preparePptxRepairToolInput(s, call))
+  const automaticVerification = Boolean(call.verificationRecoveryKey)
+  const verificationIntentError = captureMutationVerificationIntent(call, s)
+  const preparedCall = inputResolutionError || s.explicitToolFree ? call : await s.d.runPreTool({
     loopEvents: s.activeLoopEvents,
     call,
     context: s.loopEventContext({ phase: 'pre-tool' }),
@@ -56,6 +42,8 @@ async function prepareToolCallExecution(s, call) {
     getToolMetadata: s.d.getToolMetadata,
     matchesDynamicToolRegistration: s.d.matchesDynamicToolRegistration,
   })
+  const validateRegistrationAndIntent = (validationArgs = args) => verificationIntentError(call.name, validationArgs)
+    || dynamicGuard.validate(validationArgs)
   const checkpointExecutionArgs = call.checkpointExecutionArgs ?? args
   const sideEffectExecution = createCallSideEffectBoundary({
     state: s,
@@ -85,25 +73,28 @@ async function prepareToolCallExecution(s, call) {
     executionArgsUsed: args,
     auditTerminalStage: null,
     toolExecutionAttempted: false,
-    result: recovery.result,
+    result: inputResolutionError || recovery.result,
     outcomeBudgetExceeded: null,
     outcomeNoProgressReason: null,
     clarification: null,
     artifactId: null,
     artifactIds: [],
     expectedDynamicRegistrationId: dynamicGuard.expectedRegistrationId,
-    dynamicRegistrationValidationError: dynamicGuard.validate,
+    dynamicRegistrationValidationError: validateRegistrationAndIntent,
+    verificationIntentError: (validationArgs = args) => verificationIntentError(call.name, validationArgs),
+    automaticVerification,
     checkpointExecutionArgs,
     sideEffectExecution,
     idempotentResume,
     resumedPreparedSideEffect: recovery.resumedPrepared,
     resumedExecutingSideEffect: recovery.resumedExecuting || false,
-    isFree: ['reflect', 'request_clarification', 'request_directory', 'sleep_until', 'set_deliverables']
+    isFree: ['load_skill', 'reflect', 'request_clarification', 'request_directory', 'sleep_until', 'set_deliverables']
       .includes(name),
     audit,
   }
+  if (s.explicitToolFree && !recovery.result) context.result = toolFreeResponseError(s, context)
   if (!context.result) {
-    context.result = dynamicGuard.validate(checkpointExecutionArgs)
+    context.result = validateRegistrationAndIntent(checkpointExecutionArgs)
       || s.disabledToolValidationError(name)
       || (call.checkpointStatus === 'executing'
         ? s.explicitReadOnlyValidationError(name, checkpointExecutionArgs)
@@ -184,9 +175,9 @@ function applyToolExecutionGuards(s, context) {
     context.result = {
       ok: false,
       code: 'artifact_tool_not_requested',
-      error: `用户没有要求生成 ${name} 这类文件产物,该工具在本次任务中不可用。`,
+      error: localize(s, `用户没有要求生成 ${name} 这类文件产物，该工具在本次任务中不可用。`, `The user did not request generating ${name} artifacts, so this tool is unavailable in this task.`),
       retryable: false,
-      hint: '直接完成用户真正要求的工作(如修改代码、给出结论),并用文字说明结果;不要用文件代替交付。',
+      hint: localize(s, '直接完成用户真正要求的工作（如修改代码、给出结论），并用文字说明结果；不要用文件代替交付。', 'Complete the work the user actually asked for (such as modifying code or giving a conclusion) and explain the result in text; do not substitute a file for the deliverable.'),
     }
   }
   if (!context.result) {
@@ -195,7 +186,9 @@ function applyToolExecutionGuards(s, context) {
   }
   if (!context.result) refreshDynamicExecutionTools(s, context)
   if (!context.result) {
-    context.result = s.d.validateToolCall(call, s.activeToolSpecs, {
+    // Scope/intent denial and original JSON errors take precedence over the
+    // specialized authoring schema. Full PPT validation still precedes approval.
+    context.result = pptxExecutionInputError(name, args, s.locale) || s.d.validateToolCall(call, s.activeToolSpecs, {
       allowUnknown: s.executeTool !== s.d.executeServerTool,
     })
   }
@@ -204,9 +197,9 @@ function applyToolExecutionGuards(s, context) {
     context.result = {
       ok: false,
       code: 'directory_authorization_already_resolved',
-      error: 'The requested local directory authorization is already persisted and verified for this turn.',
+      error: localize(s, '本次任务请求的本地目录授权已持久化并验证通过。', 'The requested local directory authorization is already persisted and verified for this turn.'),
       retryable: false,
-      hint: 'Do not request the directory again. Continue the original task now using the exact authorized path and access mode from the TURN_RESOLUTION system message.',
+      hint: localize(s, '请勿再次请求该目录。请使用 TURN_RESOLUTION 系统消息中给出的精确授权路径和访问模式继续当前任务。', 'Do not request the directory again. Continue the original task now using the exact authorized path and access mode from the TURN_RESOLUTION system message.'),
     }
   }
   if (!context.result && name === 'request_clarification') {
@@ -235,13 +228,14 @@ async function resolveResumedAuthorization(s, context, authorization) {
       signal: s.signal,
       requireTerminal: true,
       expectedApprovalContext: authorization.expectedApprovalContext(),
+      locale: s.locale,
     })
     if (gate.proceed) {
       const approvedArgs = gate.args ?? effectiveArgs
       if (JSON.stringify(approvedArgs) !== JSON.stringify(effectiveArgs)) {
         gate = {
           proceed: false,
-          reason: '审批参数与执行快照不一致，已保守拒绝恢复执行',
+          reason: localize(s, '审批参数与执行快照不一致，已保守拒绝恢复执行。', 'Approval arguments do not match the execution snapshot; resumption was conservatively rejected.'),
           code: 'approval_context_mismatch',
           approvalContextMismatch: true,
           retryable: false,
@@ -265,6 +259,7 @@ async function resolveResumedAuthorization(s, context, authorization) {
       toolName: name,
       args: effectiveArgs,
       requireLive: false,
+      locale: s.locale,
     })
     if (!hook.proceed) gate = hook
     else {
@@ -276,6 +271,7 @@ async function resolveResumedAuthorization(s, context, authorization) {
         taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
         expectedPolicyProvenance: authorization.checkpointPolicyProvenance,
         allowAsk: !s.d.requiresPerCallApproval(name),
+        locale: s.locale,
       })
       gate = policy.proceed
         ? { ...policy, hookAuthorized: true, hookAuthorizationProvenance: hook.hookAuthorizationProvenance }
@@ -290,6 +286,7 @@ async function resolveResumedAuthorization(s, context, authorization) {
       taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
       expectedPolicyProvenance: authorization.checkpointPolicyProvenance,
       allowAsk: false,
+      locale: s.locale,
     })
   }
   return {
@@ -310,6 +307,7 @@ async function resolveFreshAuthorization(s, i, context, authorization) {
       approvalId: call.checkpointApprovalId,
       signal: s.signal,
       expectedApprovalContext: authorization.expectedApprovalContext(),
+      locale: s.locale,
     })
     effectiveArgs = gate.args ?? effectiveArgs
     return { effectiveArgs, gate }
@@ -321,7 +319,9 @@ async function resolveFreshAuthorization(s, i, context, authorization) {
         ok: false, denied: true, code: 'hook_denied',
         error: preHook.reason || `pre_tool_use hook denied ${name}`, retryable: false,
       }
-    } else if (preHook?.replacementArgs && typeof preHook.replacementArgs === 'object') {
+    } else if (name !== 'create_pptx' && preHook?.replacementArgs && typeof preHook.replacementArgs === 'object') {
+      // PPT uses the final pre-tool waterfall args; reapplying an earlier
+      // hook result could restore a stale repair or stale authorization input.
       effectiveArgs = preHook.replacementArgs
     }
     if (preHook?.permissionDecision === 'allow') {
@@ -349,6 +349,7 @@ async function resolveFreshAuthorization(s, i, context, authorization) {
             toolName: name,
             args: effectiveArgs,
             taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
+            locale: s.locale,
           })
         : await s.requestToolApproval({
             userId: s.job.userId,
@@ -359,13 +360,14 @@ async function resolveFreshAuthorization(s, i, context, authorization) {
             toolName: name,
             args: effectiveArgs,
             signal: s.signal,
-            mode: s.approvalMode,
+            mode: ['off', 'unattended', 'all'].includes(s.approvalMode) ? s.approvalMode : undefined,
             forceApproval: hookRequiresApproval,
             forceApprovalReason: hookApprovalReason,
             hookAuthorizationProvenance,
             requestId: s.step?.id || null,
             toolCallId: call.id,
             taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
+            locale: s.locale,
             onPending: async (approval) => {
               context.audit.auditStage('approval_requested', { auditArgs: approval.args ?? effectiveArgs })
               await i.markCall(call, {
@@ -400,6 +402,7 @@ function revalidateAuthorization(s, context, authorization, effectiveArgs, gate)
       toolName: context.name,
       args: gate.args ?? effectiveArgs,
       requireLive: true,
+      locale: s.locale,
     })
     if (!hook.proceed) return { ...hook, policyProvenance: gate.policyProvenance }
     verifiedHookAuthorization = true
@@ -413,6 +416,7 @@ function revalidateAuthorization(s, context, authorization, effectiveArgs, gate)
     expectedPolicyProvenance: Object.hasOwn(gate, 'policyProvenance') ? gate.policyProvenance : null,
     allowAsk: Boolean(gate.approvalId
       || (verifiedHookAuthorization && !s.d.requiresPerCallApproval(context.name))),
+    locale: s.locale,
   })
   return policy.proceed
     ? { ...gate, authorization: gate.authorization || policy.authorization || null,
@@ -421,6 +425,14 @@ function revalidateAuthorization(s, context, authorization, effectiveArgs, gate)
 }
 
 async function authorizeAndExecuteTool(s, i, context, durableExecution) {
+  // Ledger recovery ran before this point. Never replace its completed or
+  // unknown outcome with a new plan decision.
+  const planBlock = !context.resumedExecutingSideEffect
+    ? s.goalExecutionValidationError?.(context.name, context.args) : null
+  if (planBlock) {
+    context.result = planBlock
+    return
+  }
   const authorization = createToolAuthorizationContext({
     state: s,
     call: context.call,
@@ -435,7 +447,7 @@ async function authorizeAndExecuteTool(s, i, context, durableExecution) {
   if (context.result) return
   gate = revalidateAuthorization(s, context, authorization, effectiveArgs, gate)
   if (gate && !gate.proceed) {
-    context.result = s.d.formatDeniedToolResult(gate)
+    context.result = s.d.formatDeniedToolResult(gate, s.locale)
     context.auditTerminalStage = 'denied'
     context.audit.auditStage('denied', {
       auditArgs: gate.args ?? effectiveArgs,
@@ -455,6 +467,7 @@ async function authorizeAndExecuteTool(s, i, context, durableExecution) {
         : null,
     })
     const finalValidationError = context.dynamicRegistrationValidationError(executionArgs)
+      || pptxExecutionInputError(context.name, executionArgs, s.locale)
       || s.redundantImageGenerationGuard(context.name)
       || s.d.validateToolCall(
         { ...context.call, args: executionArgs },
@@ -478,8 +491,10 @@ async function authorizeAndExecuteTool(s, i, context, durableExecution) {
         resumedExecutingSideEffect: context.resumedExecutingSideEffect,
         sideEffectExecution: context.sideEffectExecution,
         expectedDynamicRegistrationId: context.expectedDynamicRegistrationId,
-        finalAuthorizationCheck: gate.hookAuthorized
-          ? () => s.d.revalidateHookAuthorization({
+        finalAuthorizationCheck: context.automaticVerification || gate.hookAuthorized ? () => {
+          const violation = context.verificationIntentError(executionArgs)
+          if (violation) return { proceed: false, code: violation.code, reason: violation.error }
+          return gate.hookAuthorized ? s.d.revalidateHookAuthorization({
               provenance: gate.hookAuthorizationProvenance,
               userId: s.job?.userId || null,
               origin: s.approvalOrigin,
@@ -491,8 +506,10 @@ async function authorizeAndExecuteTool(s, i, context, durableExecution) {
               toolName: context.name,
               args: executionArgs,
               requireLive: true,
-            })
-          : null,
+              locale: s.locale,
+            }) : { proceed: true }
+        } : null,
+        finalVerificationCheck: context.automaticVerification ? () => context.verificationIntentError(executionArgs) : null,
         dependencies: {
           CHECKPOINT_FLUSH_ERROR_CODE: s.d.CHECKPOINT_FLUSH_ERROR_CODE,
           createToolAbortScope: s.d.createToolAbortScope,
@@ -528,7 +545,7 @@ async function executeOneToolCall(s, call, { durableExecution = true } = {}) {
     } catch (error) {
       if (s.signal?.aborted || error?.name === 'AbortError') throw error
       if (error?.code === s.d.CHECKPOINT_FLUSH_ERROR_CODE || error?.unsafeToReplay === true) throw error
-      context.result = s.d.normalizeToolError(error)
+      context.result = withNativePptxPreflightReceipt(error, s.d.normalizeToolError(error))
     }
   }
   return finalizeToolCallOutcome({
@@ -555,6 +572,10 @@ export async function executeToolCalls(s) {
   assertRuntimeStage(s, 'execute-tool-calls')
   const i = s.iteration
   i.pausedByClarification = null
+  i.goalPlanBlocked = i.toolCalls.find((call) => call.checkpointStatus === 'completed'
+    && call.checkpointResult?.goalPlanBlocked === true)?.checkpointResult || null
+  i.toolStop = i.toolCalls.filter((call) => call.checkpointStatus === 'completed')
+    .map((call) => toolStopBoundary(call.checkpointResult, call.id)).find(Boolean) || null
   i.budgetExceededByCompletedModelResponse = s.modelBudgetExceededAfterResponse
   s.modelBudgetExceededAfterResponse = null
   i.budgetExceeded = i.budgetExceededByCompletedModelResponse

@@ -3,6 +3,7 @@ import { EventWriteBehindError, findTurnEventFenceError } from './eventWriteBehi
 import { publishCommittedAgentEvent } from '../core/agentEventConsumerRuntime.js'
 import { logWarn } from '../utils/logger.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { modelProviderStopDiagnostic } from '../../shared/modelProviderStopDiagnostic.js'
 
 export const TURN_EVENT_PERSISTENCE_FAILURE_CODE = 'TURN_EVENT_PERSISTENCE_FAILED'
 export const TURN_TERMINAL_PERSISTENCE_FAILURE_CODE = 'TURN_TERMINAL_PERSISTENCE_FAILED'
@@ -50,6 +51,8 @@ function withoutLegacyPresentationFields(value) {
   delete stable.message
   delete stable.hint
   delete stable.reason
+  const providerDiagnostic = modelProviderStopDiagnostic(value)
+  if (providerDiagnostic) stable.reason = providerDiagnostic
   return stable
 }
 

@@ -147,6 +147,13 @@ export function createIntegrationLifecycleDefinitions({
       stop: () => adapters.shutdownBrowsers(),
       errorLabel: 'browser shutdown',
     }),
+    // The preview servers are this process's children: quitting the backend has to
+    // take them with it, or the next start finds its own port still held.
+    definition(ids.preview, ids.browser, {
+      stop: () => adapters.stopAllPreviewServers(),
+      stopTimeoutMs: 15_000,
+      errorLabel: 'preview shutdown',
+    }),
     definition(ids.shellTrust, ids.browser, {
       start: () => adapters.warnShellTrust(),
       errorLabel: 'shell trust warning',

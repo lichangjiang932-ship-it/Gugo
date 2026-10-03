@@ -401,7 +401,7 @@ test('execution reasoning runaway stops without an automatic model retry and per
   assert.equal(checkpoint?.final?.text, result.text)
 })
 
-test('disabled tools remain model-visible but fail closed at the unified execution gate', async () => {
+test('disabled tools remain model-visible but each explicit turn stops at the unified execution gate', async () => {
   const disabledNames = ['run_command', 'git_push', 'file_download']
   const specs = disabledNames.map((name) => (
     SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
@@ -411,9 +411,17 @@ test('disabled tools remain model-visible but fail closed at the unified executi
   const completed = []
   let executions = 0
   let modelCalls = 0
-  const result = await runToolsLoop({
+  const proposals = [
+    { id: 'disabled-command', type: 'function', function: { name: 'run_command', arguments: '{"command":"echo blocked"}' } },
+    { id: 'disabled-push', type: 'function', function: { name: 'git_push', arguments: '{}' } },
+    { id: 'disabled-download', type: 'function', function: { name: 'file_download',
+      arguments: JSON.stringify({ url: 'https://example.com/file.txt', path: 'file.txt' }) } },
+  ]
+  for (const proposal of proposals) {
+    let turnModelCalls = 0
+    const result = await runToolsLoop({
     job: {
-      id: 'job-disabled-tools-visible',
+      id: `job-disabled-tools-visible-${proposal.id}`,
       userId: null,
       origin: 'chat',
       prompt: 'Report the current configured tool catalog.',
@@ -428,53 +436,29 @@ test('disabled tools remain model-visible but fail closed at the unified executi
     onToolCompleted: async (outcome) => {
       completed.push({ name: outcome.call.name, result: structuredClone(outcome.result) })
     },
-    runModel: async ({ messages, tools }) => {
+    runModel: async ({ tools }) => {
       modelCalls += 1
+      turnModelCalls += 1
+      assert.ok(turnModelCalls <= 2, 'a second refused round ends the turn')
       for (const name of disabledNames) {
         assert.ok(tools.some((item) => item?.function?.name === name), name)
       }
-      if (modelCalls === 1) {
-        return {
-          content: '',
-          toolCalls: [
-            {
-              id: 'disabled-command',
-              type: 'function',
-              function: { name: 'run_command', arguments: JSON.stringify({ command: 'echo blocked' }) },
-            },
-            {
-              id: 'disabled-push',
-              type: 'function',
-              function: { name: 'git_push', arguments: '{}' },
-            },
-            {
-              id: 'disabled-download',
-              type: 'function',
-              function: {
-                name: 'file_download',
-                arguments: JSON.stringify({ url: 'https://example.com/file.txt', path: 'file.txt' }),
-              },
-            },
-          ],
-        }
-      }
-      const disabledResults = messages.filter((message) => (
-        message.role === 'tool' && String(message.content || '').includes('tool_disabled_by_config')
-      ))
-      assert.equal(disabledResults.length, disabledNames.length)
-      return { content: 'The configured tools are visible but disabled for execution.', toolCalls: [] }
+      return { content: '', toolCalls: [proposal] }
     },
     executeTool: async () => {
       executions += 1
       return { ok: true }
     },
-  })
-
+    })
+    assert.equal(result.code, 'tool_disabled_by_config')
+    assert.equal(result.incomplete, true)
+  }
   assert.equal(executions, 0)
-  assert.equal(modelCalls, 2)
-  assert.deepEqual(completed.map((entry) => entry.name).sort(), [...disabledNames].sort())
+  // Each turn: the refusal goes back to the model once, then the repeated
+  // proposal is refused again and the turn stops on the configuration.
+  assert.equal(modelCalls, disabledNames.length * 2)
+  assert.deepEqual([...new Set(completed.map((entry) => entry.name))].sort(), [...disabledNames].sort())
   assert.equal(completed.every((entry) => entry.result?.code === 'tool_disabled_by_config'), true)
-  assert.equal(result.text, 'The configured tools are visible but disabled for execution.')
 })
 
 test('default client config keeps bash_exec available through a read-only local PDF execution turn', async () => {
@@ -1310,7 +1294,9 @@ test('artifact delivery rejects a fake missing-capability clarification and cont
             type: 'function',
             function: {
               name: 'create_pptx',
-              arguments: JSON.stringify({ title: 'Q3 strategy', slides: [{ title: 'Priorities' }] }),
+              arguments: JSON.stringify({ title: 'Q3 strategy', slides: [{ title: 'Priorities', elements: [
+                { type: 'text', text: 'Priorities', x: 0.08, y: 0.15, w: 0.84, h: 0.3 },
+              ] }] }),
             },
           }],
         }
@@ -1463,7 +1449,7 @@ test('refreshed terse chat keeps the same local write catalog on every model rou
     specs: SERVER_TOOL_SPECS,
     prompt,
     userPrompt: prompt,
-    previousUserPrompt: '请说明上一轮的处理结果。',
+    previousUserPrompt: '请修复这个项目并验证结果。',
   })
   const catalogs = []
   let modelCalls = 0
@@ -1478,7 +1464,7 @@ test('refreshed terse chat keeps the same local write catalog on every model rou
     },
     step: { id: 'step-refreshed-terse-local-catalog', kind: 'chat' },
     messages: [
-      { role: 'user', content: '请说明上一轮的处理结果。' },
+      { role: 'user', content: '请修复这个项目并验证结果。' },
       { role: 'assistant', content: '上一轮回答。' },
       { role: 'user', content: prompt },
     ],
@@ -1509,10 +1495,12 @@ test('refreshed terse chat keeps the same local write catalog on every model rou
   assert.equal(modelCalls, 3)
   assert.deepEqual(catalogs[1], catalogs[0])
   assert.deepEqual(catalogs[2], catalogs[0])
-  for (const name of ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command', 'run_project_check', 'run_test']) {
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_command', 'run_project_check', 'search_tools']) {
     assert.ok(catalogs[0].includes(name), name)
   }
-  assert.equal(catalogs[0].includes('slack_send_message'), true)
+  assert.equal(catalogs[0].includes('patch_file'), false)
+  assert.equal(catalogs[0].includes('run_test'), false)
+  assert.equal(catalogs[0].includes('slack_send_message'), false)
   assert.equal(result.text, '已检查当前状态。')
 })
 
@@ -2153,12 +2141,13 @@ test('a capability challenge after an explicit read-only turn sees write tools b
           }],
         }
       }
-      const toolResult = messages.find((item) => (
-        item.role === 'tool' && item.tool_call_id === 'forbidden-read-only-write'
-      ))
-      assert.match(String(toolResult?.content || ''), /explicit_read_only_constraint/)
-      assert.match(String(toolResult?.content || ''), /不是缺少写入或执行工具/)
-      return { content: '上一轮要求只分析，因此没有执行文件修改。', toolCalls: [] }
+      // Claude Code behaviour: the refusal is a tool result the model reads; it
+      // answers instead of writing. The refused call itself never runs.
+      return { content: '只读检查完成，未修改任何文件。', toolCalls: [] }
+    },
+    onToolCompleted: async ({ result }) => {
+      assert.equal(result.code, 'explicit_read_only_constraint')
+      assert.match(result.error, /不是缺少写入或执行工具/)
     },
     executeTool: async ({ name }) => {
       executed.push(name)
@@ -2166,10 +2155,9 @@ test('a capability challenge after an explicit read-only turn sees write tools b
     },
   })
 
-  assert.equal(result.text, '上一轮要求只分析，因此没有执行文件修改。')
-  assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, [])
   assert.equal(modelCalls, 2)
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('a current-turn explicit read-only constraint blocks mutating calls before execution', async () => {
@@ -2196,7 +2184,7 @@ test('a current-turn explicit read-only constraint blocks mutating calls before 
     approvalMode: 'bypass',
     maxIters: 3,
     enableToolHooks: false,
-    runModel: async ({ messages }) => {
+    runModel: async () => {
       modelCalls += 1
       if (modelCalls === 1) {
         return {
@@ -2211,12 +2199,12 @@ test('a current-turn explicit read-only constraint blocks mutating calls before 
           }],
         }
       }
-      const denied = messages.find((message) => (
-        message.role === 'tool' && message.tool_call_id === 'read-only-write-attempt'
-      ))
-      assert.match(String(denied?.content || ''), /explicit_read_only_constraint/)
-      assert.match(String(denied?.content || ''), /不是缺少写入或执行工具/)
-      return { content: '已完成只读检查，没有修改文件。', toolCalls: [] }
+      // The refusal goes back to the model, which answers without writing.
+      return { content: '只读检查完成，未修改任何文件。', toolCalls: [] }
+    },
+    onToolCompleted: async ({ result }) => {
+      assert.equal(result.code, 'explicit_read_only_constraint')
+      assert.match(result.error, /不是缺少写入或执行工具/)
     },
     executeTool: async ({ name }) => {
       executed.push(name)
@@ -2224,9 +2212,9 @@ test('a current-turn explicit read-only constraint blocks mutating calls before 
     },
   })
 
-  assert.equal(result.text, '已完成只读检查，没有修改文件。')
   assert.deepEqual(executed, [])
   assert.equal(modelCalls, 2)
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('an explicit read-only constraint revalidates approval-edited arguments', async () => {
@@ -2259,7 +2247,7 @@ test('an explicit read-only constraint revalidates approval-edited arguments', a
         approvalId: 'read-only-edited-approval',
       }
     },
-    runModel: async ({ messages }) => {
+    runModel: async () => {
       modelCalls += 1
       if (modelCalls === 1) {
         return {
@@ -2271,11 +2259,12 @@ test('an explicit read-only constraint revalidates approval-edited arguments', a
           }],
         }
       }
-      const denied = messages.find((message) => (
-        message.role === 'tool' && message.tool_call_id === 'read-only-approval-edit'
-      ))
-      assert.match(String(denied?.content || ''), /explicit_read_only_constraint/)
-      return { content: '只读检查结束，没有执行改写后的命令。', toolCalls: [] }
+      // The approval-edited mutating command is refused and never runs; the
+      // model reads that and answers.
+      return { content: '只读检查完成，未修改任何文件。', toolCalls: [] }
+    },
+    onToolCompleted: async ({ result }) => {
+      assert.equal(result.code, 'explicit_read_only_constraint')
     },
     executeTool: async () => {
       executeCalls += 1
@@ -2283,9 +2272,10 @@ test('an explicit read-only constraint revalidates approval-edited arguments', a
     },
   })
 
-  assert.equal(result.text, '只读检查结束，没有执行改写后的命令。')
+  assert.equal(modelCalls, 2)
   assert.equal(approvalCalls, 1)
-  assert.equal(executeCalls, 0)
+  assert.equal(executeCalls, 0, 'the approval-edited mutating command never ran')
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('an executing checkpoint cannot resume with mutating args under a current read-only constraint', async () => {
@@ -2338,12 +2328,11 @@ test('an executing checkpoint cannot resume with mutating args under a current r
       checkpoint = structuredClone(state)
       return true
     },
-    runModel: async ({ messages }) => {
-      const denied = messages.find((message) => (
-        message.role === 'tool' && message.tool_call_id === callId
-      ))
-      assert.match(String(denied?.content || ''), /explicit_read_only_constraint/)
-      return { content: '恢复后仍保持只读，没有执行写入命令。', toolCalls: [] }
+    // The resumed mutating args are refused, never replayed; the model then
+    // reads the refusal and answers.
+    runModel: async () => ({ content: '只读检查完成，未修改任何文件。', toolCalls: [] }),
+    onToolCompleted: async ({ result }) => {
+      assert.equal(result.code, 'explicit_read_only_constraint')
     },
     executeTool: async () => {
       executeCalls += 1
@@ -2351,8 +2340,8 @@ test('an executing checkpoint cannot resume with mutating args under a current r
     },
   })
 
-  assert.equal(result.text, '恢复后仍保持只读，没有执行写入命令。')
   assert.equal(executeCalls, 0)
+  assert.equal(result.text, '只读检查完成，未修改任何文件。')
 })
 
 test('bypass recovery never remounts a tool excluded from the current turn enabled catalog', async () => {
@@ -2481,7 +2470,8 @@ test('a continuation turn remounts execution tools, preserves the canonical file
     onApprovalPending: async () => assert.fail('bypass mode must not enter approval pending'),
     requestToolApproval: async (request) => {
       approvalRequests.push(request)
-      assert.equal(request.mode, 'bypass')
+      // Permission modes no longer occupy the deployment approval-queue field.
+      assert.equal(request.mode, undefined)
       return {
         proceed: true,
         args: request.args,
@@ -2828,9 +2818,9 @@ test('a verification-only continuation ignores injected mutation wording and com
 test('explicit execute mode cannot claim completion when no substantive tool is available', async () => {
   let modelCalls = 0
   const result = await runToolsLoop({
-    job: { id: 'job-explicit-execute-no-tools', userId: null, origin: 'chat', prompt: 'Explain the current state.' },
+    job: { id: 'job-explicit-execute-no-tools', userId: null, origin: 'chat', prompt: 'Inspect the current workspace files.' },
     step: { id: 'step-explicit-execute-no-tools', kind: 'chat' },
-    messages: [{ role: 'user', content: 'Explain the current state.' }],
+    messages: [{ role: 'user', content: 'Inspect the current workspace files.' }],
     intentMode: 'execute',
     toolSpecs: [],
     maxIters: 1,
@@ -3031,6 +3021,7 @@ test('shell writes stay pending until the matching target is read back', async (
   const observedRequests = []
   const executed = []
   let modelCalls = 0
+  let checkpoint = null
   const result = await runToolsLoop({
     job: {
       id: 'job-shell-target-verification',
@@ -3043,6 +3034,7 @@ test('shell writes stay pending until the matching target is read back', async (
     toolSpecs: [bashExec, readFile],
     maxIters: 8,
     enableToolHooks: false,
+    saveCheckpoint: async (state) => { checkpoint = structuredClone(state); return true },
     runModel: async ({ messages }) => {
       modelCalls += 1
       observedRequests.push(structuredClone(messages))
@@ -3056,10 +3048,11 @@ test('shell writes stay pending until the matching target is read back', async (
           }],
         }
       }
-      if (modelCalls === 2 || modelCalls === 4) {
+      if (modelCalls === 3) {
+        assert.deepEqual(checkpoint.completionGuards.pendingMutationTargets, ['result.txt'], 'an unrelated read must not verify the output')
         return { content: 'The file has been created.', toolCalls: [] }
       }
-      if (modelCalls === 3) {
+      if (modelCalls === 2) {
         return {
           content: '',
           toolCalls: [{
@@ -3069,16 +3062,7 @@ test('shell writes stay pending until the matching target is read back', async (
           }],
         }
       }
-      if (modelCalls === 5) {
-        return {
-          content: '',
-          toolCalls: [{
-            id: 'read-right-target',
-            type: 'function',
-            function: { name: 'read_file', arguments: JSON.stringify({ path: 'result.txt' }) },
-          }],
-        }
-      }
+      assert.deepEqual(checkpoint.completionGuards.pendingMutationTargets, [], 'host readback must finish before the final answer')
       return { content: 'Created and verified result.txt.', toolCalls: [] }
     },
     executeTool: async ({ name, args }) => {
@@ -3099,10 +3083,9 @@ test('shell writes stay pending until the matching target is read back', async (
     'read_file:README.md',
     'read_file:result.txt',
   ])
-  const firstGuard = observedRequests[2].filter((item) => item.role === 'system').map((item) => item.content).join('\n')
-  const secondGuard = observedRequests[4].filter((item) => item.role === 'system').map((item) => item.content).join('\n')
-  assert.match(firstGuard, /Pending changed targets: result\.txt/)
-  assert.match(secondGuard, /Pending changed targets: result\.txt/)
+  const guard = observedRequests[3].filter((item) => item.role === 'system').map((item) => item.content).join('\n')
+  assert.match(guard, /HOST POST-MUTATION READBACK/)
+  assert.match(guard, /result\.txt/)
 })
 
 test('a compound generation and project-check command remains a pending mutation', async () => {
@@ -3295,6 +3278,53 @@ test('Windows cmd verification classification stays conservative for dynamic or 
   }
 })
 
+test('PDF layout marker preserves unrelated same-turn mutation debt', async () => {
+  const directory = 'D:\\workspace\\pdf-debt'
+  const pdfPath = `${directory}\\answer.pdf`
+  const notesPath = `${directory}\\notes.txt`
+  const prompt = `Fill the supplied PDF, save ${pdfPath}, and write ${notesPath}. Verify the layout.`
+  const calls = [
+    { name: 'bash_exec', args: { command: 'python fill_pdf.py', cwd: directory,
+      expected_outputs: [pdfPath, notesPath] } },
+    { name: 'bash_exec', args: { command: 'python verify_pdf_layout.py', cwd: directory } },
+  ]
+  let checkpoint
+  let modelCalls = 0
+  const snapshots = []
+  const executed = []
+  const result = await runToolsLoop({
+    job: { id: 'pdf-unrelated-debt-turn', userId: TEST_USER_ID, origin: 'chat', prompt },
+    step: { id: 'pdf-unrelated-debt-step', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS.filter((spec) => spec.function.name === 'bash_exec'),
+    maxIters: 5,
+    enableToolHooks: false,
+    saveCheckpoint: async (state) => { checkpoint = structuredClone(state); return true },
+    runModel: async () => {
+      const call = calls[modelCalls++]
+      snapshots.push(structuredClone(checkpoint?.completionGuards || {}))
+      return call ? { content: '', toolCalls: [{ id: `pdf-debt-${modelCalls}`, type: 'function',
+        function: { name: call.name, arguments: JSON.stringify(call.args) } }] }
+        : { content: 'Generated the files.', toolCalls: [] }
+    },
+    executeTool: async ({ args }) => {
+      executed.push(args.command)
+      return args.expected_outputs?.length > 0
+        ? { ok: true, exitCode: 0, cwd: directory, changedPaths: [pdfPath, notesPath] }
+        : { ok: true, exitCode: 0, cwd: directory, stdout: 'PDF_LAYOUT_VERIFICATION_OK\n' }
+    },
+  })
+  assert.deepEqual(executed, calls.map((call) => call.args.command))
+  const notesTarget = notesPath.replaceAll('\\', '/')
+  assert.ok(snapshots[1].pendingMutationTargets.includes(notesTarget), JSON.stringify(snapshots[1]))
+  assert.equal(snapshots[2].pdfLayoutVerificationObserved, true)
+  assert.ok(snapshots[2].pendingMutationTargets.includes(notesTarget),
+    'the PDF marker must not discharge notes.txt verification debt')
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'post_mutation_verification_missing')
+})
+
 test('PDF layout completion accepts only controlled validator commands and result lines', () => {
   const comprehensive = {
     name: 'bash_exec',
@@ -3352,7 +3382,8 @@ test('comprehensive PDF verification followed by bare dir remains complete', asy
       content: `Fill the supplied PDF, save ${pdfPath} and ${pngPath}, and verify the layout.`,
     }],
     intentMode: 'execute',
-    toolSpecs: [bashExec, runCommand, writeFile],
+    toolSpecs: [bashExec, runCommand, writeFile,
+      SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'list_directory')],
     maxIters: 8,
     enableToolHooks: false,
     saveCheckpoint: async (state) => {
@@ -3423,6 +3454,13 @@ test('comprehensive PDF verification followed by bare dir remains complete', asy
           },
         }],
       }
+      // A bare shell listing and a layout marker are not path-bound receipts.
+      // Read a complete directory listing before claiming every write verified.
+      if (modelCalls === 6) return {
+        content: '',
+        toolCalls: [{ id: 'read-complete-pdf-directory', type: 'function',
+          function: { name: 'list_directory', arguments: JSON.stringify({ path: directory }) } }],
+      }
       return {
         content: 'The PDF and PNG passed comprehensive layout verification.',
         toolCalls: [],
@@ -3442,6 +3480,11 @@ test('comprehensive PDF verification followed by bare dir remains complete', asy
           changedPaths: [pdfPath, pngPath],
         }
       }
+      if (name === 'list_directory') {
+        return { ok: true, path: directory, total: 3, truncated: false,
+          entries: ['filled-answer.pdf', 'filled-answer.png', 'verify_comprehensive.py']
+            .map((name) => ({ name, type: 'file' })) }
+      }
       if (args.command.includes('verify_pdf_layout.py')) {
         return { ok: true, exitCode: 0, cwd: directory, stdout: 'PDF_LAYOUT_VERIFICATION_OK\n' }
       }
@@ -3459,13 +3502,14 @@ test('comprehensive PDF verification followed by bare dir remains complete', asy
 
   assert.equal(result.incomplete, undefined, JSON.stringify(result))
   assert.equal(result.text, 'The PDF and PNG passed comprehensive layout verification.')
-  assert.equal(modelCalls, 6)
+  assert.equal(modelCalls, 7)
   assert.deepEqual(executed, [
     'python fill_pdf.py',
     'python verify_pdf_layout.py',
     `write_file:${validatorPath}`,
     'python verify_comprehensive.py',
     `dir "${directory}"`,
+    `list_directory:${directory}`,
   ])
   assert.equal(checkpoint?.completionGuards?.pdfLayoutVerificationObserved, true)
   assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
@@ -3950,16 +3994,6 @@ test('local file mutations require a successful verification before completion',
         }
       }
       if (modelCalls === 2) return { content: '文件已经创建完成。', toolCalls: [] }
-      if (modelCalls === 3) {
-        return {
-          content: '',
-          toolCalls: [{
-            id: 'verify-result',
-            type: 'function',
-            function: { name: 'read_file', arguments: JSON.stringify({ path: 'result.txt' }) },
-          }],
-        }
-      }
       return { content: '文件已创建并读回验证。', toolCalls: [] }
     },
     executeTool: async ({ name }) => {
@@ -3971,14 +4005,14 @@ test('local file mutations require a successful verification before completion',
   })
 
   assert.deepEqual(executed, ['write_file', 'read_file'])
-  assert.equal(modelCalls, 4)
+  assert.equal(modelCalls, 3)
   assert.equal(result.text, '文件已创建并读回验证。')
   const correction = observedRequests[2]
     .filter((item) => item.role === 'system')
     .map((item) => item.content)
     .join('\n')
   assert.match(correction, /\[POST-MUTATION VERIFICATION REQUIRED\]/)
-  const finalReview = observedRequests[3]
+  const finalReview = observedRequests[2]
     .filter((item) => item.role === 'system')
     .map((item) => item.content)
     .join('\n')
@@ -4136,7 +4170,7 @@ test('a successful parallel read clears failures from earlier candidates', async
   assert.equal(modelCalls, 2)
 })
 
-test('parallel screenshot batches reuse both images for context retry without persisting either', async (t) => {
+test('parallel screenshot batches reuse both images and never persist them when the retry repeats', async (t) => {
   const screenshot = {
     type: 'function',
     function: {
@@ -4216,12 +4250,12 @@ test('parallel screenshot batches reuse both images for context retry without pe
         && Array.isArray(message.content)
         && message.content.some((part) => part?.type === 'image_url')
       )).map(({ index }) => index)
-      if (modelCalls === 2 || modelCalls === 3) {
+      if (modelCalls === 2) {
         assert.equal(imageIndexes.length, 2)
         const requestText = JSON.stringify(messages)
         assert.match(requestText, /data:image\/png;base64,FIRST_SCREENSHOT_BYTES/u)
         assert.match(requestText, /data:image\/png;base64,SECOND_SCREENSHOT_BYTES/u)
-        if (modelCalls === 2) {
+        {
           const firstShotIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-shot-one')
           const secondShotIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-shot-two')
           const readIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-read')
@@ -4233,14 +4267,6 @@ test('parallel screenshot batches reuse both images for context retry without pe
           assert.equal(JSON.parse(messages[firstShotIndex].content).image.data, undefined)
           assert.equal(JSON.parse(messages[secondShotIndex].content).image.data, undefined)
           throw Object.assign(new Error('maximum context length exceeded'), { status: 400 })
-        }
-        return {
-          content: '',
-          toolCalls: [{
-            id: 'post-shot-read',
-            type: 'function',
-            function: { name: 'read_file', arguments: '{"path":"after-shot.txt"}' },
-          }],
         }
       }
       assert.deepEqual(imageIndexes, [], 'the image must not be replayed after its next logical model call')
@@ -4264,8 +4290,13 @@ test('parallel screenshot batches reuse both images for context retry without pe
     },
   })
 
-  assert.equal(result.text, 'Screenshot and notes inspected.')
-  assert.equal(modelCalls, 4)
+  // Compaction had nothing to shrink for this short history, so the recovery
+  // retry would have re-sent the identical request. It is skipped instead of
+  // repeated (see contextCompactionRuntime): one provider request, not three,
+  // and an honest incomplete turn. Reuse of both images across a *changing*
+  // retry is covered by contextCompactionRuntime.test.js.
+  assert.equal(modelCalls, 2)
+  assert.notEqual(result.text, 'Screenshot and notes inspected.')
   assert.ok(checkpoints.length > 0)
   for (const checkpoint of checkpoints) {
     assert.doesNotMatch(
@@ -4459,7 +4490,8 @@ test('concurrency-safe metadata cannot make an external write replay after a cra
   assert.equal(checkpoint.toolCalls[0].checkpointStatus, 'executing')
   assert.equal(checkpoint.toolCalls[1].checkpointStatus, 'pending')
 
-  const resumed = await runToolsLoop({
+  let recoveryModelCalls = 0
+  await assert.rejects(runToolsLoop({
     job: { id: 'external-crash-job', userId: null, origin: 'chat', prompt: 'send both externally' },
     step: { id: 'external-crash-step', kind: 'chat' },
     messages: [{ role: 'user', content: 'send both externally' }],
@@ -4477,13 +4509,16 @@ test('concurrency-safe metadata cannot make an external write replay after a cra
       args,
       approvalId: 'external-crash-resume-approval',
     }),
-    runModel: async () => ({ content: 'The external writes were reconciled.', toolCalls: [] }),
+    runModel: async () => {
+      recoveryModelCalls += 1
+      return { content: 'must not fabricate reconciliation', toolCalls: [] }
+    },
     executeTool: executeExternalWrite,
-  })
+  }), (error) => error?.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN' && error?.unsafeToReplay === true)
 
-  assert.equal(resumed.text, 'The external writes were reconciled.')
+  assert.equal(recoveryModelCalls, 0)
   assert.equal(executions.get('first'), 1)
-  assert.equal(executions.get('second'), 1)
+  assert.equal(executions.get('second') || 0, 0)
   assert.equal(maxActive, 1)
 })
 

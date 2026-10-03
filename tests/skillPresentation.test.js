@@ -11,6 +11,7 @@ import {
   selectDefaultSkillCatalog,
 } from '../src/lib/skillPresentation.js'
 import { SKILLS } from '../src/data/skillCatalog.js'
+import { translateKey } from '../src/i18n/translations.js'
 
 const present = (name, desc = 'Use this skill for professional work.') => getPresentedSkill({
   id: `codex-superpowers-${name}`,
@@ -49,6 +50,19 @@ test('unknown plugin skills retain a unique translated identity instead of a sha
 test('existing Chinese built-in skill copy remains unchanged', () => {
   const skill = { id: 'research', name: '深度研究', desc: '检索并核验多来源资料。' }
   assert.equal(getPresentedSkill(skill, 'zh'), skill)
+})
+
+test('PPT descriptions come from the shared zh/en translation domain', () => {
+  const ppt = SKILLS.find((skill) => skill.id === 'ppt')
+  const descriptions = {
+    zh: '按实际要求生成内容完整、可编辑的演示文稿',
+    en: 'Create editable presentations from your content, page count, and visual requirements.',
+  }
+
+  for (const [language, expected] of Object.entries(descriptions)) {
+    assert.equal(translateKey('skillsMarket.builtInPptDescription', language), expected)
+    assert.equal(getPresentedSkill(ppt, language).desc, expected)
+  }
 })
 
 test('every built-in skill exposes English catalog metadata without changing runtime identity', () => {

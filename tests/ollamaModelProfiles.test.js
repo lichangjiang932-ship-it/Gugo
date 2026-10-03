@@ -19,7 +19,8 @@ function fakeFetch(url, init = {}) {
       status: 200,
       text: async () => JSON.stringify({
         capabilities: ['tools'],
-        model_info: { 'test.context_length': model === 'short:latest' ? 8192 : 131072 },
+        parameters: { num_ctx: model === 'short:latest' ? 8192 : 131072 },
+        model_info: { 'test.context_length': 1048576 },
       }),
     })
   }
@@ -47,4 +48,30 @@ test('Ollama discovery resolves an untagged configured model through its latest 
 
   assert.equal(result.modelProfiles['short:latest'].contextWindow, 8192)
   assert.equal(result.profile.contextWindow, 8192)
+})
+
+test('Ollama discovery shares one runtime snapshot while keeping each model window separate', async () => {
+  let runtimeRequests = 0
+  const result = await discoverOllamaEndpoint({
+    baseUrl: 'http://localhost:11434/v1', modelName: 'short',
+    fetchImpl: async (url, init) => {
+      if (new URL(url).pathname !== '/api/ps') return fakeFetch(url, init)
+      runtimeRequests += 1
+      return { ok: true, status: 200, text: async () => JSON.stringify({
+        models: [
+          { name: 'unrelated:latest', context_length: 1048576 },
+          { name: 'long:latest', context_length: 16384 },
+          { name: 'short:latest', context_length: 2048 },
+        ],
+      }) }
+    },
+  })
+  assert.equal(runtimeRequests, 1)
+  assert.equal(result.profile.contextWindow, 2048)
+  assert.equal(result.profile.source, 'ollama-api-ps')
+  assert.equal(result.modelProfiles['short:latest'].contextWindow, 2048)
+  assert.equal(result.modelProfiles['long:latest'].contextWindow, 16384)
+  assert.equal(result.models[0].profile.contextWindow, 2048)
+  assert.equal(result.models[1].profile.contextWindow, 16384)
+  assert.equal(Object.hasOwn(result.modelProfiles, 'unrelated:latest'), false)
 })

@@ -1,4 +1,7 @@
 import { MEMORY_TOOL_SPECS } from './memoryTools.js'
+import { EXPERIENCE_TOOL_SPECS } from './experienceTools.js'
+import { GOAL_TOOL_SPECS } from './goalToolSpecs.js'
+import { SKILL_RESOURCE_TOOL_SPECS } from './skillResourceToolSpecs.js'
 import { BUILTIN_ARTIFACT_TOOL_SPECS } from '../services/builtinArtifactToolSpecs.js'
 import { IMAGE_TOOL_SPECS } from '../adapters/imageTools.js'
 import { MEDIA_TOOL_SPECS } from '../adapters/mediaTools.js'
@@ -6,11 +9,13 @@ import { PDF_TOOL_SPECS } from '../adapters/pdfTools.js'
 import { BATCH_FILE_TOOL_SPECS } from '../adapters/batchFileTools.js'
 import { FS_SHELL_TOOL_SPECS } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS } from '../adapters/gitWorkbench.js'
+import { GIT_HISTORY_TOOL_SPECS } from '../adapters/gitHistoryTools.js'
 import { CODING_AGENT_TOOL_SPECS } from '../adapters/codingAgentTools.js'
 import { CODE_SEARCH_TOOL_SPECS } from './codeSearch.js'
 import { LSP_TOOL_SPECS } from './lspTool.js'
 import { APPLY_PATCH_TOOL_SPECS } from './applyPatch.js'
 import { AGENTIC_TOOL_SPECS } from './agenticTools.js'
+import { PREVIEW_TOOL_SPECS } from '../services/previewTools.js'
 import { RUN_CODE_TOOL_SPECS } from '../services/runCodeRuntime.js'
 import { CODEX_APP_SERVER_TOOL_SPECS, CODEX_MODELS_TOOL_NAME } from '../services/codexAppServerTool.js'
 import { SUBAGENT_MAX_PER_BATCH } from '../services/subagentBatchConfig.js'
@@ -40,6 +45,37 @@ function specsByName(specs) {
  */
 
 export const BUILTIN_TOOL_SCHEMA_CATALOG = {
+  load_skill: {
+    type: 'function',
+    function: {
+      name: 'load_skill',
+      description: 'Load one exact skill from the current user-visible skill catalog. The host validates ownership and injects the full instructions as trusted system context for the next model response. Use only a skill ID shown in the catalog.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_id: { type: 'string', minLength: 1, maxLength: 128 },
+        },
+        required: ['skill_id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  search_tools: {
+    type: 'function',
+    function: {
+      name: 'search_tools',
+      description: 'Search the current turn\'s authorized deferred tool catalog and activate the best matching tools for the next model response. Use this when the visible tools cannot perform a browser, connected-app, MCP, plugin, or specialized task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', minLength: 1, maxLength: 500 },
+          limit: { type: 'integer', minimum: 1, maximum: 20, default: 8 },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    },
+  },
   list_directory: {
     type: 'function',
     function: {
@@ -500,14 +536,19 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
   ...specsByName(BATCH_FILE_TOOL_SPECS),
   ...specsByName(FS_SHELL_TOOL_SPECS),
   ...specsByName(GIT_TOOL_SPECS),
+  ...specsByName(GIT_HISTORY_TOOL_SPECS),
   ...specsByName(CODING_AGENT_TOOL_SPECS),
   ...specsByName(CODE_SEARCH_TOOL_SPECS),
   ...specsByName(LSP_TOOL_SPECS),
   ...specsByName(APPLY_PATCH_TOOL_SPECS),
   ...specsByName(AGENTIC_TOOL_SPECS),
+  ...specsByName(PREVIEW_TOOL_SPECS),
   ...specsByName(RUN_CODE_TOOL_SPECS),
   ...specsByName(CODEX_APP_SERVER_TOOL_SPECS),
   ...specsByName(MEMORY_TOOL_SPECS),
+  ...specsByName(EXPERIENCE_TOOL_SPECS),
+  ...specsByName(GOAL_TOOL_SPECS),
+  ...specsByName(SKILL_RESOURCE_TOOL_SPECS),
 }
 
 const {

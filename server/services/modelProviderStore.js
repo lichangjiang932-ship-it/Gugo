@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { getDb } from '../db.js'
+import { getDiagnosticRuntimeScope } from '../core/diagnosticRuntimeScope.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 import {
   MODEL_PROVIDER_RUNTIME_BINDINGS_ENV,
@@ -60,7 +61,7 @@ function readCredentialColumn(row, column, purpose) {
     purpose,
     legacyDecoder: (raw) => decodeLegacy(raw, {}),
   })
-  if (decoded.legacy && row?.id && Object.keys(decoded.value).length) {
+  if (decoded.legacy && row?.id && Object.keys(decoded.value).length && !getDiagnosticRuntimeScope()) {
     const sql = column === 'secret_json'
       ? 'UPDATE model_providers SET secret_json = ? WHERE id = ? AND secret_json IS ?'
       : 'UPDATE model_providers SET headers_json = ? WHERE id = ? AND headers_json IS ?'

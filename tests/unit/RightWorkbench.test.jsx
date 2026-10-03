@@ -5,6 +5,23 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import RightWorkbench from '../../src/pages/ChatSplit/RightWorkbench.jsx'
+import WorkbenchFiles from '../../src/pages/ChatSplit/rightWorkbench/WorkbenchFiles.jsx'
+import WorkbenchGit from '../../src/pages/ChatSplit/rightWorkbench/WorkbenchGit.jsx'
+import { collectArtifacts } from '../../src/pages/ChatSplit/rightWorkbench/rightWorkbenchArtifacts.js'
+import { translateKey } from '../../src/i18n/translations.js'
+
+// Rendered without an I18nProvider, the components in this file fall back to zh,
+// so the list is given the same table rather than a different one.
+const t = (key, values = {}) => translateKey(key, 'zh').replace(/\{(\w+)\}/g, (_, name) => values[name])
+
+/**
+ * The artifact list is the workbench's "workspace files" tool. These tests render
+ * the list itself so they can assert what it offers (which artifacts, dedup,
+ * thumbnails, verification state) without mounting the whole panel.
+ */
+function ArtifactList({ attachments = [], messages = [], onOpenArtifact }) {
+  return <WorkbenchFiles artifacts={collectArtifacts(messages, attachments)} onOpenArtifact={onOpenArtifact} t={t} />
+}
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -36,90 +53,62 @@ function pointerEvent(dom, type, values) {
   return event
 }
 
-function deferred() {
-  let resolve
-  let reject
-  const promise = new Promise((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, reject, resolve }
-}
-
-async function enterSideChatMessage(dom, rootElement, value) {
-  const textarea = rootElement.querySelector('textarea')
-  assert.ok(textarea)
-  const reactPropsKey = Object.keys(textarea).find((key) => key.startsWith('__reactProps$'))
-  const onChange = reactPropsKey ? textarea[reactPropsKey]?.onChange : null
-  assert.equal(typeof onChange, 'function')
-  await act(async () => {
-    onChange({ target: { value } })
-    await Promise.resolve()
-  })
-  assert.equal(textarea.value, value)
-  return textarea
-}
-
-async function submitSideChat(dom, rootElement) {
-  const form = rootElement.querySelector('textarea')?.closest('form')
-  assert.ok(form)
-  await act(async () => {
-    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
-    await Promise.resolve()
-  })
-}
-
-test('right workbench renders compact tabs, persists width, and opens generated files', async () => {
+test('the header toolbar offers exactly the three tools and the panel resizes', async () => {
   const dom = setupDom()
+  // A stored width proves the panel keeps the reader's chosen size across mounts.
   dom.window.localStorage.setItem('yma:right-workbench-width', '520')
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
-  const opened = []
   const selectedTabs = []
 
   try {
     await act(async () => {
       root.render(
         <RightWorkbench
-          messages={[{
-            id: 'assistant-1',
-            role: 'assistant',
-            content: 'The generated report is ready.',
-            meta: {
-              artifactType: 'docx',
-              artifactTitle: 'Quarterly report',
-              artifactSource: '# Quarterly report\n\n## Summary\nComplete.',
-            },
-          }, {
-            id: 'assistant-2',
-            role: 'assistant',
-            content: 'Server artifact ready.',
-            meta: {
-              serverArtifacts: [
-                { id: 'artifact-1', filename: 'analysis.xlsx', type: 'xlsx', url: '/api/artifacts/turn/artifact-1/download' },
-                { id: 'artifact-2', filename: '填写后 答题卡.pdf', type: 'pdf', url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf' },
-              ],
-              serverDeliveryArtifactIds: ['artifact-1', 'artifact-2'],
-            },
-          }]}
           activeTab="files"
           onTabChange={(tab) => selectedTabs.push(tab)}
           onClose={() => {}}
-          onOpenArtifact={(artifact) => opened.push(artifact)}
+          onOpenArtifact={() => {}}
           onSendMessage={() => {}}
           isGenerating={false}
         />,
       )
     })
 
-    const navigation = rootElement.querySelector('[data-testid="workbench-navigation"]')
-    assert.ok(navigation)
-    assert.match(navigation.className, /flex/)
-    assert.equal(navigation.querySelectorAll(':scope > button').length, 4)
-    const activeNavigation = navigation.querySelector('[aria-current="page"]')
-    assert.equal(activeNavigation.getAttribute('aria-label'), '相关文件')
-    assert.equal(activeNavigation.querySelector('span.sr-only').textContent, '相关文件')
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
+    // The vertical edge strip is gone; the top bar follows the reference order.
+    assert.equal(rootElement.querySelector('[data-testid="workbench-tool-rail"]'), null)
+    const toolbar = rootElement.querySelector('[data-testid="workbench-tool-switch"]')
+    assert.ok(toolbar)
+    assert.doesNotMatch(toolbar.className, /flex-col/)
+    const orderedIds = [
+      'workbench-tool-entry', 'workbench-tool-forward', 'workbench-tool-select', 'workbench-tool-refresh',
+      'workbench-tool-settings', 'workbench-tool-open-external', 'workbench-tool-expand', 'workbench-close',
+    ]
+    const shownIds = [...toolbar.querySelectorAll('[data-testid]')]
+      .map((node) => node.getAttribute('data-testid'))
+      .filter((id) => orderedIds.includes(id))
+    assert.deepEqual(shownIds, orderedIds, 'icons appear exactly in the reference order')
+    // Selection awaits the Preview runtime; preview controls stay quiet off the browser tab.
+    assert.equal(toolbar.querySelector('[data-testid="workbench-tool-select"]').disabled, true)
+    assert.equal(toolbar.querySelector('[data-testid="workbench-tool-refresh"]').disabled, true)
+    // The tooltip speaks the reader's language like every other label on the bar.
+    assert.equal(toolbar.querySelector('[data-testid="workbench-settings-tip"]').textContent, '预览设置')
+    // The bar itself only holds those icons, so switching tools lives in the
+    // settings menu: all three, each with its own label and shortcut, none lost.
+    const menu = toolbar.querySelector('[role="menu"]')
+    assert.ok(menu)
+    const tools = [...menu.querySelectorAll('[data-tool]')]
+    assert.deepEqual(tools.map((node) => node.getAttribute('data-tool')), ['files', 'browser', 'terminal'])
+    assert.ok(tools.every((node) => node.parentElement === menu), 'tools are menu entries, not a second bar')
+    assert.equal(tools[0].getAttribute('aria-current'), 'page')
+    // The label carries its own key, so a tooltip can never promise a shortcut
+    // nobody bound.
+    assert.equal(tools[0].getAttribute('title'), '工作区文件（Ctrl+Alt+F）')
+    assert.equal(tools[1].getAttribute('title'), '浏览器（Ctrl+T）')
+    assert.equal(tools[2].getAttribute('title'), '终端（Ctrl+\\）')
+    // With no workspace named there is nothing to copy, and the entry says so.
+    assert.equal(menu.querySelector('[data-testid="preview-menu-copy-workspace"]').disabled, true)
+
     const resizeHandle = rootElement.querySelector('[data-testid="workbench-resize-handle"]')
     assert.ok(resizeHandle)
     assert.equal(resizeHandle.getAttribute('aria-orientation'), 'vertical')
@@ -133,9 +122,17 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '520')
 
     await act(async () => {
-      navigation.querySelectorAll(':scope > button')[1].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      toolbar.querySelector('[data-testid="workbench-tool-entry"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
     })
-    assert.deepEqual(selectedTabs, ['chat'])
+    assert.deepEqual(selectedTabs, ['entry'])
+    // A tool in the menu is one press away, and the menu closes behind it.
+    const menuDetails = toolbar.querySelector('[data-testid="workbench-tool-settings"]').closest('details')
+    menuDetails.open = true
+    await act(async () => {
+      toolbar.querySelector('[data-tool="browser"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    assert.deepEqual(selectedTabs, ['entry', 'browser'])
+    assert.equal(menuDetails.open, false)
 
     resizeHandle.setPointerCapture = () => {}
     await act(async () => {
@@ -170,6 +167,47 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.equal(panel.style.width, '370px')
     assert.equal(resizeHandle.getAttribute('aria-valuenow'), '370')
     assert.equal(resizeHandle.getAttribute('aria-valuemax'), '370')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('the artifact list opens the generated and delivered files it lists', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+
+  try {
+    await act(async () => {
+      root.render(
+        <ArtifactList
+          messages={[{
+            id: 'assistant-1',
+            role: 'assistant',
+            content: 'The generated report is ready.',
+            meta: {
+              artifactType: 'docx',
+              artifactTitle: 'Quarterly report',
+              artifactSource: '# Quarterly report\n\n## Summary\nComplete.',
+            },
+          }, {
+            id: 'assistant-2',
+            role: 'assistant',
+            content: 'Server artifact ready.',
+            meta: {
+              serverArtifacts: [
+                { id: 'artifact-1', filename: 'analysis.xlsx', type: 'xlsx', url: '/api/artifacts/turn/artifact-1/download' },
+                { id: 'artifact-2', filename: '填写后 答题卡.pdf', type: 'pdf', url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf' },
+              ],
+              serverDeliveryArtifactIds: ['artifact-1', 'artifact-2'],
+            },
+          }]}
+          onOpenArtifact={(artifact) => opened.push(artifact)}
+        />,
+      )
+    })
 
     const serverArtifactLink = rootElement.querySelector('[data-testid="workbench-files"] a[download="analysis.xlsx"]')
     assert.ok(serverArtifactLink)
@@ -267,7 +305,7 @@ test('right workbench hides live intermediates and synthetic previews outside de
 
   try {
     await act(async () => root.render(
-      <RightWorkbench
+      <ArtifactList
         messages={messages}
         activeTab="files"
         onTabChange={() => {}}
@@ -278,7 +316,7 @@ test('right workbench hides live intermediates and synthetic previews outside de
       />,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+    assert.equal(rootElement.querySelectorAll('[data-testid="workbench-file-open"]').length, 1)
     assert.match(rootElement.textContent, /final-report\.pdf/)
     assert.doesNotMatch(rootElement.textContent, /live-draft|source-draft|Synthetic draft|Failed draft|failed-draft|interrupted-draft|paused-draft|old-draft/)
   } finally {
@@ -295,7 +333,7 @@ test('right workbench lists user attachments with image thumbnails and opens the
 
   try {
     await act(async () => root.render(
-      <RightWorkbench
+      <ArtifactList
         attachments={[{
           id: 'attachment-video',
           name: '现场片段.mp4',
@@ -327,7 +365,7 @@ test('right workbench lists user attachments with image thumbnails and opens the
       />,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '3')
+    assert.equal(rootElement.querySelectorAll('[data-testid="workbench-file-open"]').length, 3)
     const links = [...rootElement.querySelectorAll('[data-testid="workbench-file-open"]')]
     assert.deepEqual(links.map((link) => link.textContent.trim()).map((value) => value.replace(/\s+/g, ' ')), [
       '现场片段.mp4video/mp4',
@@ -371,7 +409,7 @@ test('right workbench prefers a verified formal local file over its managed prev
 
   try {
     await act(async () => root.render(
-      <RightWorkbench
+      <ArtifactList
         messages={[{
           id: `${turnId}:assistant`,
           role: 'assistant',
@@ -430,7 +468,7 @@ test('right workbench shows and opens retained files as verification-pending', a
 
   try {
     await act(async () => root.render(
-      <RightWorkbench
+      <ArtifactList
         messages={[{
           id: `${turnId}:assistant`,
           role: 'assistant',
@@ -482,7 +520,7 @@ test('right workbench exposes retained receipts from a paused streaming turn', a
 
   try {
     await act(async () => root.render(
-      <RightWorkbench
+      <ArtifactList
         messages={[{
           id: 'paused-receipt-message',
           role: 'assistant',
@@ -514,7 +552,7 @@ test('right workbench exposes retained receipts from a paused streaming turn', a
       />,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+    assert.equal(rootElement.querySelectorAll('[data-testid="workbench-file-open"]').length, 1)
     assert.match(rootElement.textContent, /paused-draft\.html/)
     assert.doesNotMatch(rootElement.textContent, /managed-draft\.html/)
     assert.match(
@@ -550,7 +588,7 @@ test('right workbench keeps only the latest receipt for the same verified local 
 
   try {
     await act(async () => root.render(
-      <RightWorkbench
+      <ArtifactList
         messages={[
           messageFor({ turnId: 'gallery-first-turn', receiptId: 'gallery-first-receipt', size: 1024 }),
           messageFor({ turnId: 'gallery-latest-turn', receiptId: 'gallery-latest-receipt', size: 2048 }),
@@ -568,7 +606,7 @@ test('right workbench keeps only the latest receipt for the same verified local 
     assert.equal(links.length, 1)
     assert.match(links[0].getAttribute('href'), /gallery-latest-receipt/)
     assert.doesNotMatch(links[0].getAttribute('href'), /gallery-first-receipt/)
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+    assert.equal(rootElement.querySelectorAll('[data-testid="workbench-file-open"]').length, 1)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -597,7 +635,7 @@ test('right workbench keeps only the latest receipt for the same normalized POSI
 
   try {
     await act(async () => root.render(
-      <RightWorkbench
+      <ArtifactList
         messages={[
           messageFor({
             turnId: 'posix-first-turn',
@@ -623,122 +661,122 @@ test('right workbench keeps only the latest receipt for the same normalized POSI
     assert.equal(links.length, 1)
     assert.match(links[0].getAttribute('href'), /posix-latest-receipt/)
     assert.doesNotMatch(links[0].getAttribute('href'), /posix-first-receipt/)
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+    assert.equal(rootElement.querySelectorAll('[data-testid="workbench-file-open"]').length, 1)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
   }
 })
 
-test('right workbench keeps side chat input pending and clears it only after send acceptance', async () => {
+test('the changes panel reads real git status and diff', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
-  const send = deferred()
-  const sent = []
+  const calls = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    const target = String(url)
+    calls.push(target)
+    if (target.includes('/git/status')) {
+      return new Response(JSON.stringify({
+        ok: true,
+        branch: 'feature/git-panel',
+        files: [{ status: 'M', path: 'src/app.js' }],
+      }), { headers: { 'Content-Type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({ ok: true, diff: '-const one = 1\n+const one = 2' }), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
   try {
-    await act(async () => root.render(
-      <RightWorkbench
-        messages={[]}
-        activeTab="chat"
-        onTabChange={() => {}}
-        onClose={() => {}}
-        onOpenArtifact={() => {}}
-        onSendMessage={(content) => {
-          sent.push(content)
-          return send.promise
-        }}
-        isGenerating={false}
-      />,
-    ))
-
-    const textarea = await enterSideChatMessage(dom, rootElement, 'keep until accepted')
-    await submitSideChat(dom, rootElement)
-    assert.deepEqual(sent, ['keep until accepted'])
-    assert.equal(textarea.value, 'keep until accepted')
+    // The changes tab left the tool rail with the other non-tools, so the panel is
+    // exercised directly: what it must keep proving is that it reads real git
+    // status and a real diff rather than rendering placeholders.
+    await act(async () => { root.render(<WorkbenchGit t={t} />) })
+    await act(async () => { await Promise.resolve() })
+    const panel = rootElement.querySelector('[data-testid="workbench-git"]')
+    assert.ok(panel, 'the changes panel renders')
+    assert.deepEqual(calls, ['/api/workbench/git/status'])
+    // The label comes from the real translation table, so a missing key would
+    // surface here as the raw key rather than a sentence.
+    assert.match(panel.textContent, /feature\/git-panel/)
+    assert.match(panel.textContent, /变更文件/)
 
     await act(async () => {
-      send.resolve(true)
-      await send.promise
+      panel.querySelector('[data-testid="workbench-git-file"]')
+        .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
     })
-    assert.equal(textarea.value, '')
+    assert.deepEqual(calls[1], '/api/workbench/git/diff')
+    const diff = panel.querySelectorAll('[data-testid="workbench-git-diff"] pre')
+    assert.deepEqual([...diff].map((line) => line.textContent), ['-const one = 1', '+const one = 2'])
   } finally {
+    globalThis.fetch = originalFetch
     await act(async () => root.unmount())
     dom.window.close()
   }
 })
 
-test('right workbench preserves side chat input when send resolves false', async () => {
+test('the toolbar walks back to entry, forward to the tool, grows the panel and copies the path', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
-  const send = deferred()
-  const sent = []
-
+  const tabs = []
+  const copied = []
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      ...dom.window.navigator,
+      clipboard: { writeText: async (value) => copied.push(value) },
+    },
+  })
   try {
-    await act(async () => root.render(
-      <RightWorkbench
-        messages={[]}
-        activeTab="chat"
-        onTabChange={() => {}}
-        onClose={() => {}}
-        onOpenArtifact={() => {}}
-        onSendMessage={(content) => {
-          sent.push(content)
-          return send.promise
-        }}
-        isGenerating={false}
-      />,
-    ))
-
-    const textarea = await enterSideChatMessage(dom, rootElement, 'keep after rejection')
-    await submitSideChat(dom, rootElement)
-    assert.deepEqual(sent, ['keep after rejection'])
     await act(async () => {
-      send.resolve(false)
-      await send.promise
+      root.render(
+        <RightWorkbench
+          activeTab="files"
+          onTabChange={(tab) => tabs.push(tab)}
+          onClose={() => {}}
+          onOpenArtifact={() => {}}
+          onSendMessage={() => {}}
+          isGenerating={false}
+          selectedWorkspacePath="/wsp/project"
+        />,
+      )
     })
-    assert.equal(textarea.value, 'keep after rejection')
+
+    const back = rootElement.querySelector('[data-testid="workbench-tool-entry"]')
+    const forward = rootElement.querySelector('[data-testid="workbench-tool-forward"]')
+    assert.equal(forward.disabled, true, 'no history yet, so forward is greyed like the reference')
+    await act(async () => back.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.deepEqual(tabs, ['entry'])
+    // The step back is remembered: forward walks straight to the tool again.
+    await act(async () => forward.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.deepEqual(tabs, ['entry', 'files'])
+    assert.equal(forward.disabled, true, 'history is consumed')
+
+    const panel = rootElement.querySelector('[data-testid="right-workbench"]')
+    const readerWidth = panel.style.width
+    const expand = rootElement.querySelector('[data-testid="workbench-tool-expand"]')
+    await act(async () => expand.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(panel.style.width, '704px', 'expand grows to the widest allowed panel')
+    await act(async () => expand.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(panel.style.width, readerWidth, 'the second click restores the reader own width')
+
+    // The workspace path is still one press away, and it is the real path.
+    const copy = rootElement.querySelector('[data-testid="preview-menu-copy-workspace"]')
+    assert.equal(copy.disabled, false)
+    await act(async () => copy.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    assert.deepEqual(copied, ['/wsp/project'])
+
+    // Preview controls stay disabled until a browser tab is showing.
+    assert.equal(rootElement.querySelector('[data-testid="workbench-tool-refresh"]').disabled, true)
+    assert.equal(rootElement.querySelector('[data-testid="workbench-tool-open-external"]').disabled, true)
   } finally {
-    await act(async () => root.unmount())
-    dom.window.close()
-  }
-})
-
-test('right workbench preserves side chat input when send rejects', async () => {
-  const dom = setupDom()
-  const rootElement = dom.window.document.getElementById('root')
-  const root = createRoot(rootElement)
-  const send = deferred()
-  const sent = []
-  send.promise.catch(() => {})
-
-  try {
-    await act(async () => root.render(
-      <RightWorkbench
-        messages={[]}
-        activeTab="chat"
-        onTabChange={() => {}}
-        onClose={() => {}}
-        onOpenArtifact={() => {}}
-        onSendMessage={(content) => {
-          sent.push(content)
-          return send.promise
-        }}
-        isGenerating={false}
-      />,
-    ))
-
-    const textarea = await enterSideChatMessage(dom, rootElement, 'keep after error')
-    await submitSideChat(dom, rootElement)
-    assert.deepEqual(sent, ['keep after error'])
-    await act(async () => {
-      send.reject(new Error('send failed'))
-      try { await send.promise } catch { /* expected rejection */ }
-    })
-    assert.equal(textarea.value, 'keep after error')
-  } finally {
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator)
+    else delete globalThis.navigator
     await act(async () => root.unmount())
     dom.window.close()
   }

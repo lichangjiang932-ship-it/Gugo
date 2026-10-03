@@ -146,7 +146,7 @@ export default function ModelPicker({
   }
 
   return (
-    <div ref={pickerRef} className="relative flex flex-col-reverse items-end gap-1">
+    <div ref={pickerRef} className="relative flex min-w-0 max-w-full flex-col-reverse items-end gap-1">
       <button
         ref={triggerRef}
         type="button"
@@ -155,12 +155,23 @@ export default function ModelPicker({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        className={`inline-flex h-7 max-w-44 items-center gap-1 rounded-control border border-transparent px-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 ${open ? 'bg-ink/[0.06] text-ink' : readiness.canSend ? 'text-ink-soft hover:bg-ink/[0.045] hover:text-ink' : 'text-danger hover:bg-danger/5'}`}
+        className={`inline-flex h-7 max-w-full items-center gap-1 rounded-control border border-transparent px-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 sm:max-w-60 ${open ? 'bg-ink/[0.06] text-ink' : readiness.canSend ? 'text-ink-soft hover:bg-ink/[0.045] hover:text-ink' : 'text-danger hover:bg-danger/5'}`}
         title={triggerModelLabel || t('chat.modelPicker.open')}
         data-testid="model-picker-trigger"
       >
         {readiness.kind === 'loading' && <RefreshCw className="h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />}
-        <span className="truncate">{triggerModelLabel || t(triggerLabelKey || 'chat.modelPicker.selectRequired')}</span>
+        {/* The model is what the reader picked; the provider is context. Split
+            at the last "/" so the model keeps its room and the provider is the
+            part that gives way — "自定义接口/mimo-v2.6-fl…" used to cut the
+            model name and keep the prefix. */}
+        {triggerModelLabel && triggerModelLabel.includes('/') ? (
+          <span className="flex min-w-0 items-baseline">
+            <span className="min-w-0 max-w-[45%] shrink truncate text-ink-fade">{triggerModelLabel.slice(0, triggerModelLabel.lastIndexOf('/') + 1)}</span>
+            <span className="min-w-0 shrink-0 truncate font-medium">{triggerModelLabel.slice(triggerModelLabel.lastIndexOf('/') + 1)}</span>
+          </span>
+        ) : (
+          <span className="truncate">{triggerModelLabel || t(triggerLabelKey || 'chat.modelPicker.selectRequired')}</span>
+        )}
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-ink-fade transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 

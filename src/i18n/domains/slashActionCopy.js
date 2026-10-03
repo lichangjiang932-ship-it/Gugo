@@ -4,10 +4,6 @@ export const SLASH_ACTION_COPY = {
       "MCP",
       "Show MCP server status"
     ],
-    "side": [
-      "Side chat",
-      "Start a temporary side conversation"
-    ],
     "init": [
       "Initialize",
       "Create an AGENTS.md file with workspace instructions"
@@ -46,7 +42,6 @@ export const SLASH_ACTION_COPY = {
     ],
     "notices": {
       "mcp": "Opened MCP servers.",
-      "side": "Opened side chat.",
       "init": "Creating AGENTS.md.",
       "compact": "Chat context compacted.",
       "compactEmpty": "This chat is still too short to compact.",
@@ -114,17 +109,35 @@ export const SLASH_ACTION_COPY = {
       "markDone": "Mark complete",
       "markOpen": "Mark active",
       "active": "Active",
-      "completed": "Completed"
+      "completed": "Completed",
+      "loading": "Loading plan…",
+      "loadFailed": "Could not load the plan.",
+      "plan": "Host-verified plan",
+      "revision": "revision",
+      "awaitingApproval": "Awaiting your approval",
+      "approve": "Approve plan",
+      "approving": "Approving…",
+      "approved": "approved",
+      "superseded": "superseded",
+      "statusPending": "Pending",
+      "statusInProgress": "In progress",
+      "statusDone": "Done",
+      "statusBlocked": "Blocked",
+      "statusSkipped": "Skipped",
+      "start": "Start step",
+      "reopen": "Reopen step",
+      "block": "Block step",
+      "skip": "Skip step",
+      "verified": "Verified by host evidence",
+      "doneNeedsEvidence": "Only the agent can complete a step, by citing a tool call the host can verify.",
+      "legacy": "Earlier chat goals",
+      "createFailed": "Could not create the goal."
     }
   },
   "zh": {
     "mcp": [
       "MCP",
       "显示 MCP 服务器状态"
-    ],
-    "side": [
-      "侧边",
-      "发起临时侧边聊天"
     ],
     "init": [
       "初始化",
@@ -164,7 +177,6 @@ export const SLASH_ACTION_COPY = {
     ],
     "notices": {
       "mcp": "已打开 MCP 服务器。",
-      "side": "已打开侧边聊天。",
       "init": "正在创建 AGENTS.md。",
       "compact": "已压缩聊天上下文。",
       "compactEmpty": "当前聊天内容较少，暂时无需压缩。",
@@ -232,7 +244,29 @@ export const SLASH_ACTION_COPY = {
       "markDone": "标记完成",
       "markOpen": "恢复进行中",
       "active": "进行中",
-      "completed": "已完成"
+      "completed": "已完成",
+      "loading": "正在加载计划…",
+      "loadFailed": "加载计划失败。",
+      "plan": "宿主已核验的计划",
+      "revision": "修订",
+      "awaitingApproval": "等待你批准",
+      "approve": "批准计划",
+      "approving": "正在批准…",
+      "approved": "已批准",
+      "superseded": "已被取代",
+      "statusPending": "待办",
+      "statusInProgress": "进行中",
+      "statusDone": "已完成",
+      "statusBlocked": "受阻",
+      "statusSkipped": "已跳过",
+      "start": "开始该步骤",
+      "reopen": "重新打开",
+      "block": "标记受阻",
+      "skip": "跳过",
+      "verified": "宿主已核验证据",
+      "doneNeedsEvidence": "只有 agent 能完成步骤：它必须引用一次宿主可核验的工具调用。",
+      "legacy": "更早的聊天目标",
+      "createFailed": "创建目标失败。"
     }
   }
 }

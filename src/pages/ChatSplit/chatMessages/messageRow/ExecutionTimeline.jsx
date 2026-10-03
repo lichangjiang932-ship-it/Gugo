@@ -2,9 +2,10 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import MarkdownRenderer from '../../../../components/MarkdownRenderer.jsx'
 import { isPreExecutionFailure } from '../../../../lib/chatFlowGuards.js'
+import { executionResultSummary } from '../../../../lib/executionResultSummary.js'
 import { ToolCallTrace } from '../ActivityTraces.jsx'
 
-export function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, streaming }) {
+export function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, streaming, workspacePath = '' }) {
   return segments.map((segment, index) => segment.kind === 'tools' ? (
     <ToolCallTrace
       key={segment.key}
@@ -12,6 +13,7 @@ export function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segme
       stepOffset={segment.stepOffset}
       artifacts={artifacts}
       onOpenArtifact={onOpenArtifact}
+      workspacePath={workspacePath}
     />
   ) : (
     <MarkdownRenderer
@@ -31,9 +33,13 @@ function finiteOptionalNumber(value) {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-export function ExecutionDisclosure({ children, hasExecution, msg, running, t }) {
-  const [expanded, setExpanded] = useState(running)
+export function ExecutionDisclosure({ children, hasExecution, msg, running, preserveNarration = false, t }) {
+  const [expanded, setExpanded] = useState(running || preserveNarration)
   const wasRunning = useRef(running)
+  // Once the reader opens or closes the fold themselves, their choice stands:
+  // collapsing a timeline someone is reading at the moment the turn ends is a
+  // worse failure than leaving it open.
+  const userTouched = useRef(false)
   const contentId = useId()
   const [fallbackStartedAt] = useState(() => Date.now())
   const storedLatency = finiteOptionalNumber(msg.meta?.latency)
@@ -54,27 +60,23 @@ export function ExecutionDisclosure({ children, hasExecution, msg, running, t })
   const elapsed = useElapsedMilliseconds({ elapsedMs, running, startedAt })
   const elapsedLabel = hasElapsedTime ? t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) }) : ''
   const toolCount = Array.isArray(msg.meta?.toolCalls) ? msg.meta.toolCalls.length : 0
-  const hasReasoningSummary = Boolean(String(msg.meta?.reasoning || '').trim())
-  const processLabel = toolCount > 0
-    ? t('chatMessages.execution')
-    : running || hasReasoningSummary
-      ? t(running ? 'chatMessages.reasoningActive' : 'chatMessages.reasoningCompleted')
-      : t('chatMessages.execution')
   const label = [
-    processLabel,
+    t('chatMessages.execution'),
     hasElapsedTime ? formatTaskDuration(elapsed, t) : '',
     toolCount > 0 ? t('chatMessages.executionToolCount', { count: toolCount }) : '',
   ].filter(Boolean).join(' · ')
+  // Collapsed, the fold owes the reader a one-line outcome. Expanded, the tool
+  // cards are the outcome, so the summary would only repeat them.
+  const resultSummary = !running && !expanded ? executionResultSummary(msg.meta?.toolCalls, t) : ''
 
   useEffect(() => {
-    // Keep live work visible, then fold the process exactly once when that
-    // turn completes so the final answer becomes the visual focus. A later
-    // manual expansion is preserved because completed rerenders do not touch
-    // the state again.
+    // Public narration is part of the conversation, not diagnostic detail.
+    // Keep it readable after completion/cancellation. A tool-only history can
+    // still fold once, unless the reader already made that call themselves.
     if (running && !wasRunning.current) setExpanded(true)
-    if (!running && wasRunning.current) setExpanded(false)
+    if (!running && wasRunning.current && !preserveNarration && !userTouched.current) setExpanded(false)
     wasRunning.current = running
-  }, [running])
+  }, [running, preserveNarration])
 
   if (!hasExecution) {
     return elapsedLabel
@@ -90,12 +92,18 @@ export function ExecutionDisclosure({ children, hasExecution, msg, running, t })
         data-testid="execution-toggle"
         aria-controls={contentId}
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => {
+          userTouched.current = true
+          setExpanded((value) => !value)
+        }}
       >
         <span data-testid="task-duration-header">{label}</span>
+        {resultSummary && <span className="chat-execution-result" data-testid="execution-result-summary"> · {resultSummary}</span>}
         <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
       </button>
-      {expanded && <div id={contentId} className="chat-execution-content" data-testid="execution-content">{children}</div>}
+      {expanded && <div id={contentId} className="chat-execution-content" data-testid="execution-content">
+        {children}
+      </div>}
     </section>
   )
 }

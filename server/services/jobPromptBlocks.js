@@ -1,3 +1,5 @@
+import { PRESENTATION_PROMPT_POLICY, PRESENTATION_VISUAL_POLICY } from '../../shared/presentationPromptPolicy.js'
+
 /**
  * 后台 Job 的提示词块（单一来源）。
  *
@@ -57,14 +59,8 @@ export function buildArtifactPrompt(artifactTools, {
   if (artifactTools.has('create_pptx')) {
     lines.push(
       '',
-      '【高级 PPT 必守规则】(create_pptx 时强制)',
-      '1. 配色、版式、字体由系统控制,你只给文字 + 数据,不要在 bullet 里堆 emoji/装饰符号。',
-      '2. 标题 ≤ 14 字、结论式("X 增长 Y%" 而不是 "X 的情况");bullet ≤ 30 字、动词开头、含数字。',
-      '3. 单页 bullet ≤ 4 条,超出请拆页。短句胜过长段。',
-      '4. 必须用 layout 字段控制版式:cover(封面) / section(章节页) / kpi(数据卡 — 传 kpi 数组) / chart(图表 — 传 chart 字段) / statement(单点结论大字) / split(双栏对比) / process(横向流程) / quote(引用) / bullets(常规要点) / end(感谢页)。',
-      '5. 6 页以上的 deck 至少含 1 个 layout="section" 章节分隔 + 至少 1 个 kpi 或 chart。',
-      '6. cover 不要叫"封面";直接用真实主题作 title,系统会自动用 deck title 显示大字。',
-      '7. theme 字段按主题选: noir(默认/科技) / paper(文档/品牌) / ocean(金融/咨询) / forest(可持续/医疗)。',
+      PRESENTATION_PROMPT_POLICY,
+      PRESENTATION_VISUAL_POLICY,
     )
   }
   return lines.join('\n')
@@ -96,8 +92,8 @@ export function buildDelayedFollowupPrompt() {
 export function buildCitationPrompt() {
   return [
     '【引用与链接】',
-    '回复中提到来源、网页、文档、文件时，优先用 Markdown 链接给出可点击引用，例如 [标题](https://...) 或 [文件名](相对路径)。',
-    '引用本地文件给出相对工作区路径；引用网页/文档给出完整 URL；给出结论性数字或事实时附上来源链接。',
+    '回复中提到来源、网页、文档、文件时，使用清晰的 Markdown 链接，例如 [来源标题](完整 URL) 或 [文件名](工具返回的真实链接)。',
+    '交付文件必须使用工具验证并返回的准确 URL 或绝对路径，不编造相对下载地址、API 路由或 file:// 链接；网页来源使用真实完整 URL，结论性数字或事实附上来源。',
     '不要只写纯文本路径或「见上文」；能跳转的链接能显著减少用户来回确认。',
   ].join('\n')
 }

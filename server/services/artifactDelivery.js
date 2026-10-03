@@ -111,7 +111,7 @@ function withStatus(statusCode, message) {
   return error
 }
 
-function resolveOwnedArtifactByFilename(filename, userId) {
+export function resolveOwnedArtifactByFilename(filename, userId) {
   const candidates = [
     ...listArtifactsByFilename(filename),
     ...listTurnArtifactsByFilename(filename),

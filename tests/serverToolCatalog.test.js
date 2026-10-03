@@ -8,16 +8,21 @@ import {
   selectEnabledServerToolSpecs,
 } from '../src/lib/serverToolCatalog.js'
 import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../src/lib/serverToolConfig.js'
-import { buildToolSpecs } from '../src/lib/tools/toolSpecs.js'
 
 const BROWSER_TOOL_NAMES = [
   'browser_open_url',
   'browser_navigate',
   'browser_state',
+  'browser_tabs',
+  'browser_switch_tab',
+  'browser_frames',
+  'browser_switch_frame',
   'browser_snapshot',
   'browser_console',
   'browser_click',
   'browser_type',
+  'browser_upload_file',
+  'browser_download',
   'browser_select',
   'browser_press',
   'browser_wait',
@@ -98,7 +103,8 @@ test('a newly returned server tool needs no frontend schema registration', () =>
     specs: [{ origin: 'builtin', tool: serverOnlySpec }],
   })
 
-  assert.equal(buildToolSpecs(['server_only_new_tool'], catalog)[0], serverOnlySpec)
+  assert.equal(catalog.length, 1)
+  assert.equal(catalog[0], serverOnlySpec)
 })
 
 test('fetches canonical specs from the server catalog endpoint', async () => {

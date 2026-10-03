@@ -1,4 +1,4 @@
-import { Plus, Send, Square } from 'lucide-react'
+import { Pause, Plus, Send, Square } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import PermissionModeSwitcher from '../../../components/PermissionModeSwitcher.jsx'
 import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
@@ -14,7 +14,11 @@ function ContextRing({ percent }) {
   const radius = 7
   const circumference = 2 * Math.PI * radius
   const clamped = Math.max(0, Math.min(100, Number(percent) || 0))
-  const offset = circumference * (1 - clamped / 100)
+  // A real but small use (1% of a large window) drew an arc thinner than its
+  // own round caps, so the ring read as empty — as if it were broken. Any use
+  // shows at least a sliver; the exact figure stays in the tooltip.
+  const shown = clamped > 0 ? Math.max(clamped, 4) : 0
+  const offset = circumference * (1 - shown / 100)
   const color = clamped >= 80
     ? 'rgb(var(--color-danger-rgb))'
     : clamped >= 60
@@ -34,11 +38,13 @@ export default function ComposerActions({
   contextUsage,
   fileInputRef,
   hasDraftText = false,
+  hasAttachments = false,
   isGenerating,
   modelReadiness = { kind: 'ready', canSend: true },
   modelOptions,
   modelPickerOpen,
   onAbort,
+  onPause,
   onApprovalModeChange,
   onCloseModelPicker,
   onFileChange,
@@ -55,9 +61,16 @@ export default function ComposerActions({
 }) {
   const contextPopoverRef = useRef(null)
   const readinessMessageKey = modelReadinessMessageKey(modelReadiness)
-  const primaryActionStopsTurn = isGenerating && !hasDraftText
-  const primaryActionLabel = primaryActionStopsTurn
-    ? t('chatComposer.stop')
+  // A ready or pending attachment is draft content: the product rule is that an
+  // attachment never turns send into pause, so a stray tap cannot freeze a turn
+  // the user was still composing for. Only an empty draft pauses.
+  // Pausing is its own action; without a handler it degrades to the previous
+  // stop behaviour rather than becoming a dead button.
+  const requestPause = typeof onPause === 'function' ? onPause : onAbort
+  const hasDraftContent = hasDraftText || hasAttachments
+  const primaryActionPausesTurn = isGenerating && !hasDraftContent
+  const primaryActionLabel = primaryActionPausesTurn
+    ? t('chatComposer.pause')
     : !isGenerating && readinessMessageKey
       ? t(readinessMessageKey)
       : t('chatComposer.send')
@@ -100,8 +113,8 @@ export default function ComposerActions({
   }, [contextPanelOpen, onToggleContext])
 
   return (
-    <div data-testid="chat-composer-actions" className="mt-2.5 flex items-end justify-between gap-3">
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+    <div data-testid="chat-composer-actions" className="mt-2.5 flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
+      <div className="flex shrink-0 items-center gap-1.5">
         <input
           type="file"
           multiple
@@ -110,12 +123,12 @@ export default function ComposerActions({
           className="hidden"
           onChange={onFileChange}
         />
-        <button onClick={() => fileInputRef.current?.click()} title={t('chatComposer.attachment')} aria-label={t('chatComposer.attachment')} className="chat-composer-action-button inline-flex h-7 w-7 items-center justify-center rounded-full text-ink-fade transition-colors hover:bg-ink-ghost hover:text-ink-soft">
+        <button type="button" onClick={() => fileInputRef.current?.click()} title={t('chatComposer.attachment')} aria-label={t('chatComposer.attachment')} className="chat-composer-action-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-fade transition-colors hover:bg-ink/[0.045] hover:text-ink">
           <Plus className="h-4 w-4" />
         </button>
         <PermissionModeSwitcher mode={approvalMode} onChange={onApprovalModeChange} disabled={isGenerating} />
       </div>
-      <div className="flex min-w-0 items-end gap-1.5">
+      <div className="ml-auto flex min-w-0 max-w-full items-end gap-1.5">
         <ModelPicker
           open={modelPickerOpen}
           modelOptions={modelOptions}
@@ -128,9 +141,9 @@ export default function ComposerActions({
           onManage={onManageModels}
           onRetry={onModelRetry}
         />
-        <div ref={contextPopoverRef} className="relative">
+        <div ref={contextPopoverRef} className="relative shrink-0">
           {contextPanelOpen && (
-            <div className="absolute bottom-[calc(100%+8px)] right-0 z-50 w-[min(19rem,calc(100vw-1rem))]" data-testid="context-usage-popover">
+            <div className="fixed bottom-24 right-3 z-50 max-h-[min(60dvh,28rem)] w-[min(19rem,calc(100vw-1.5rem))] max-w-[calc(100%-1.5rem)] overflow-y-auto lg:absolute lg:bottom-[calc(100%+8px)] lg:right-0 lg:max-w-none" data-testid="context-usage-popover">
               <ContextUsagePanel contextUsage={usage} contextWindow={usage.contextWindow} t={t} />
             </div>
           )}
@@ -142,7 +155,7 @@ export default function ComposerActions({
             aria-haspopup="dialog"
             aria-label={ringTitle}
             title={ringTitle}
-            className={`chat-composer-action-button inline-flex h-7 w-7 items-center justify-center rounded-full transition-colors ${contextPanelOpen ? 'bg-paper-2 text-ink-soft' : 'text-ink-fade hover:bg-ink-ghost hover:text-ink-soft'}`}
+            className={`chat-composer-action-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${contextPanelOpen ? 'bg-paper-2 text-ink' : 'text-ink-fade hover:bg-ink/[0.045] hover:text-ink'}`}
           >
             <ContextRing percent={percent} />
           </button>
@@ -154,7 +167,7 @@ export default function ComposerActions({
             onClick={onAbort}
             title={t('chatComposer.stop')}
             aria-label={t('chatComposer.stop')}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-ink/10 bg-paper text-ink-soft transition-colors hover:border-ink/20 hover:bg-ink/[0.045]"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ink/10 bg-paper text-ink-soft transition-colors hover:border-ink/20 hover:bg-ink/[0.045]"
           >
             <Square className="h-3 w-3 fill-current" />
           </button>
@@ -162,14 +175,14 @@ export default function ComposerActions({
         <button
           type="button"
           data-testid="composer-primary-action"
-          onClick={primaryActionStopsTurn ? onAbort : onSend}
-          disabled={!isGenerating && sendDisabled}
+          onClick={primaryActionPausesTurn ? requestPause : onSend}
+          disabled={primaryActionPausesTurn ? false : sendDisabled}
           title={primaryActionLabel}
           aria-label={primaryActionLabel}
-          className="chat-composer-primary-action flex h-8 w-8 items-center justify-center rounded-full bg-ink text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-35"
+          className="chat-composer-primary-action flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-35"
         >
-          {primaryActionStopsTurn
-            ? <Square className="h-3.5 w-3.5 fill-current text-paper" />
+          {primaryActionPausesTurn
+            ? <Pause className="h-3.5 w-3.5 text-paper" />
             : <Send className="h-3.5 w-3.5 text-paper" />}
         </button>
       </div>

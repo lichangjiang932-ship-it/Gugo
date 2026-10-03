@@ -1,6 +1,11 @@
 import { observeLoopEvent } from './eventIsolation.js'
+import { installGoalPlanExecutionGate } from '../goalPlanExecutionPolicy.js'
+import { COMPLETION_POLICY_VERSION } from './completionPolicy.js'
 import { assertRuntimeStage } from './runtimeContract.js'
 import { restoreModelInvocationCheckpoint } from './modelInvocationCheckpoint.js'
+import { MUTATION_VERIFICATION_CHECKPOINT_VERSION } from './runtimeState.js'
+import { restoreOutputContinuation } from './outputContinuation.js'
+import { restoreCompactionCheckpoint, snapshotCompactionCheckpoint } from './compactionCheckpoint.js'
 
 function initializeExecutionState(s) {
   const { MAX_ITERS, normalizeCompactionRecovery, resolveIterationWindow } = s.d
@@ -12,6 +17,8 @@ function initializeExecutionState(s) {
   )
   s.finalText = ''
   s.finalCheckpointPersisted = false
+  s.runtimePromptFingerprint = s.restoredState?.runtimePromptFingerprint || null
+  s.outputContinuation = restoreOutputContinuation(s.restoredState?.completionGuards?.outputContinuation)
   s.pendingEphemeralToolMessages = []
   s.restoredModelInvocation = restoreModelInvocationCheckpoint(
     s.restoredState?.modelInvocation,
@@ -23,6 +30,10 @@ function initializeExecutionState(s) {
     },
   )
   s.modelInvocation = s.restoredModelInvocation
+  s.compactionCheckpoint = restoreCompactionCheckpoint(s.restoredState?.compactionCheckpoint, {
+    stepId: s.step?.id, modelProviderId: s.job?.modelProviderId,
+    modelName: s.job?.modelName, modelConfigRevision: s.job?.modelConfigRevision,
+  })
   s.iter = Math.max(0, Number(s.restoredState?.iterations) || 0)
   s.loopEventContext = (extra = {}) => Object.freeze({
     userId: String(s.job?.userId || '').trim() || null,
@@ -41,6 +52,9 @@ function initializeExecutionState(s) {
   })
   s.iterationWindowStart = s.iterationWindow.start
   s.maxIters = s.iterationWindow.limit
+  if (Array.isArray(s.restoredState?.toolCalls) && s.restoredState.toolCalls.some((call) => call.verificationRecoveryKey)) {
+    s.maxIters = Math.max(s.maxIters, Math.min(s.iter + 2, s.mutationVerificationRecovery.iterationLimit))
+  }
 }
 
 function installArtifactRecoveryRuntime(s) {
@@ -276,12 +290,17 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
     failureRecovery: serializeFailureRecovery(s.failureRecovery),
     loopGuard: s.loopGuard.snapshot(),
     capabilityDecision: s.capabilityDecisionSnapshot(),
+    ...(s.goalPlanBinding ? { goalPlanBinding: { ...s.goalPlanBinding } } : {}),
+    ...(s.runtimePromptFingerprint ? { runtimePromptFingerprint: { ...s.runtimePromptFingerprint } } : {}),
     ...(s.modelInvocation ? { modelInvocation: s.modelInvocation } : {}),
+    ...(s.compactionCheckpoint?.fingerprint ? { compactionCheckpoint: snapshotCompactionCheckpoint(s.compactionCheckpoint) } : {}),
     ...(s.directoryAuthorizationResolutions.length > 0
       ? { directoryAuthorizationResolution: s.directoryAuthorizationResolutions }
       : {}),
     completionGuards: {
+      completionPolicyVersion: COMPLETION_POLICY_VERSION,
       partialResultEntries: s.partialResultFallback.snapshot(),
+      outputContinuation: { ...s.outputContinuation },
       representativeReadsInjected: s.representativeReadsInjected,
       activeArtifactTools: [...s.authorizedArtifactTools],
       requiredArtifactTools: [...s.expectedArtifactTools],
@@ -309,6 +328,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       mutationExecutionObserved: s.mutationExecutionObserved,
       priorOutcomeMutationObserved: s.priorOutcomeMutationObserved,
       dynamicallyMountedToolNames: [...s.dynamicallyMountedToolNames],
+      dynamicallyLoadedSkillIds: [...s.dynamicallyLoadedSkillIds],
       verifiedRecoveredMutationObserved: s.verifiedRecoveredMutationObserved,
       mutationSteeringPending: s.mutationSteeringPending,
       executionEvidenceRetries: s.executionEvidenceRetries,
@@ -316,10 +336,12 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       sourceHandoffRetries: s.sourceHandoffRetries,
       directoryResumeRetries: s.directoryResumeRetries,
       pendingMutationVerification: s.hasPendingMutationVerification(),
+      mutationVerificationVersion: MUTATION_VERIFICATION_CHECKPOINT_VERSION,
       pendingMutationTargets: [...s.pendingMutationTargets],
       pendingDeletionTargets: [...s.pendingDeletionTargets],
       auxiliaryMutationTargets: [...s.auxiliaryMutationTargets],
       mutationVerificationRetries: s.mutationVerificationRetries,
+      mutationVerificationRecovery: structuredClone(s.mutationVerificationRecovery),
       taskVerificationRepair: serializeTaskVerificationRepair(s.taskVerificationRepair),
       localHtmlDeliveryTargets: [...s.localHtmlDeliveryTargets],
       localHtmlDeliveryRetries: s.localHtmlDeliveryRetries,
@@ -358,9 +380,12 @@ function installCheckpointRuntime(s) {
     acknowledge: s.acknowledgeSteering,
     release: s.releaseSteering,
     persist: s.persistTurn,
-    appendAssistant: (text) => s.convo.push({ role: 'assistant', content: text }),
+    appendAssistant: (text, message) => s.convo.push(message || { role: 'assistant', content: text }),
     beforeFinalCompletion: s.beforeFinalCompletion,
     onCompletionDeferred: () => {
+      s.finalText = ''
+      s.finalCheckpointPersisted = false
+      s.completionDeferredForSteering = true
       if (s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 2
     },
   })
@@ -368,6 +393,7 @@ function installCheckpointRuntime(s) {
 
 export async function initializeExecution(s) {
   initializeExecutionState(s)
+  installGoalPlanExecutionGate(s)
   installArtifactRecoveryRuntime(s)
   restoreExecutionProgress(s)
   const restored = await restoreTerminalExecution(s)

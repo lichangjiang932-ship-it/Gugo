@@ -160,6 +160,9 @@ export function artifactReferenceOpenPayload(reference, messageId = '') {
         type: reference.type,
         mimeType: reference.mimeType,
         url: reference.url,
+        ...Object.fromEntries(['previewRevision', 'revision', 'updatedAt', 'digest', 'contentDigest', 'sha256', 'lastModified']
+          .filter((key) => reference[key] !== undefined && reference[key] !== null)
+          .map((key) => [key, reference[key]])),
       },
     }
   }

@@ -469,6 +469,7 @@ async function runOwnerlessHarness(approvalPrincipal) {
   const result = await runToolLoop(baseOptions({
     job: { id: 'ownerless-loop-test', userId: null, origin: 'chat', prompt: 'Use echo_tool.' },
     approvalPrincipal,
+    onToolCompleted: async ({ result }) => { observedToolResult = result },
     requestToolApproval: async ({ args }) => {
       approvalRequests += 1
       return { proceed: true, args }
@@ -500,12 +501,13 @@ async function runOwnerlessHarness(approvalPrincipal) {
 test('ownerless loop execution fails closed before an injected approval callback', async () => {
   for (const approvalPrincipal of [undefined, { kind: 'gugo.trusted-internal-loop-principal' }]) {
     const outcome = await runOwnerlessHarness(approvalPrincipal)
-    assert.equal(outcome.result.text, 'ownerless complete')
-    assert.equal(outcome.modelCalls, 2)
+    assert.equal(outcome.result.code, 'approval_user_identity_missing')
+    assert.equal(outcome.result.incomplete, true)
+    assert.equal(outcome.modelCalls, 1)
     assert.equal(outcome.approvalRequests, 0)
     assert.equal(outcome.executions, 0)
     assert.equal(outcome.observedToolResult?.ok, false)
-    assert.equal(outcome.observedToolResult?.code, 'tool_execution_failed')
+    assert.equal(outcome.observedToolResult?.code, 'approval_user_identity_missing')
     assert.match(outcome.observedToolResult?.error || '', /无法确认工具调用所属用户/)
   }
 })

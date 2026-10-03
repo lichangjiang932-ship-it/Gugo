@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto'
-import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
+import { normalizeModelInvocationUsage } from './modelInvocationUsage.js'
 import { assertValidCompletedModelResponse } from '../../utils/modelResponseValidation.js'
+import { snapshotModelResponse } from './modelResponseSnapshot.js'
+import { normalizeStoredModelRequestDiagnostics, publicModelRequestDiagnostics } from './modelGenerationRecovery.js'
+export { snapshotModelResponse } from './modelResponseSnapshot.js'
 
 export const MODEL_REQUEST_OUTCOME_UNKNOWN = 'MODEL_REQUEST_OUTCOME_UNKNOWN'
 export const MODEL_REQUEST_CONTEXT_DRIFT = 'MODEL_REQUEST_CONTEXT_DRIFT'
@@ -142,28 +145,11 @@ export function fingerprintModelRequest(request = {}, {
     maxTokens: request.maxTokens ?? request.max_tokens ?? null,
     responseFormat: request.responseFormat ?? request.response_format ?? null,
     parameters: request.parameters ?? null,
+    ...(request.requestPurpose ? { requestPurpose: String(request.requestPurpose) } : {}),
   }
   return createHash('sha256').update(stableJson(projection)).digest('hex')
 }
 
-export function snapshotModelResponse(response) {
-  if (!response || typeof response !== 'object' || Array.isArray(response)) {
-    throw new TypeError('model response must be an object')
-  }
-  const costUsd = normalizeOptionalUsageNumber(response.costUsd)
-  return {
-    content: String(response.content ?? ''),
-    toolCalls: cloneJson(Array.isArray(response.toolCalls) ? response.toolCalls : [], []),
-    ...(response.usage && typeof response.usage === 'object'
-      ? { usage: cloneJson(response.usage, null) }
-      : {}),
-    ...(response.modelName != null ? { modelName: String(response.modelName) } : {}),
-    ...(response.providerId != null ? { providerId: String(response.providerId) } : {}),
-    ...(response.finishReason != null ? { finishReason: String(response.finishReason) } : {}),
-    ...(costUsd !== null ? { costUsd } : {}),
-    ...(response.reasoningContent != null ? { reasoningContent: String(response.reasoningContent) } : {}),
-  }
-}
 
 export function normalizeModelInvocation(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -183,6 +169,10 @@ export function normalizeModelInvocation(value) {
     iteration: Math.max(0, Number(value.iteration) || 0),
     attempt: Math.max(1, Number(value.attempt) || 1),
     status,
+  }
+  if (Object.hasOwn(value, 'callBudgetApplied')) {
+    if (typeof value.callBudgetApplied !== 'boolean') return null
+    normalized.callBudgetApplied = value.callBudgetApplied
   }
   if (version >= 2) {
     const idempotencyKey = String(value.idempotencyKey || '').trim()
@@ -206,26 +196,13 @@ export function normalizeModelInvocation(value) {
     } catch {
       return null
     }
-    const hasUsageApplied = Object.hasOwn(value, 'usageApplied')
-    if (hasUsageApplied && typeof value.usageApplied !== 'boolean') {
-      return null
-    }
-    const reconciliation = value.reconciliation
-    const isLegacyManualCompletion = !hasUsageApplied
-      && reconciliation
-      && typeof reconciliation === 'object'
-      && !Array.isArray(reconciliation)
-      && reconciliation.source === 'manual'
-      && reconciliation.outcome === 'completed'
-    // Provider-completed checkpoints created before usageApplied existed had
-    // already persisted their matching budget snapshot. A manually materialized
-    // response is the exception: the provider usage is first applied when the
-    // resumed loop consumes that response.
-    normalized.usageApplied = hasUsageApplied
-      ? value.usageApplied
-      : !isLegacyManualCompletion
   }
   if (status === 'failed' && value.errorCode) normalized.errorCode = String(value.errorCode)
+  const usageReceipt = normalizeModelInvocationUsage(value, status)
+  if (!usageReceipt) return null
+  Object.assign(normalized, usageReceipt)
+  const diagnostics = normalizeStoredModelRequestDiagnostics(value.modelRequestDiagnostics, normalized)
+  if (diagnostics) normalized.modelRequestDiagnostics = diagnostics
   if (value.reconciliation && typeof value.reconciliation === 'object'
     && !Array.isArray(value.reconciliation)) {
     const outcome = String(value.reconciliation.outcome || '')
@@ -315,6 +292,8 @@ function recoveryError(code, message, invocation) {
   error.retryable = false
   error.modelRequestId = invocation?.id || null
   error.modelInvocation = invocation ? cloneJson(invocation, null) : null
+  const diagnostics = publicModelRequestDiagnostics(invocation?.modelRequestDiagnostics)
+  if (diagnostics) error.modelRequestDiagnostics = diagnostics
   error.unsafeToReplay = true
   return error
 }

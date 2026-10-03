@@ -13,7 +13,7 @@ Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、�
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
   <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.11.54-blue" alt="v0.11.54" />
+  <a href="https://github.com/lichangjiang932-ship-it/Gugo/releases"><img src="https://img.shields.io/github/v/release/lichangjiang932-ship-it/Gugo" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -21,24 +21,21 @@ Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、�
 
 ## 这是什么
 
-一个**完整的 AI Agent 工作平台**，跟你熟悉的 Claude Code、Cursor、Cherry Studio、LobeChat、openhanako 是同一品类，同时提供浏览器版本和 Windows Electron 桌面应用。
+一个**本地优先的通用 Agent 工作台**，同时提供浏览器版本和 Windows Electron 桌面应用。既能回答和处理文本，也能通过经过授权的工具完成文件、代码、资料和产物任务；任务完成以真实执行与验证为依据。
 
 Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.com/lichangjiang932-ship-it/Gugo/releases)。
 
-| 维度 | Gugo | openhanako | Claude Code |
-|---|---|---|---|
-| 形态 | Web（浏览器即用）+ Windows Electron 桌面 | Electron 桌面 | CLI |
-| 部署 | 单 Node 进程 + SQLite | 多端打包 | 终端 |
-| 使用模式 | 默认本机单用户免登录；可选多用户认证与隔离 | 单机 | 单机 |
-| Artifact 实时预览 | PPT / Word / Excel / React / HTML Deck | 不支持 | 不支持 |
-| 知识图谱 | entity / relation / observation 三要素 + 图搜索 | 无 | 无 |
-| 后台作业 | 完整生命周期（创建/入队/重试/取消/步骤追踪） | 简化 | 无 |
-| MCP | stdio + SSE | 是 | 是 |
-| 子代理 | 独立上下文 + 工具白名单 | 是 | 是 |
-| Skill 系统 | 内置 + 可导入 + 内置 SQLite 系统库 | 是 | 是 |
-| 独立 Hub | 队列运行骨架（`HUB_ENABLED=1`，当前仅内置 `echo` 验证任务） | 是 | 无 |
-| 跨平台 Bridge | 飞书 / 微信 / Telegram 等（v0.10） | Telegram/飞书/微信/QQ | 无 |
-| 审批门控 | 服务端 pause/resume + 收件箱 + 单次调用批准/拒绝/改参数 | 无 | 权限提示 |
+设计方向是 Pi 式的清晰内核、Codex 式的执行循环、OpenWorker 式的本地状态归属，以及 DeepSeek Harness 式的插件扩展。WorkBuddy 仅作为技能/插件使用方式的参考，不作为任务完成控制的依据。
+
+| 边界 | Gugo 的职责 |
+|---|---|
+| 极简内核 | 版本化 loop、事件与工具执行契约；应用功能由宿主能力组合 |
+| 任务闭环 | 流式输出、工具执行、审批、验证、检查点、恢复与有界重试 |
+| 技能插件 | 可发现的能力和资源、权限范围、生命周期与兼容性检查 |
+| 本地优先 | 本地数据与明确目录身份；应用控制的出网经过统一政策 |
+| 界面 | 让用户看见进度、结果、阻碍和下一步，不用内部成功文案冒充验证 |
+
+实际能力、已确认缺陷及仍未达到的目标见 [通用 Agent 审计与验收记录](docs/GENERAL_AGENT_AUDIT_2026-09-07.md)。本地优先不等于任意脚本已经具备 OS 级网络隔离；也不保证所有模型都能无监督完成任意任务。
 
 ---
 
@@ -185,7 +182,7 @@ Compose 默认只把端口绑定到宿主机 `127.0.0.1`。若要从局域网或
 
 默认本地模式下可直接在「设置 → 模型」新增模型 Provider。模型配置会自动用于聊天、诊断、后台任务和子代理；留空 API Key 可保留原密钥。启用 `AUTH_MODE=multi_user` 后，各用户登录后分别配置自己的 Provider。
 
-Browser 工具需要受支持的 Node.js 版本（`^20.19.0`、`^22.13.0` 或 `>=24.0.0`）以及已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
+Browser 工具需要受支持的 Node.js 版本（`^20.19.0`、`^22.13.0` 或 `>=24.0.0`）以及已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。普通 snapshot 会有界遍历 open Shadow DOM 与同源 iframe；跨源 iframe 必须先调用 `browser_frames`，再用返回的 `frameId` 调用 `browser_switch_frame`。宿主会在创建独立 CDP isolated world 前重新验证 frame URL 与当前用户的 connected-app 所有权；frame 导航后旧 context 立即失效，必须重新列举和切换。
 
 视频/音频剪辑、转码、抽帧、拼接、音量调整和降噪需要 `ffmpeg` 与 `ffprobe`。官方 Windows 桌面包从 Electron `resources/bin` 自带 sidecar；源码或自托管部署可将它们加入 `PATH`，或用 `GUGO_FFMPEG_PATH` / `GUGO_FFPROBE_PATH` 指向绝对路径。详见 [配置说明](docs/CONFIGURATION.md#媒体工具可执行文件)。
 
@@ -233,6 +230,8 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `MAIL_SERVER/MAIL_PORT/MAIL_USERNAME/MAIL_PASSWORD` | 多用户部署必填 | 邮箱验证码服务；本地模式不需要 | — |
 | `WORKSPACE_FS_ENABLED` | 否 | 工作区文件工具开关；在「本地文件」显式授权的路径不受此开关限制 | `0` |
 | `WORKSPACE_SHELL_ENABLED` | 否 | 共享 `WORKSPACE_ROOT` 的 Shell 工具开关 | `0` |
+| `SHELL_SANDBOX_MODE` | 否 | `host` 或固定、无网络、限资源的逐调用 Docker 隔离 | `host` |
+| `SHELL_REQUIRE_OS_ISOLATION` | 否 | 设为 `1` 后拒绝 host Shell，隔离配置缺失时 fail closed | `0` |
 | `LOCAL_CODE_EXECUTION_ENABLED` | 否 | 用户授权 `read_write` 目录的代码执行开关；本机回环模式默认开启，远程/多人默认关闭 | 自动 |
 | `CODEX_APP_SERVER_ENABLED` | 否 | 仅精确值 `1` 启动外部 OpenAI Codex CLI `app-server` 子进程；该 CLI 可能按自身配置联网 | `0` |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
@@ -261,7 +260,7 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 
 > ⚠ `AUTH_MODE=local` 不提供网络访问控制，只适合绑定 `127.0.0.1` 的可信本机。任何局域网或公网监听都必须使用 `AUTH_MODE=multi_user`；公网还需要 HTTPS、SMTP、防火墙和反向代理限流。
 
-> ⚠ **Shell 信任模型**：开启共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，或在本机回环模式下把目录以 `read_write` 授权给代码执行，都等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**（变量拼接 / base64 管道 / `python -c` / `$()` 命令替换均可平凡绕过）。若需对不可信用户开放 Shell，必须上 OS 级隔离（容器 / nsjail / seccomp），不要依赖黑名单。
+> ⚠ **Shell 信任模型**：默认 `SHELL_SANDBOX_MODE=host`。开启共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，或在本机回环模式下把目录以 `read_write` 授权给代码执行，都等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**。若需容器隔离，可配置固定 Docker CLI/镜像并设 `SHELL_SANDBOX_MODE=docker` 与 `SHELL_REQUIRE_OS_ISOLATION=1`；Gugo 会禁网、禁 pull、使用只读 rootfs、降权并限制资源，并在取消/超时/异常后按宿主生成的随机容器名显式清理；清理失败会 fail closed。安全仍取决于 Docker daemon、镜像与宿主内核。
 
 共享工作区的写入、Shell 与 Git 需要用户信任，并受相应全局开关限制。独立的本地文件授权中，只有明确授予 `read_write` 的目录可用于代码执行；单文件、只读和“全部文件”授权都不会获得 Shell 权限。写入型 Shell 命令仍逐次审批。`WORKSPACE_SHARED_TRUSTED=1` 仅适用于单机可信用户，不是安全沙箱。
 
@@ -276,6 +275,9 @@ npm run serve    # 仅启动后端（需先 build）
 npm run local    # build + 启动
 npm run lint     # ESLint
 npm test         # 全量自动化测试
+npm run eval:offline  # 确定性运行时契约评测
+# 显式授权后运行真实模型任务集；格式与隔离边界见 docs/LIVE_AGENT_EVALS.md
+GUGO_LIVE_EVAL=1 npm run eval:live -- --dataset ./evals/tasks.json
 ```
 
 ---
@@ -295,6 +297,7 @@ Gugo/
 │   ├── utils/             # 路径、网络与安全通用工具
 │   └── mcp/               # MCP 客户端与服务端
 ├── shared/                # 前后端共享的事件契约
+├── sdk/                   # 无内部 service 依赖的 JavaScript / Python HTTP SDK
 ├── src/
 │   ├── pages/             # 页面与工作区视图
 │   ├── components/        # 可复用组件
@@ -307,6 +310,7 @@ Gugo/
 │   ├── CONFIGURATION.md   # 配置参考
 │   ├── KERNEL_BOUNDARY.md # 极简内核边界与完成标准
 │   ├── OPERATION_GUIDE.md # 部署与运维
+│   ├── SDK.md             # 外部宿主 HTTP SDK v1
 │   └── SCHEDULING.md      # Cron / 调度说明
 └── .github/workflows/
     └── ci.yml             # 测试、覆盖率、安全扫描与镜像构建
@@ -318,7 +322,7 @@ Gugo/
 
 见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-插件作者可参阅公开的 [Plugin Compatibility Contract v1](./docs/PLUGIN_COMPATIBILITY_V1.md)，其中包含离线 Marketplace 布局、Ed25519 publisher 签名、兼容/升级政策和可执行夹具。
+外部宿主可使用不导入内部 service 的 [Gugo HTTP SDK v1](./docs/SDK.md) JavaScript / Python 客户端启动、查询、跟踪、引导、取消和恢复 Turn。插件作者可参阅公开的 [Plugin Compatibility Contract v1](./docs/PLUGIN_COMPATIBILITY_V1.md)，其中包含离线 Marketplace 布局、Ed25519 publisher 签名、兼容/升级政策和可执行夹具。
 
 报告安全问题见 [SECURITY.md](./SECURITY.md)，行为准则见 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)。
 
@@ -330,6 +334,11 @@ Gugo/
 
 本项目在架构上**借鉴**了：
 
+- [Pi](https://github.com/earendil-works/pi) — 小型循环、模型消息转换与扩展边界
+- [OpenAI Codex](https://github.com/openai/codex) — Agent 执行、工具协议、恢复和上下文管理
+- [OpenWorker](https://github.com/andrewyng/openworker) — 本地优先、工作目录与状态归属
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — 插件、工具发现与技能资源组织
+- WorkBuddy — 仅技能/插件的复用方式，不采用其任务完成控制设计
 - [openhanako](https://github.com/liliMozi/openhanako) — Manager facade、独立 Hub、Plugin SDK、SessionFile sidecar
 - Claude Code、Cursor、OpenAI Codex CLI — Agent 工作流、apply_patch、reflect 节奏
 - [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) — 钉记忆、TODO、effort 滑块、session meter

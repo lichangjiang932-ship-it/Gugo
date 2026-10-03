@@ -202,6 +202,22 @@ test('turn routes expose host configuration and cleanup failures as actionable 5
   }, { resolveEngine })
 })
 
+test('HTTP turn clients cannot set the host-only session workspace binding mode', async () => {
+  const user = issueTestSession({ email: 'turn-workspace-mode-route@example.invalid' })
+  let received
+  const engine = { async startTurn(input) { received = input; return { id: 'route-workspace-mode-turn' } } }
+  await withTurnRouteEngine(engine, async (routeOrigin) => {
+    const response = await fetch(`${routeOrigin}/api/turns/run`, { method: 'POST', headers: auth(user.token),
+      body: JSON.stringify({ sessionId: 'route-workspace-mode-session', content: 'hello', workspacePath: 'C:\\WebProject',
+        sessionWorkspaceMode: 'create-only', sessionWorkspaceExplicit: true, workspaceExplicit: true }) })
+    assert.equal(response.status, 202)
+    assert.equal(received.workspacePath, 'C:\\WebProject')
+    for (const field of ['sessionWorkspaceMode', 'sessionWorkspaceExplicit', 'workspaceExplicit']) {
+      assert.equal(Object.hasOwn(received, field), false, field)
+    }
+  })
+})
+
 test('turn run route preserves structured model readiness failures', async () => {
   const user = issueTestSession({ email: 'turn-readiness-route@example.com' })
   let failure = new ModelReadinessError('MODEL_CONFIG_MISSING', {
@@ -300,6 +316,46 @@ test('turn resume route forwards only an explicit failed retry request', async (
   })
   assert.equal(captured[0].retryFailed, false)
   assert.equal(captured[1].retryFailed, true)
+})
+
+test('directory rejection route forwards a validated sequence and the authenticated owner', async () => {
+  const user = issueTestSession({ email: 'directory-rejection-route@example.com' })
+  const captured = []
+  await withTurnRouteEngine({
+    cancelTurn: async (input) => { captured.push(input); return { status: 'cancelled' } },
+  }, async (routeOrigin) => {
+    for (const directoryPausedSequence of [undefined, 0, 12]) {
+      const response = await fetch(routeOrigin + '/api/turns/directory-reject-turn/cancel', {
+        method: 'POST', headers: auth(user.token),
+        body: JSON.stringify({ sessionId: 'directory-reject-session', userId: 'not-the-owner',
+          ...(directoryPausedSequence === undefined ? {} : { directoryPausedSequence }) }),
+      })
+      assert.equal(response.status, 200)
+    }
+  })
+  assert.equal(Object.hasOwn(captured[0], 'directoryPausedSequence'), false)
+  assert.equal(captured[1].directoryPausedSequence, 0)
+  assert.equal(captured[2].directoryPausedSequence, 12)
+  assert.ok(captured.every(input => input.userId === user.userId
+    && input.sessionId === 'directory-reject-session' && input.turnId === 'directory-reject-turn'))
+})
+
+test('invalid directory rejection sequences are rejected before calling the engine', async () => {
+  const user = issueTestSession({ email: 'directory-rejection-invalid-route@example.com' })
+  let cancellations = 0
+  await withTurnRouteEngine({
+    cancelTurn: async () => { cancellations += 1; return { status: 'cancelled' } },
+  }, async (routeOrigin) => {
+    for (const directoryPausedSequence of [null, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, '2', true, {}, []]) {
+      const response = await fetch(routeOrigin + '/api/turns/directory-reject-turn/cancel', {
+        method: 'POST', headers: auth(user.token),
+        body: JSON.stringify({ sessionId: 'directory-reject-session', directoryPausedSequence }),
+      })
+      assert.equal(response.status, 400)
+      assert.equal((await response.json()).error.code, 'TURN_DIRECTORY_PAUSE_SEQUENCE_INVALID')
+    }
+  })
+  assert.equal(cancellations, 0)
 })
 
 test('turn resume route returns a structured manual-repair dead letter', async () => {
