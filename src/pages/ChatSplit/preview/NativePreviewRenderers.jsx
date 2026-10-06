@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, LoaderCircle } from 'lucide-react'
 import { XlsxPreview } from './ArtifactRenderers.jsx'
 import { PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
 import { withPreviewRetry } from './previewUrl.js'
+import { previewScale, useElementWidth, usePreviewZoom } from './previewZoomState.js'
 
 export function NativePreviewRenderer({ file, preview, t, url }) {
   return <NativeFilePreview key={`${preview.kind}:${url}`} kind={preview.kind} file={file} url={url} t={t} />
@@ -11,16 +12,30 @@ export function NativePreviewRenderer({ file, preview, t, url }) {
 function NativeFilePreview({ file, kind, t, url }) {
   const [status, setStatus] = useState('loading')
   const [attempt, setAttempt] = useState(0)
+  const [naturalWidth, setNaturalWidth] = useState(0)
+  const [frameRef, frameWidth] = useElementWidth()
+  const { zoom, setFitPercent } = usePreviewZoom()
+  // An image is drawn whole in the pane (never upscaled) until the reader picks
+  // a zoom; the control shows the scale the fit produced.
+  const scale = previewScale(zoom, naturalWidth, frameWidth, 40)
+  useEffect(() => {
+    if (kind === 'image' && zoom === 'fit' && naturalWidth > 0 && frameWidth > 0) setFitPercent(Math.round(scale * 100))
+  }, [frameWidth, kind, naturalWidth, scale, setFitPercent, zoom])
   const requestUrl = withPreviewRetry(url, attempt)
-  const ready = () => setStatus('ready')
+  const ready = (event) => {
+    if (kind === 'image') setNaturalWidth(event?.currentTarget?.naturalWidth || 0)
+    setStatus('ready')
+  }
   const failed = () => setStatus('failed')
   const retry = () => {
     setStatus('loading')
     setAttempt((value) => value + 1)
   }
   return (
-    <div className={`relative flex h-full min-h-0 items-center justify-center overflow-auto ${kind === 'video' ? 'bg-black p-3' : 'bg-paper-2 p-5'}`}>
-      {kind === 'image' && <img key={attempt} src={requestUrl} alt={file.filename || file.title || ''} onLoad={ready} onError={failed} referrerPolicy="no-referrer" className={`${status === 'failed' ? 'hidden' : 'block'} max-h-full max-w-full rounded-control object-contain shadow-sm`} />}
+    <div ref={frameRef} className={`relative flex h-full min-h-0 overflow-auto ${kind === 'image' && zoom !== 'fit' ? 'items-start justify-start' : 'items-center justify-center'} ${kind === 'video' ? 'bg-black p-3' : 'bg-paper-2 p-5'}`}>
+      {kind === 'image' && <img key={attempt} src={requestUrl} alt={file.filename || file.title || ''} onLoad={ready} onError={failed} referrerPolicy="no-referrer"
+        style={zoom !== 'fit' && naturalWidth > 0 ? { width: `${Math.round(naturalWidth * scale)}px`, maxWidth: 'none', margin: 'auto' } : undefined}
+        className={`${status === 'failed' ? 'hidden' : 'block'} ${zoom === 'fit' ? 'max-h-full max-w-full' : ''} rounded-control object-contain shadow-sm`} />}
       {kind === 'pdf' && <iframe key={attempt} src={requestUrl} title={file.filename || file.title || 'PDF'} onLoad={ready} onError={failed} referrerPolicy="no-referrer" className={`${status === 'failed' ? 'hidden' : 'block'} h-full w-full border-0 bg-white`} />}
       {kind === 'audio' && <audio key={attempt} controls preload="metadata" src={requestUrl} onLoadedMetadata={ready} onError={failed} className={`${status === 'failed' ? 'hidden' : 'block'} w-full max-w-xl`} />}
       {kind === 'video' && <video key={attempt} controls preload="metadata" src={requestUrl} onLoadedMetadata={ready} onError={failed} className={`${status === 'failed' ? 'hidden' : 'block'} max-h-full max-w-full`} />}

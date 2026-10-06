@@ -181,7 +181,7 @@ test('successful PPTX previews expose an in-place refresh for same-path local ed
   try {
     await act(async () => h.root.render(<DirectFilePreview file={file} url={url} t={t} />))
     await h.settle()
-    const refresh = [...h.container.querySelectorAll('button')].find((button) => button.textContent.includes('chatPreview.refreshPreview'))
+    const refresh = h.container.querySelector('button[aria-label="chatPreview.refreshPreview"]')
     assert.ok(refresh)
     await act(async () => refresh.click())
     await h.settle()

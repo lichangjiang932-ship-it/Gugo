@@ -17,11 +17,11 @@ export function toolFreeResponseError(state, context) {
 /**
  * Terminal authority outcomes cannot be converted into another model/tool attempt.
  *
- * Refusals are the exception, as in Claude Code: a call the user declined, or one
- * a permission rule/hook forbade, is a tool result the model reads and works
- * around — the turn continues. Only what nobody decided (expiry, a missing
- * per-call approval, a broken authorization system), cancellation and unknown
- * side effects still end the turn.
+ * A user's refusal ends the turn (absorbRefusedToolStop decides how, and lets a
+ * note written with it steer the model on). A permission rule/hook refusal is a
+ * tool result the model reads and works around. What nobody decided (expiry, a
+ * missing per-call approval, a broken authorization system), cancellation and
+ * unknown side effects end the turn.
  */
 export function toolStopBoundary(result, toolCallId = null) {
   if (!result) return null
@@ -36,7 +36,7 @@ export function toolStopBoundary(result, toolCallId = null) {
   if (result.goalPlanBlocked === true) return null
   if (result.deniedByUser === true || code === 'approval_denied') {
     // The rest of this batch is skipped so the user is not asked again about
-    // calls planned before their answer; the model then gets the next round.
+    // calls planned before their answer.
     return { kind: 'refused', code: 'approval_denied', reason: 'approval_denied' }
   }
   if (result.expired === true) return { kind: 'denied', code: 'approval_expired', reason: 'approval_expired' }
@@ -52,9 +52,9 @@ export function toolStopBoundary(result, toolCallId = null) {
 }
 
 /**
- * Consecutive refused rounds after which the turn stops and waits for the user.
- * One refusal goes back to the model; a second in a row means it is proposing
- * what the user keeps declining. (A third identical proposal would also trip the
+ * Consecutive policy-refused rounds after which the turn stops and waits for the
+ * user. One goes back to the model; a second in a row means it is proposing what
+ * the policy keeps declining. (A third identical proposal would also trip the
  * repeat-call guard, which reports a less accurate no-progress stop.)
  */
 export const MAX_CONSECUTIVE_REFUSED_ROUNDS = 2
@@ -71,13 +71,16 @@ export function policyRefusal(result) {
 }
 
 /**
- * A refused round goes back to the model. Repeated refusals with nothing else
- * succeeding in between mean the model keeps proposing what the user or the
- * policy keeps declining, so the turn ends there instead of asking forever.
+ * What a refused round means, as in Claude Code:
  *
- * A round counts as refused when the user declined a call in it, or when every
- * call in it was refused by policy — one refused call next to work that ran is
- * just a failed call, and the round made progress.
+ * - The user declining a call stops the turn and waits for them ("what should
+ *   be done instead?"). Nothing in the batch after it runs or is asked about.
+ *   If the user wrote a note with the refusal, it is already queued as steering,
+ *   and the terminal path defers to it: the model reads the refusal and the note
+ *   together and carries on from there.
+ * - A permission rule, hook or mode refusing every call in a round goes back to
+ *   the model, which can work around it. Repeated rounds of that with nothing
+ *   succeeding in between end the turn instead of asking forever.
  */
 export function absorbRefusedToolStop(state) {
   const i = state.iteration
@@ -88,13 +91,7 @@ export function absorbRefusedToolStop(state) {
   }
   const stop = i.toolStop
   if (stop?.kind !== 'refused') return false
-  // Declining the very check a write still needs leaves nothing the model can do
-  // except ask for it again, which the verification gate would insist on. The
-  // turn stops there and reports the write as standing but unverified.
-  const refusedVerification = state.hasPendingMutationVerification?.() === true
-    && calls.some((call) => call.checkpointResult?.deniedByUser === true
-      && state.availableVerificationToolNames?.includes(call.name))
-  if (refusedVerification) {
+  if (stop.code === 'approval_denied') {
     stop.kind = 'denied'
     return false
   }

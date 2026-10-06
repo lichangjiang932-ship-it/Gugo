@@ -23,11 +23,12 @@ export const DOCX_PREVIEW_CSP = [
 /**
  * Page/section options. Wrapper off: the iframe already provides the frame.
  *
- * `ignoreWidth`/`ignoreHeight` are on so the document flows to the pane it is
- * shown in. The library otherwise writes the document's own page size onto each
- * section as an inline pixel width and an inline minimum height, which overflows
- * a side panel that is narrower than A4 and leaves a tall empty block under short
- * documents. The page breaks a reader relies on still come from `breakPages`.
+ * Each section keeps the document's own page width (`ignoreWidth` off), so a
+ * page looks like the page Word prints; the frame then scales the whole page to
+ * the pane (`buildDocxSrcdoc`'s `scale`) instead of reflowing it, the way the
+ * reference desktop apps show a document at "70%" in a narrow panel.
+ * `ignoreHeight` stays on: a page's minimum height would pad a short document
+ * with a tall empty block. Page breaks still come from `breakPages`.
  */
 export const DOCX_PREVIEW_OPTIONS = Object.freeze({
   inWrapper: false,
@@ -35,39 +36,55 @@ export const DOCX_PREVIEW_OPTIONS = Object.freeze({
   renderHeaders: true,
   renderFooters: true,
   useBase64URL: true,
-  ignoreWidth: true,
+  ignoreWidth: false,
   ignoreHeight: true,
   ignoreFonts: false,
   ignoreLastRenderedPageBreak: false,
   className: 'docx',
 })
 
+/** A4 at 96 dpi, for a document that declares no page size. */
+export const DOCX_DEFAULT_PAGE_WIDTH_PX = 794
+
+const UNIT_PX = Object.freeze({ px: 1, pt: 96 / 72, in: 96, cm: 96 / 2.54, mm: 96 / 25.4 })
+
+/** The widest page width the rendered sections declare, in CSS pixels. */
+export function docxPageWidthPx(container) {
+  const sections = container?.querySelectorAll?.('section.docx') || []
+  let widest = 0
+  for (const section of sections) {
+    const match = /^([\d.]+)(px|pt|in|cm|mm)$/u.exec(String(section.style?.width || '').trim())
+    if (match) widest = Math.max(widest, Number(match[1]) * UNIT_PX[match[2]])
+  }
+  return widest > 0 ? Math.round(widest) : DOCX_DEFAULT_PAGE_WIDTH_PX
+}
+
 const BASE_CSS = [
-  'html,body{margin:0;padding:0;background:transparent}',
-  'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}',
-  // No hard-coded page colour: the frame sits on the app surface, so leaving
-  // the sections transparent keeps light/dark theming correct and avoids
-  // inventing a colour that only matches one theme.
-  '.docx{margin:0 auto 12px}',
-  // The pane can be resized narrower than the page, so the document is bound to
-  // the frame instead of keeping its own page width and scrolling sideways.
-  '.docx,section.docx{width:100%;max-width:100%;box-sizing:border-box}',
+  'html,body{margin:0;padding:0}',
+  // The desk the pages sit on, like a word processor's reading view; pages are
+  // white because a document's own colours assume paper.
+  'html{background:#eceef1}',
+  '@media (prefers-color-scheme: dark){html{background:#26282c}}',
+  'body{padding:16px 0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}',
+  'section.docx{margin:0 auto 16px;box-sizing:border-box;background:#fff;color:#111;box-shadow:0 1px 3px rgba(0,0,0,.12),0 6px 18px -6px rgba(0,0,0,.18)}',
+  'section.docx:last-child{margin-bottom:0}',
   '.docx img,.docx svg{max-width:100%;height:auto}',
-  '.docx table{max-width:100%}',
 ].join('')
 
 /**
  * Serialize a rendered DOCX body and its stylesheet into one self-contained
  * document. Styles and body share a single `<style>` because the document's own
- * rules must precede the markup they style.
+ * rules must precede the markup they style. `scale` zooms the pages as a whole
+ * (layout included, so the frame scrolls the scaled height).
  */
-export function buildDocxSrcdoc({ bodyHtml = '', styleText = '', title = '' } = {}) {
+export function buildDocxSrcdoc({ bodyHtml = '', styleText = '', title = '', scale = 1 } = {}) {
   const safeTitle = String(title || '').replace(/[<>&]/gu, '')
+  const zoom = Number.isFinite(scale) && scale > 0 ? Math.round(scale * 1000) / 1000 : 1
   return [
     '<!doctype html><html><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${DOCX_PREVIEW_CSP}">`,
     `<title>${safeTitle}</title>`,
-    `<style>${BASE_CSS}${String(styleText || '')}</style>`,
+    `<style>${BASE_CSS}${zoom === 1 ? '' : `body{zoom:${zoom}}`}${String(styleText || '')}</style>`,
     '</head><body>',
     String(bodyHtml || ''),
     '</body></html>',

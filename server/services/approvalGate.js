@@ -115,8 +115,8 @@ export function formatDeniedToolResult(gate, locale = 'zh') {
     code: 'approval_denied',
     deniedByUser: true,
     retryable: false,
-    // Read by the model, which keeps working (Claude Code behaviour): it must
-    // not re-propose the declined call, but the task is not over.
+    // The turn stops on a refusal; the model reads this when the user's note
+    // (or next message) carries it on, and must not re-propose the call.
     error: localized(locale,
       `${gate?.reason || '用户拒绝了这次调用'}，该调用未执行。不要原样重试；改用不需要这一步的办法继续，或说明你需要什么并询问用户。`,
       `${gate?.reason || 'The user rejected this call'}; it was not executed. Do not retry it as-is: continue with an approach that does not need it, or explain what you need and ask the user.`),

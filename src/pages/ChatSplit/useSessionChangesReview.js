@@ -65,6 +65,7 @@ export default function useSessionChangesReview({ messages, onOpen = null, onOpe
         label: 'DIFF',
         path: file.path || file.displayPath,
         summary: `+${counts.additions} −${counts.deletions}`,
+        counts: { additions: counts.additions, deletions: counts.deletions },
         hunks: Array.isArray(edits) ? edits : [],
       },
     })

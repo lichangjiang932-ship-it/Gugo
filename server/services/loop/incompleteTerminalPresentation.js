@@ -56,7 +56,7 @@ export function localizedTerminalModelText(locale, value, { strictLocale = false
 
 const COPY = Object.freeze({
   zh: Object.freeze({
-    approval_denied: '你已拒绝本次操作，本轮已停止。已有结果仍保留；请明确下一步后再继续。',
+    approval_denied: '你拒绝了这次操作，已停下等你决定。已完成的部分都保留着——告诉我接下来该怎么做。',
     approval_required: '本次操作还需要逐次审批，本轮已停止。请完成审批后再继续。',
     approval_expired: '审批已过期，本轮已停止。已有结果仍保留；请重新确认后再继续。',
     tool_permission_denied: '当前权限策略禁止此操作，本轮已停止。请核对权限后再继续。',
@@ -92,7 +92,7 @@ const COPY = Object.freeze({
     }),
   }),
   en: Object.freeze({
-    approval_denied: 'You rejected this operation, so this turn stopped. Confirmed results were retained; choose the next step before continuing.',
+    approval_denied: 'You declined this operation, so I stopped here. Everything done so far is kept — tell me what to do instead.',
     approval_required: 'This operation still needs per-call approval, so this turn stopped. Approve it before continuing.',
     approval_expired: 'Approval expired, so this turn stopped. Confirmed results were retained; confirm again before continuing.',
     tool_permission_denied: 'The current permission policy forbids this operation, so this turn stopped. Review the permissions before continuing.',

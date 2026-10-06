@@ -2,19 +2,14 @@ import { useEffect, useRef } from 'react'
 import {
   Code,
   ArrowLeft,
-  Code2,
   Copy,
   Download,
   Eye,
-  FileImage,
-  FileText,
-  FileType2,
-  Globe,
   Maximize2,
+  MessageSquarePlus,
   Minimize2,
   Presentation,
   Sparkles,
-  Table2,
   X,
 } from 'lucide-react'
 import { getArtifactToolbarActions } from './artifactToolbar.js'
@@ -22,15 +17,14 @@ import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { canViewDirectFileSource } from '../../../lib/directFileSource.js'
 import FileIdentity from './FileIdentity.jsx'
 import FileActions from './FileActions.jsx'
+import { CHIP_CLASS } from './previewChipStyles.js'
+import FileTypeGlyph from '../../../components/FileTypeGlyph.jsx'
+import { classifyDirectFile } from '../../../lib/directFilePreview.js'
+import { ZoomControl } from './PreviewZoom.jsx'
+import { ZOOMABLE_KINDS } from './previewZoomState.js'
 
-export function ArtifactIcon({ type }) {
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(type)) return <FileImage className="h-4 w-4" />
-  if (type === 'pdf') return <FileType2 className="h-4 w-4" />
-  if (['html', 'html_multi', 'mermaid', 'chart', 'svg'].includes(type)) return <Globe className="w-4 h-4" />
-  if (type === 'pptx') return <Presentation className="w-4 h-4" />
-  if (type === 'xlsx') return <Table2 className="w-4 h-4" />
-  if (type === 'react') return <Code2 className="w-4 h-4" />
-  return <FileText className="w-4 h-4" />
+export function ArtifactIcon({ type, filename = '' }) {
+  return <FileTypeGlyph type={type} name={filename} size={16} />
 }
 
 export function PreviewHeader({ tabs, activeId, maximized, focused = false, setMaximized, onSelectTab, onCloseTab, onClose, t }) {
@@ -80,7 +74,7 @@ export function PreviewHeader({ tabs, activeId, maximized, focused = false, setM
                 className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-l-md pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ink/25"
                 title={tab.preview.filename}
               >
-                <span className={`shrink-0 ${active ? 'text-ink-soft' : 'text-ink-fade'}`}><ArtifactIcon type={tab.preview.type} /></span>
+                <span className={`shrink-0 ${active ? 'text-ink-soft' : 'text-ink-fade'}`}><ArtifactIcon type={tab.preview.type} filename={tab.preview.filename} /></span>
                 <span className="min-w-0 truncate text-xs font-medium">{tab.preview.filename}</span>
               </button>
               <button
@@ -142,16 +136,32 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
   )
 }
 
-export function DirectFileToolbar({ filename, type, file = {}, view = 'preview', setView, submenuFlipped = false, t }) {
-  const preview = { ...file, filename, label: type.toUpperCase() }
+/**
+ * The head of a previewed file, laid out like the reference desktop apps: the
+ * file chip (its menu holds what can be done with the file), "Request changes"
+ * to hand the file to the composer, and on the right the view switch for files
+ * with a readable source or the zoom for a laid-out page.
+ */
+export function DirectFileToolbar({ filename, type, file = {}, view = 'preview', setView, submenuFlipped = false, onRequestChange = null, zoom = null, t }) {
+  const preview = { ...file, filename, type, label: type.toUpperCase() }
+  const kind = classifyDirectFile(preview)
   return (
-    <div data-testid="preview-command-bar" className="chat-preview-toolbar chat-direct-file-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
-      <FileIdentity preview={preview} t={t} />
-      {setView && canViewDirectFileSource(preview) && <div className="inline-flex h-8 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-xs">
-        <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
-        <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
-      </div>}
-      <FileActions key={`${file.url || ''}:${file.path || ''}:${file.previewRevision || ''}`} file={preview} setView={setView} submenuFlipped={submenuFlipped} t={t} />
+    <div data-testid="preview-command-bar" className="chat-preview-toolbar chat-direct-file-toolbar flex min-h-12 shrink-0 items-center gap-2 border-b border-ink/10 bg-paper px-3 py-2">
+      <FileActions key={`${file.url || ''}:${file.path || ''}:${file.previewRevision || ''}`} file={preview} submenuFlipped={submenuFlipped} t={t} />
+      {onRequestChange && (
+        <button type="button" data-testid="preview-request-change" onClick={() => onRequestChange(preview)}
+          title={t('chatPreview.requestChangeHint')} className={`${CHIP_CLASS} chat-preview-request-change shrink-0`}>
+          <MessageSquarePlus className="h-3.5 w-3.5 text-ink-soft" aria-hidden="true" />
+          <span className="chat-preview-request-label">{t('chatPreview.requestChange')}</span>
+        </button>
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {setView && canViewDirectFileSource(preview) && <div className="inline-flex h-8 shrink-0 overflow-hidden rounded-full border border-ink/10 bg-paper-2 p-0.5 text-xs">
+          <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
+          <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} />
+        </div>}
+        {zoom && ZOOMABLE_KINDS.has(kind) && view !== 'source' && <ZoomControl state={zoom} t={t} />}
+      </div>
     </div>
   )
 }
@@ -173,7 +183,7 @@ function ActionButton({ compact = false, disabled, icon, label, onClick, primary
 
 function Tab({ active, onClick, icon, label, bordered }) {
   return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={`inline-flex items-center gap-1.5 px-2.5 ${bordered ? 'border-l border-ink/10' : ''} ${active ? 'bg-paper text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}>
+    <button type="button" onClick={onClick} aria-pressed={active} className={`inline-flex items-center gap-1.5 px-2.5 ${bordered ? 'border-l border-ink/10' : 'rounded-full'} ${active ? 'bg-paper text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}>
       {icon}{label}
     </button>
   )

@@ -210,8 +210,9 @@ test('the file menu states the complete filename and hides "Open with" without a
   const t = (key, values = {}) => key === 'chatPreview.filePath' ? `File path: ${values.path}` : key
   try {
     await h.render(<DirectFileToolbar filename={filename} type="pptx" url={url} t={t} />)
-    const identity = h.rootEl.querySelector('.chat-preview-file-identity [title]')
+    const identity = h.rootEl.querySelector('[data-testid="preview-file-path"]')
     assert.equal(identity.getAttribute('title'), filename)
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-open-menu-title"]').getAttribute('title'), filename)
     // No desktop bridge in this harness, so the two local actions cannot work and
     // the menu explains that instead of listing them.
     assert.equal(h.rootEl.querySelector('[data-testid="preview-open-method"]'), null)

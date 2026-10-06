@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
+import { AlertCircle, LoaderCircle } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
-import { DOCX_PREVIEW_OPTIONS, buildDocxSrcdoc } from '../../../lib/docxPreview.js'
+import { DOCX_PREVIEW_OPTIONS, buildDocxSrcdoc, docxPageWidthPx } from '../../../lib/docxPreview.js'
+import { previewScale, useElementWidth, usePreviewZoom } from './previewZoomState.js'
 import { DocxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
 import PptxFilePreview from './PptxFilePreview.jsx'
 import { InteractiveHtmlFilePreview } from './HtmlFilePreview.jsx'
 import { NativePreviewRenderer, WorkbookPreview } from './NativePreviewRenderers.jsx'
-import { OpenOriginalLink, PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
+import { PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
 import { BUILTIN_PREVIEW_RENDERER_OWNER, previewRendererRegistry } from './previewRendererRegistry.js'
 import { withPreviewRetry } from './previewUrl.js'
 import { canViewDirectFileSource } from '../../../lib/directFileSource.js'
 import DirectFileSource from './DirectFileSource.jsx'
+import UnsupportedFilePreview from './UnsupportedFilePreview.jsx'
 
 export { DirectHtmlUrlPreview } from './HtmlFilePreview.jsx'
 
@@ -84,8 +86,10 @@ function DocxFileRenderer({ preview, file, url, t }) {
   // whether the current url has produced a result yet, so the effect never
   // writes state synchronously.
   const requestKey = String(url || '')
-  const [docxState, setDocxState] = useState({ key: '', status: 'ready', html: '', error: '' })
+  const [docxState, setDocxState] = useState({ key: '', status: 'ready', body: '', styles: '', pageWidth: 0, error: '' })
   const current = docxState.key === requestKey ? docxState : null
+  const [frameRef, frameWidth] = useElementWidth()
+  const { zoom, setFitPercent } = usePreviewZoom()
   useEffect(() => {
     if (!requestKey) return undefined
     let cancelled = false
@@ -107,24 +111,35 @@ function DocxFileRenderer({ preview, file, url, t }) {
       setDocxState({
         key: requestKey,
         status: 'ready',
-        html: buildDocxSrcdoc({
-          bodyHtml: body.innerHTML,
-          // textContent, not innerHTML: docx-preview fills the style container
-          // with a <style> element, and nesting that inside our own <style>
-          // turns the rules into text.
-          styleText: styles.textContent || '',
-          title: file?.filename || preview?.title || '',
-        }),
+        body: body.innerHTML,
+        // textContent, not innerHTML: docx-preview fills the style container
+        // with a <style> element, and nesting that inside our own <style>
+        // turns the rules into text.
+        styles: styles.textContent || '',
+        pageWidth: docxPageWidthPx(body),
         error: '',
       })
     }
     render().catch((cause) => {
       if (!cancelled) {
-        setDocxState({ key: requestKey, status: 'error', html: '', error: cause?.message || String(cause) })
+        setDocxState({ key: requestKey, status: 'error', body: '', styles: '', pageWidth: 0, error: cause?.message || String(cause) })
       }
     })
     return () => { cancelled = true }
-  }, [requestKey, file?.filename, preview?.title])
+  }, [requestKey])
+
+  // Whole percents: a resize rebuilds the frame only when the page would
+  // actually be drawn at a different size.
+  const percent = Math.round(previewScale(zoom, current?.pageWidth, frameWidth) * 100)
+  useEffect(() => {
+    if (zoom === 'fit' && current?.status === 'ready' && frameWidth > 0) setFitPercent(percent)
+  }, [current?.status, frameWidth, percent, setFitPercent, zoom])
+  const srcdoc = useMemo(() => (current?.status === 'ready' ? buildDocxSrcdoc({
+    bodyHtml: current.body,
+    styleText: current.styles,
+    title: file?.filename || preview?.title || '',
+    scale: percent / 100,
+  }) : ''), [current, file?.filename, percent, preview?.title])
 
   if (!requestKey) {
     return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} />
@@ -134,14 +149,20 @@ function DocxFileRenderer({ preview, file, url, t }) {
   }
   if (current.status === 'ready') {
     return (
-      <iframe
-        data-testid="docx-layout-frame"
-        // Empty sandbox: no scripts, no same-origin, no forms, no downloads.
-        sandbox=""
-        srcDoc={current.html}
-        title={file?.filename || preview?.title || 'document'}
-        className="h-full w-full border-0 bg-paper"
-      />
+      <div ref={frameRef} className="h-full w-full">
+        <iframe
+          // A fresh frame per scale: swapping srcdoc in place on an existing
+          // frame left the new document unlaid (0×0) in Chromium.
+          key={percent}
+          data-testid="docx-layout-frame"
+          data-scale={percent}
+          // Empty sandbox: no scripts, no same-origin, no forms, no downloads.
+          sandbox=""
+          srcDoc={srcdoc}
+          title={file?.filename || preview?.title || 'document'}
+          className="h-full w-full border-0 bg-paper-2"
+        />
+      </div>
     )
   }
   // Never lose the document because the faithful renderer failed: fall back to
@@ -177,12 +198,7 @@ function SourceFileRenderer({ preview }) {
 }
 
 function UnsupportedFileRenderer({ file, t, url }) {
-  return <PreviewStatus
-    icon={<FileText className="h-6 w-6" />}
-    text={file.filename || file.title || 'artifact'}
-    detail={t('chatPreview.unsupportedHint')}
-    action={<OpenOriginalLink url={url} t={t} />}
-  />
+  return <UnsupportedFilePreview file={file} t={t} url={url} />
 }
 
 // Built-ins live with the registry. Keep the previous renderer available while

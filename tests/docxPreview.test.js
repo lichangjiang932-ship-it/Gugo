@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  DOCX_DEFAULT_PAGE_WIDTH_PX,
   DOCX_PREVIEW_CSP,
   DOCX_PREVIEW_OPTIONS,
   buildDocxSrcdoc,
+  docxPageWidthPx,
 } from '../src/lib/docxPreview.js'
 
 test('the docx frame document is self-contained and locked down', () => {
@@ -44,15 +46,21 @@ test('preview options keep page boundaries and inline images', () => {
   assert.ok(Object.isFrozen(DOCX_PREVIEW_OPTIONS))
 })
 
-test('the document flows into the pane instead of keeping its own page box', () => {
-  // The library otherwise writes the document's page width onto every section as
-  // an inline pixel width, which overflows a side panel narrower than A4, and a
-  // minimum height that pads short documents with a tall empty block.
-  assert.equal(DOCX_PREVIEW_OPTIONS.ignoreWidth, true)
+test('pages keep their own width and the frame scales them to the pane', () => {
+  // The page looks like the page Word prints; a narrow pane scales it instead of
+  // reflowing it. A page minimum height would pad a short document, so it is off.
+  assert.equal(DOCX_PREVIEW_OPTIONS.ignoreWidth, false)
   assert.equal(DOCX_PREVIEW_OPTIONS.ignoreHeight, true)
-  // Page boundaries must survive the reflow: this is the visible page break.
   assert.equal(DOCX_PREVIEW_OPTIONS.breakPages, true)
-  const srcdoc = buildDocxSrcdoc({ bodyHtml: '<section class="docx"></section>' })
-  assert.match(srcdoc, /section\.docx\{width:100%/u)
-  assert.match(srcdoc, /\.docx img,\.docx svg\{max-width:100%/u)
+  assert.doesNotMatch(buildDocxSrcdoc({ bodyHtml: '<section class="docx"></section>' }), /zoom:/u)
+  assert.match(buildDocxSrcdoc({ bodyHtml: '<section class="docx"></section>', scale: 0.7 }), /body\{zoom:0\.7\}/u)
+  assert.match(buildDocxSrcdoc({ scale: 0.7 }), /section\.docx\{[^}]*background:#fff/u, 'pages are paper on a desk')
+})
+
+test('the page width comes from the widest rendered section, in CSS pixels', () => {
+  const sections = (...widths) => ({ querySelectorAll: () => widths.map((width) => ({ style: { width } })) })
+  assert.equal(docxPageWidthPx(sections('595.3pt')), 794, 'A4 in points')
+  assert.equal(docxPageWidthPx(sections('612pt', '792pt')), 1056, 'a landscape section widens the page')
+  assert.equal(docxPageWidthPx(sections('8.5in')), 816)
+  assert.equal(docxPageWidthPx(sections('')), DOCX_DEFAULT_PAGE_WIDTH_PX, 'no declared size falls back to A4')
 })

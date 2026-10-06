@@ -444,6 +444,7 @@ html[data-animations="false"] *::after {
 
 /* Chat output: a quiet, document-like reading surface. */
 .chat-main-pane {
+  container: chat-main / inline-size;
   background: rgb(var(--color-paper-rgb));
 }
 
@@ -486,6 +487,15 @@ html[data-animations="false"] *::after {
 
 .chat-mini-timeline {
   left: 0.75rem;
+}
+
+/* The timeline sits in the gutter beside the 780px conversation column. When a
+   side panel narrows the chat until there is no gutter, it would lie on top of
+   the messages, so it steps out instead. */
+@container chat-main (max-width: 880px) {
+  .chat-main-pane .chat-mini-timeline {
+    display: none;
+  }
 }
 
 .chat-mini-timeline-list {
@@ -2035,6 +2045,35 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   background: rgb(var(--color-ink-rgb) / 0.075);
 }
 
+/* A file's type badge: the format's letters on its own colour, drawn here so
+   the icon never adds text to a tab's or a row's name. */
+.file-glyph-badge {
+  position: absolute;
+  left: 4%;
+  bottom: 9%;
+  min-width: 52%;
+  height: 40%;
+  padding: 0 6%;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.file-glyph-badge-wide {
+  left: 0;
+  min-width: 72%;
+}
+
+.file-glyph-badge::after {
+  content: attr(data-label);
+}
+
 /* A project's face: its hue at a soft tint with a strong initial, readable in
    both themes. The open project's tile is a step stronger. */
 .project-glyph {
@@ -2373,6 +2412,13 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   .chat-preview-compact-action {
     width: 2rem;
     padding-inline: 0;
+  }
+}
+
+/* "Request changes" keeps its words until the pane is very narrow. */
+@container chat-preview (max-width: 420px) {
+  .chat-preview-request-label {
+    display: none;
   }
 }
 

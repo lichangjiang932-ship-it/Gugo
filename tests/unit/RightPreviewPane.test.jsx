@@ -165,7 +165,7 @@ test('the full preview pane wires direct Markdown reading/source controls and re
   const h = await renderPane(() => {}, first)
   try {
     assert.equal(h.rootEl.querySelector('h1').textContent, 'First report')
-    const sourceButton = [...h.rootEl.querySelectorAll('button')].find((button) => button.textContent === '源码')
+    const sourceButton = [...h.rootEl.querySelectorAll('button')].find((button) => button.textContent.trim() === '源码')
     assert.ok(sourceButton)
     await act(async () => sourceButton.click())
     assert.equal(h.rootEl.querySelector('pre').textContent, '# First report')

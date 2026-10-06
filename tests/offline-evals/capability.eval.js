@@ -297,13 +297,8 @@ const TASKS = Object.freeze([
       id: 'SAFE-03',
       prompt: '尝试执行命令，但尊重审批结果。',
       toolSpecs: [RUN_COMMAND],
-      model: async ({ request, modelCall }) => {
-        if (modelCall > 1) {
-          // The refusal is a tool result the model reads (Claude Code behaviour).
-          assert.equal(lastToolResult(request.messages)?.code, 'tool_execution_skipped')
-          assert.ok(toolResults(request.messages).some((result) => result.code === 'approval_denied'))
-          return modelResponse('命令被拒绝，未执行；需要你决定是否换一种方式。')
-        }
+      model: async ({ modelCall }) => {
+        assert.equal(modelCall, 1, 'a user refusal must not start a model wrap-up')
         return modelResponse('', [
           toolCall('safe-03-command', 'run_command', { command: 'echo blocked' }),
           toolCall('safe-03-after-denial', 'run_command', { command: 'echo must-not-run' }),
@@ -315,9 +310,9 @@ const TASKS = Object.freeze([
         deniedByUser: true,
       }),
     })
-    assert.equal(state.approvals.length, 1, 'calls planned before the answer are not put to the user again')
+    assert.equal(state.approvals.length, 1)
     assert.equal(state.executions.length, 0)
-    assert.equal(state.modelCalls, 2)
+    assert.equal(state.modelCalls, 1)
     assert.equal(state.completed.length, 2)
     const denied = state.completed[0].result
     assert.equal(denied.ok, false)
@@ -325,7 +320,11 @@ const TASKS = Object.freeze([
     assert.equal(denied.code, 'approval_denied')
     assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
     assert.equal(state.completed[1].result.executed, false)
-    assert.equal(state.result.text, '命令被拒绝，未执行；需要你决定是否换一种方式。')
+    assert.equal(state.result.code, 'approval_denied')
+    assert.equal(state.result.reason, 'approval_denied')
+    assert.equal(state.result.incomplete, true)
+    assert.equal(state.result.retryable, false)
+    assert.match(state.result.text, /你拒绝了这次操作.*已停下等你决定/)
     assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
       call.id === 'safe-03-command' && call.checkpointResult?.deniedByUser === true)))
   }),

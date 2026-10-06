@@ -7,9 +7,10 @@ const spec = { type: 'function', function: { name: 'echo_tool', description: 'Is
 const calls = [1, 2, 3].map((number) => ({ id: `call-${number}`, type: 'function',
   function: { name: 'echo_tool', arguments: JSON.stringify({ note: `fixture-${number}` }) } }))
 
-async function fixture({ decision, resultForTool = null, restored = null, interruptAfterDenial = false, answerOnly = false }) {
+async function fixture({ decision, resultForTool = null, restored = null, interruptAfterDenial = false, answerOnly = false, steering = null }) {
   let modelCalls = 0
   let approvalRequests = 0
+  const seenByModel = []
   const executions = []
   const completed = []
   const checkpoints = []
@@ -22,7 +23,9 @@ async function fixture({ decision, resultForTool = null, restored = null, interr
     maxIters: 4, enableToolHooks: false,
     requestToolApproval: async ({ args }) => {
       approvalRequests += 1
-      return approvalRequests === 1 || !decision ? { proceed: true, args, approvalId: 'fixture-approval' } : decision
+      if (approvalRequests === 1 || !decision) return { proceed: true, args, approvalId: 'fixture-approval' }
+      steering?.onDecision?.()
+      return decision
     },
     onToolCompleted: async (outcome) => completed.push(outcome),
     loadCheckpoint: async () => restored,
@@ -33,8 +36,13 @@ async function fixture({ decision, resultForTool = null, restored = null, interr
         throw new Error('Isolated interruption after durable refusal')
       }
     },
-    runModel: async () => ++modelCalls === 1 && !answerOnly ? { content: '', toolCalls: calls }
-      : { content: 'This must not be used to wrap up a refusal.', toolCalls: [] },
+    ...(steering ? { claimSteering: steering.claim, acknowledgeSteering: async () => {},
+      beforeFinalCompletion: steering.beforeFinalCompletion } : {}),
+    runModel: async ({ messages }) => {
+      seenByModel.push(messages.map((message) => (typeof message.content === 'string' ? message.content : JSON.stringify(message.content))).join(' | '))
+      return ++modelCalls === 1 && !answerOnly ? { content: '', toolCalls: calls }
+        : { content: 'This must not be used to wrap up a refusal.', toolCalls: [] }
+    },
     executeTool: async ({ args }) => {
       executions.push(args.note)
       return resultForTool?.(executions.length) || { ok: true, receipt: args.note }
@@ -43,30 +51,61 @@ async function fixture({ decision, resultForTool = null, restored = null, interr
   } catch (error) {
     failure = error
   }
-  return { result, failure, modelCalls, approvalRequests, executions, completed, checkpoints }
+  return { result, failure, modelCalls, approvalRequests, executions, completed, checkpoints, seenByModel }
 }
 
-// Claude Code behaviour: a refusal the user made, or a permission rule made, is
-// handed back to the model as the call's tool result and the turn continues.
-// What stays fixed is the safety half — nothing refused runs, and the user is
-// not asked again about calls planned before their answer.
-for (const [name, decision, code] of [
-  ['human refusal', { proceed: false, deniedByUser: true, reason: 'The user declined.' }, 'approval_denied'],
-  ['policy refusal', { proceed: false, policyDenied: true, permissionMode: 'normal' }, 'policy_denied_permission_mode'],
-]) {
-  test(`${name} goes back to the model as a tool result, and the refused call never runs`, async () => {
-    const outcome = await fixture({ decision })
-    assert.ifError(outcome.failure)
-    assert.equal(outcome.modelCalls, 2, 'the model gets a round to work around the refusal')
-    assert.deepEqual(outcome.executions, ['fixture-1'])
-    assert.notEqual(outcome.result.incomplete, true)
-    assert.equal(outcome.result.noProgress, undefined, 'refusal is not a progress-convergence failure')
-    assert.equal(outcome.completed[1].result.code, code)
-    assert.equal(outcome.completed[1].result.executed === true, false)
-    assert.ok(outcome.checkpoints.some((checkpoint) => checkpoint.toolCalls?.some((call) =>
-      call.id === 'call-1' && call.checkpointResult?.receipt === 'fixture-1')))
-  })
-}
+// Claude Code behaviour. Declining a call stops the turn and waits for the user:
+// no wrap-up model request, nothing after it runs. A permission rule refusing
+// a call is a tool result the model reads and works around. In both cases
+// nothing refused runs, and the user is not asked again about calls planned
+// before their answer.
+const HUMAN_REFUSAL = Object.freeze({ proceed: false, deniedByUser: true, reason: 'The user declined.' })
+
+test('a plain human refusal stops the turn and waits for the user', async () => {
+  const outcome = await fixture({ decision: HUMAN_REFUSAL })
+  assert.ifError(outcome.failure)
+  assert.equal(outcome.modelCalls, 1, 'no model request after the refusal')
+  assert.deepEqual(outcome.executions, ['fixture-1'])
+  assert.equal(outcome.result.incomplete, true)
+  assert.equal(outcome.result.code, 'approval_denied')
+  assert.match(outcome.result.text, /tell me what to do instead|告诉我接下来该怎么做/u)
+  assert.equal(outcome.result.noProgress, undefined, 'refusal is not a progress-convergence failure')
+  assert.equal(outcome.completed[1].result.code, 'approval_denied')
+  assert.equal(outcome.completed[1].result.executed === true, false)
+  assert.ok(outcome.checkpoints.some((checkpoint) => checkpoint.toolCalls?.some((call) =>
+    call.id === 'call-1' && call.checkpointResult?.receipt === 'fixture-1')))
+})
+
+test('a refusal with a note goes on: the model reads the refusal and the note together', async () => {
+  // The client queues the note as steering and then sends the deny, so the note
+  // exists from the decision on. As in the turn runtime, closing the steering
+  // inbox reports it pending, the stop defers, and the next request claims it.
+  const note = { queued: false, claimed: false }
+  const outcome = await fixture({ decision: HUMAN_REFUSAL, steering: {
+    onDecision: () => { note.queued = true },
+    claim: async () => {
+      if (!note.queued || note.claimed) return { leaseId: null, messages: [] }
+      note.claimed = true
+      return { leaseId: 'note-lease', messages: [{ id: 'note-1', content: 'Write a patch file instead.' }] }
+    },
+    beforeFinalCompletion: async () => (note.queued && !note.claimed ? { closed: false, reason: 'pending' } : { closed: true }),
+  } })
+  assert.ifError(outcome.failure)
+  assert.equal(outcome.modelCalls, 2, 'the note carries the turn on')
+  assert.deepEqual(outcome.executions, ['fixture-1'], 'the refused call still never runs')
+  assert.match(outcome.seenByModel[1], /Write a patch file instead./u)
+  assert.match(outcome.seenByModel[1], /was not executed|未执行/u)
+})
+
+test('a policy refusal goes back to the model as a tool result, and the refused call never runs', async () => {
+  const outcome = await fixture({ decision: { proceed: false, policyDenied: true, permissionMode: 'normal' } })
+  assert.ifError(outcome.failure)
+  assert.equal(outcome.modelCalls, 2, 'the model gets a round to work around the refusal')
+  assert.deepEqual(outcome.executions, ['fixture-1'])
+  assert.notEqual(outcome.result.incomplete, true)
+  assert.equal(outcome.completed[1].result.code, 'policy_denied_permission_mode')
+  assert.equal(outcome.completed[1].result.executed === true, false)
+})
 
 test('after a human refusal the rest of the batch is skipped, not re-asked', async () => {
   const outcome = await fixture({ decision: { proceed: false, deniedByUser: true, reason: 'The user declined.' } })
@@ -84,14 +123,14 @@ test('a policy refusal checks each later call on its own instead of skipping the
     ['ok', 'policy_denied_permission_mode', 'policy_denied_permission_mode'])
 })
 
-test('a model that keeps proposing what the user keeps refusing stops after two refused rounds', async () => {
+test('a model that keeps proposing what a permission rule keeps refusing stops after two refused rounds', async () => {
   let modelCalls = 0
   let approvals = 0
   const executions = []
   const result = await runToolLoop({ job: { id: 'refusal-repeat', userId: 'refusal-user', origin: 'chat',
     prompt: 'Use echo_tool.' }, step: { id: 'refusal-repeat-step', kind: 'chat' },
   messages: [{ role: 'user', content: 'Use echo_tool.' }], toolSpecs: [spec], maxIters: 10, enableToolHooks: false,
-  requestToolApproval: async () => { approvals += 1; return { proceed: false, deniedByUser: true } },
+  requestToolApproval: async () => { approvals += 1; return { proceed: false, policyDenied: true, permissionMode: 'normal' } },
   runModel: async () => { modelCalls += 1
     return { content: '', toolCalls: [{ id: `again-${modelCalls}`, type: 'function',
       function: { name: 'echo_tool', arguments: JSON.stringify({ note: `try-${modelCalls}` }) } }] } },
@@ -101,7 +140,7 @@ test('a model that keeps proposing what the user keeps refusing stops after two 
   assert.equal(approvals, 2)
   assert.equal(modelCalls, 2, 'no wrap-up model request after the last refusal')
   assert.equal(result.incomplete, true)
-  assert.equal(result.code, 'approval_denied')
+  assert.equal(result.code, 'policy_denied_permission_mode')
 })
 
 // Nobody decided these: the user was away or the authorization system failed.
@@ -156,12 +195,13 @@ test('a checkpoint captured just after refusal does not reopen the remaining too
   assert.ok(checkpoint.toolCalls.some((call) => call.checkpointStatus !== 'completed'))
   const resumed = await fixture({ restored: checkpoint, answerOnly: true })
   assert.ifError(resumed.failure)
-  // Nothing from the refused batch is asked again or run on resume; the model
-  // then reads the refusal, exactly as it would have without the interruption.
+  // Nothing from the refused batch is asked again or run on resume, and the
+  // turn stops at the refusal exactly as it would have without the interruption.
   assert.equal(resumed.approvalRequests, 0)
   assert.deepEqual(resumed.executions, [])
   assert.equal(resumed.completed.at(-1).result.code, 'tool_execution_skipped')
-  assert.equal(resumed.modelCalls, 1)
+  assert.equal(resumed.modelCalls, 0)
+  assert.equal(resumed.result.code, 'approval_denied')
 })
 
 test('an unresolved outcome remains blocked when its completed batch checkpoint is resumed', async () => {

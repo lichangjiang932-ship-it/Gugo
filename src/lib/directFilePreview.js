@@ -11,7 +11,8 @@ const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdx'])
 const CODE_EXTENSIONS = new Set([
   'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'css', 'scss', 'less', 'py', 'java', 'c', 'cc', 'cpp', 'h', 'hpp',
   'go', 'rs', 'rb', 'php', 'swift', 'kt', 'kts', 'sh', 'bash', 'zsh', 'fish', 'ps1', 'sql', 'vue', 'svelte',
-  'yaml', 'yml', 'toml', 'ini', 'env', 'conf', 'log',
+  'yaml', 'yml', 'toml', 'ini', 'env', 'conf', 'log', 'bat', 'cmd', 'gradle', 'properties', 'cs', 'lua', 'r',
+  'dart', 'scala', 'graphql', 'proto', 'dockerfile', 'makefile', 'ipynb',
 ])
 const TEXT_EXTENSIONS = new Set(['txt', 'rtf', ...CODE_EXTENSIONS])
 

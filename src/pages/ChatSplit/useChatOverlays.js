@@ -45,7 +45,12 @@ export default function useChatOverlays({
     onOpen: () => setPlanVisible?.(false),
     // The diff opens in the main area's preview pane, not in the sidebar: the
     // review is about this conversation, and the sidebar is a different tool.
-    onOpenDiff: (artifact) => dispatch?.({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact }),
+    // The pane only exists while the side panel is open, so it is opened first,
+    // as every other way of opening a preview does.
+    onOpenDiff: (artifact) => {
+      setWorkbenchOpen?.(true)
+      dispatch?.({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact })
+    },
     workspacePath,
   })
 

@@ -6,7 +6,7 @@ import { act } from 'react'
 import { getArtifactToolbarActions } from '../../src/pages/ChatSplit/preview/artifactToolbar.js'
 
 const COPY = {
-  'chat.changes.scriptOnly': 'Produced by a script; no edit was recorded.',
+  'chat.changes.currentUnavailable': 'Current content unavailable.',
 }
 
 const t = (key) => String(COPY[key] || key)
@@ -66,16 +66,20 @@ test('the diff shows the recorded lines with their signs and their colours', asy
   }
 })
 
-test('a file a script wrote says so instead of showing an empty diff', async () => {
+test('a file with no recorded edit falls back to its current content and says when that is unreadable', async () => {
   setupDom()
+  const oldFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ ok: false, code: 'PATH_NOT_FOUND', error: 'gone' }), { status: 404 })
   const { container, root } = await render({ preview: { type: 'diff', filename: 'out.html', path: 'D:/work/out.html', hunks: [] }, t })
   try {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     assert.equal(container.querySelector('[data-testid="diff-preview-hunk"]'), null)
     assert.equal(
       container.querySelector('[data-testid="diff-preview-empty"]').textContent,
-      'Produced by a script; no edit was recorded.',
+      'Current content unavailable.',
     )
   } finally {
+    globalThis.fetch = oldFetch
     await act(async () => root.unmount())
   }
 })

@@ -42,9 +42,11 @@ function foldContext(lines) {
  * Shared by the change panel and the main-area diff so the two can never draw
  * the same edit differently.
  */
-export default function DiffLines({ edit, t, wrap = false, className = '', testId = 'session-change-edit' }) {
+export default function DiffLines({ edit, t, wrap = false, fold = true, className = '', testId = 'session-change-edit' }) {
   const [opened, setOpened] = useState(() => new Set())
-  const blocks = foldContext(interleaveEditLines(edit))
+  const lines = interleaveEditLines(edit)
+  // A file shown as its plain current content has no change to fold around.
+  const blocks = fold ? foldContext(lines) : lines.map((entry) => ({ entry }))
   const text = wrap ? 'whitespace-pre-wrap break-all' : 'min-w-max whitespace-pre'
   return (
     <div className={`overflow-auto rounded-control border border-ink/10 bg-[var(--code-bg)] py-1 font-mono text-xs leading-5 ${className}`} data-testid={testId}>

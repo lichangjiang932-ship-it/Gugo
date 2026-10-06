@@ -8,7 +8,10 @@ const COPY = {
   'chat.changes.summary': '{count} file(s)',
   'chat.changes.totals': '+{additions} -{deletions}',
   'chat.changes.empty': 'This conversation has not changed any files yet.',
-  'chat.changes.scriptOnly': 'Produced by a script; no edit was recorded.',
+  'chat.changes.currentContent': 'No line-by-line edit was recorded; current content:',
+  'chat.changes.newFileCurrent': 'New file; current content:',
+  'chat.changes.currentUnavailable': 'Current content unavailable.',
+  'chat.changes.binaryFile': 'Binary file.',
   'chat.changes.readOnly': 'Read-only review: nothing here commits or pushes.',
   'chat.changes.expand': "Expand this file's change in place",
   'chat.changes.openDiff': 'Read the change to {path} in the main area',
@@ -121,14 +124,26 @@ test('the review lists each file with the counts that belong to it', async () =>
   assert.equal(container.querySelector('[data-testid="session-changes-empty"]'), null)
 })
 
-test('opening a file shows the edit the agent made, and a script-only file says so', async () => {
+test('opening a file shows the edit the agent made, and a file with no recorded edit shows its current content', async () => {
   setupDom()
+  const reads = []
+  const oldFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    reads.push([url, JSON.parse(init.body).path])
+    return new Response(JSON.stringify({ ok: true, content: 'line one\r\nline two', totalLines: 2 }), { status: 200 })
+  }
   const { container, toggles } = await render()
   const [app, readme, scripted] = toggles()
 
+  try {
   await act(async () => { app.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
   assert.equal(app.getAttribute('aria-expanded'), 'true')
-  assert.match(container.textContent, /Produced by a script/, 'a patch with no recorded body is honest about it')
+  // No recorded body: the file is read through the authorized read route and
+  // shown as its current content, labelled as that — not as an invented diff.
+  assert.deepEqual(reads, [['/api/tools/fs/read', 'D:/work/app.js']])
+  assert.match(container.textContent, /No line-by-line edit was recorded/)
+  const current = [...container.querySelectorAll('[data-testid="current-file-lines"] pre')]
+  assert.deepEqual(current.map((line) => line.dataset.sign), [' ', ' '], 'reported +3 -1 is a modification, so nothing is drawn as added')
   assert.equal(container.querySelectorAll('[data-testid="session-change-edit"]').length, 0)
 
   await act(async () => { readme.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
@@ -141,6 +156,30 @@ test('opening a file shows the edit the agent made, and a script-only file says 
   await act(async () => { scripted.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
   assert.equal(readme.getAttribute('aria-expanded'), 'false')
   assert.equal(scripted.getAttribute('aria-expanded'), 'true')
+  } finally {
+    globalThis.fetch = oldFetch
+  }
+})
+
+test('a file reported as wholly added is drawn as additions; a binary file says it has no line diff', async () => {
+  setupDom()
+  const oldFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, content: '<!doctype html>\n<p>hi</p>', totalLines: 2 }), { status: 200 })
+  const files = [
+    { key: 'd:/work/new.html', path: 'D:/work/new.html', displayPath: 'new.html', reported: { additions: 2, deletions: 0 }, toolNames: ['write_file'], toolCallIds: ['n1'] },
+    { key: 'd:/work/deck.pptx', path: 'D:/work/deck.pptx', displayPath: 'deck.pptx', reported: null, toolNames: ['bash_exec'], toolCallIds: ['n2'] },
+  ]
+  const { container, toggles } = await render({ changes: { files, totals: { files: 2, reportedFiles: 1, additions: 2, deletions: 0 } }, editIndex: new Map() })
+  try {
+    const [html, deck] = toggles()
+    await act(async () => { html.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+    assert.match(container.textContent, /New file; current content:/)
+    assert.deepEqual([...container.querySelectorAll('[data-testid="current-file-lines"] pre')].map((line) => line.dataset.sign), ['+', '+'])
+    await act(async () => { deck.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+    assert.ok(container.querySelector('[data-testid="current-file-binary"]'))
+  } finally {
+    globalThis.fetch = oldFetch
+  }
 })
 
 test('the file row hands its file and its recorded edits to the review', async () => {

@@ -34,6 +34,7 @@ export default function ChatRightPanels({
       onCloseTab={onClosePreviewTab}
       onClose={onClosePreview}
       onMessage={onPreviewMessage}
+      onInsertText={onInsertText}
     />
   }
   return (

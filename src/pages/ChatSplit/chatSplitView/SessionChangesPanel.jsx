@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, FileDiff, X } from 'lucide-react'
+import CurrentFileChange from '../../../components/CurrentFileChange.jsx'
 import DiffLines from '../../../components/DiffLines.jsx'
 import { countRecordedEditLines } from '../../../lib/sessionChanges.js'
 
@@ -18,8 +19,9 @@ function countsFor(file, edits) {
  * Answers one question — what did the agent actually do to the files — and
  * answers it from the tool calls, not from prose: the executor's per-file line
  * counts when it reported them, and otherwise the lines of the edits the agent
- * made, which are the same lines rendered below. A file a script wrote has no
- * recorded edit and says so rather than inventing one.
+ * made, which are the same lines rendered below. A file with no recorded edit (a
+ * script wrote it, or its arguments were cut for size) shows its current content,
+ * labelled as that, rather than an invented diff.
  *
  * Read-only on purpose: committing and pushing belong to the terminal and the
  * Git workbench, and this panel never becomes a second, quieter way to change a
@@ -120,7 +122,7 @@ export default function SessionChangesPanel({ review, t }) {
               {open && (
                 <div className="pl-6 pr-1 pb-1.5">
                   {edits.length === 0
-                    ? <p className="text-xs leading-5 text-ink-fade">{t('chat.changes.scriptOnly')}</p>
+                    ? <CurrentFileChange file={file} counts={counts} t={t} wrap className="max-h-72" />
                     : edits.map((edit, index) => <EditBlock key={`${edit.toolName}:${index}`} edit={edit} t={t} />)}
                 </div>
               )}

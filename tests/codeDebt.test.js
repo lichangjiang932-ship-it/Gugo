@@ -21,6 +21,8 @@ const DOCUMENT_RENDERING_COLOR_FILES = new Set([
   'src/lib/artifactPreview/visualDocuments.js',
   'src/lib/htmlSlidesToPptx/htmlDeckConversion.js',
   'src/pages/ChatSplit/preview/reactSandboxDocument.js',
+  // The sandboxed Word frame: a document's own colours assume a white page.
+  'src/lib/docxPreview.js',
 ])
 
 const UI_HEX_ALLOWLIST = Object.freeze([
@@ -41,8 +43,10 @@ const UI_HEX_ALLOWLIST = Object.freeze([
   },
   {
     id: 'file-type-identity',
-    accepts: ({ file, prefix }) => file === 'src/components/FileExplorer.jsx'
-      && (/["']\.[^"']+["']:\s*["']$/.test(prefix) || /return colors\[ext\]\s*\|\|\s*["']$/.test(prefix)),
+    accepts: ({ file, prefix }) => (file === 'src/components/FileExplorer.jsx'
+      && (/["']\.[^"']+["']:\s*["']$/.test(prefix) || /return colors\[ext\]\s*\|\|\s*["']$/.test(prefix)))
+      // Each format's own application colour, read once by the file glyph.
+      || (file === 'src/lib/fileTypeFamily.js' && /\bcolor:\s*["']$/.test(prefix)),
   },
   {
     id: 'artifact-document-rendering',
