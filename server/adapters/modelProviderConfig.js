@@ -66,10 +66,16 @@ export function getModelProviders(env = process.env) {
       apiKey: resolveApiKey(id, provider, { env, credentials }).apiKey,
       models: (Array.isArray(provider.models) ? provider.models : []).map((model) => String(model?.id || model || '')).filter(Boolean),
       headers: {},
-      profileOverrides: {},
+      profileOverrides: protocolProfileOverrides(provider.api),
       api: String(provider.api || 'openai-completions'),
     }))
   return [...fromEnv, ...fromSettings]
+}
+
+/** A hand-declared gateway cannot be recognised from its URL, so the protocol it
+ * was configured with is the authoritative hint for the request pipeline. */
+function protocolProfileOverrides(api = '') {
+  return String(api) === 'anthropic-messages' ? { kind: 'anthropic' } : {}
 }
 
 function findProviderForModel(modelName, env = process.env, providerId = '') {

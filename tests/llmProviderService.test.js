@@ -110,6 +110,25 @@ test('the add panel can probe an unsaved provider', async () => {
   await assert.rejects(probeDraftModels({ baseURL: 'https://x/v1', api: 'carrier-pigeon' }, { fetchImpl }), /LLM_PROTOCOL_UNSUPPORTED/u)
 })
 
+test('a provider configured with the anthropic protocol reaches the native anthropic path', async () => {
+  await withHome(async (env) => {
+    upsertProvider({ id: 'my-claude-gw', api: 'anthropic-messages', baseURL: 'https://gw.example/v1', custom: true, models: ['claude-sonnet-4-6'] }, env)
+    const provider = getModelProviders(env).find((entry) => entry.id === 'my-claude-gw')
+    // The declared protocol becomes the profile hint, because a gateway URL
+    // cannot reveal whether it speaks /messages or /chat/completions.
+    assert.deepEqual(provider.profileOverrides, { kind: 'anthropic' })
+    const { profileForConfig } = await import('../server/adapters/modelEndpoint.js')
+    assert.equal(profileForConfig({ baseUrl: provider.baseUrl, modelName: 'claude-sonnet-4-6', profileOverrides: provider.profileOverrides }).kind, 'anthropic')
+    const { buildModelProviderRequest } = await import('../server/adapters/modelRequestBuilder.js')
+    const config = { baseUrl: provider.baseUrl, modelName: 'claude-sonnet-4-6', apiKey: 'k', profileOverrides: provider.profileOverrides }
+    const built = buildModelProviderRequest({ config, messages: [{ role: 'user', content: 'hi' }], stream: false, env })
+    assert.match(built.url, /\/messages$/u, 'anthropic goes to /messages, not /chat/completions')
+    // The official endpoint is recognised from its URL even without a hint.
+    const detected = profileForConfig({ baseUrl: 'https://api.anthropic.com/v1', modelName: 'claude-sonnet-4-6' })
+    assert.equal(detected.kind, 'anthropic')
+  })
+})
+
 test('settings.yaml providers reach the model resolution path, env keeping precedence', async () => {
   withHome((env) => {
     upsertProvider({ id: 'yaml-provider', api: 'openai-completions', baseURL: 'https://yaml/v1', models: ['yaml-model'] }, env)
