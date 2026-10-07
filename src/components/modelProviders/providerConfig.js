@@ -63,6 +63,20 @@ export const CATALOG_BASE_URLS = Object.freeze({
 
 export const KIND_OPTIONS = ['', 'ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible']
 export const TRIBOOL_VALUES = ['', '1', '0']
+
+/**
+ * What the knowledge-base tab lists before anyone searches.
+ *
+ * These are the providers this app ships a working base URL and model defaults
+ * for, in catalogue-id form. The tab is backed by the whole catalogue, but the
+ * common case should be one click rather than a search — listing 226 providers
+ * alphabetically would put `amazon-bedrock` first and bury the ones most readers
+ * came for.
+ */
+export const CATALOG_POPULAR_IDS = Object.freeze([
+  'openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'alibaba',
+  'siliconflow', 'moonshotai', 'zhipuai', 'xai', 'groq', 'mistral',
+])
 const PROVIDER_KEY_RE = /^[a-z][a-z0-9_-]{0,39}$/
 
 export function emptyProvider() {

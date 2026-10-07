@@ -45,6 +45,22 @@ function knowledgeBase() {
   return document.querySelector('[data-testid="provider-knowledge-base"]')
 }
 
+function sourceTabs() {
+  return document.querySelector('[data-testid="provider-source-tabs"]')
+}
+
+function catalogTab() {
+  return document.querySelector('[data-testid="provider-catalog-tab"]')
+}
+
+function customTab() {
+  return document.querySelector('[data-testid="provider-custom-tab"]')
+}
+
+function tabButton(text) {
+  return buttonByTextIn(sourceTabs(), text)
+}
+
 function knowledgeBaseStatus() {
   return document.querySelector('[data-testid="provider-knowledge-base-status"]')
 }
@@ -124,6 +140,43 @@ function panelFetch(routes) {
     return handler(init, String(url))
   }
 }
+
+test('adding a provider opens on the knowledge base, with the custom API as the second tab', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = panelFetch({
+    '/api/model/catalog': () => jsonResponse({ ok: true, catalog: BUNDLED_STATUS }),
+    '/api/model/providers': () => jsonResponse({ ok: true, providers: [] }),
+  })
+  const { dom, root } = await renderPanel()
+
+  try {
+    await click(buttonByText('新增', { exact: true }))
+
+    // The two sources the reader can actually have, named as such.
+    assert.ok(sourceTabs(), 'the picker offers both sources as tabs')
+    assert.ok(tabButton('第三方模型提供商'))
+    assert.ok(tabButton('自定义模型 API'))
+    assert.equal(tabButton('第三方模型提供商').getAttribute('aria-selected'), 'true')
+    assert.ok(catalogTab(), 'the knowledge base is the tab that opens by default')
+    assert.equal(customTab(), null)
+
+    // Choosing a provider the knowledge base knows is one click from here, and the
+    // custom endpoint path stays reachable from the same screen.
+    assert.ok(buttonByText('OpenAI'), 'known providers are listed without searching')
+    assert.ok(buttonByText('Ollama'))
+
+    await click(tabButton('自定义模型 API'))
+    assert.ok(customTab(), 'the custom tab replaces the catalogue tab')
+    assert.equal(catalogTab(), null)
+    assert.match(customTab().textContent, /中转站|自部署/)
+    await click(buttonByText('自定义接口'))
+    assert.ok(document.querySelector('input[placeholder="my-provider"]'), 'the custom path opens its own form')
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
 
 test('the picker shows where the knowledge base comes from and what it holds', async () => {
   const originalFetch = globalThis.fetch

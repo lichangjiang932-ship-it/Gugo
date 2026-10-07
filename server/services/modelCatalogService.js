@@ -6,9 +6,10 @@ import {
   CATALOG_SOURCE_URL,
   MAX_RESPONSE_BYTES,
   buildSnapshot,
+  catalogIdForPreset,
   isUsableSnapshot,
+  PROVIDER_ID_ALIASES,
 } from '../../shared/modelCatalogSnapshot.js'
-
 /**
  * The provider/model knowledge base, with models.dev as the upstream.
  *
@@ -41,20 +42,9 @@ export { CATALOG_SOURCE_URL }
 const REFRESH_TIMEOUT_MS = 20_000
 const MAX_MODELS_RETURNED = 500
 
-/** Preset id → catalogue id, for the presets whose ids differ upstream. */
-export const PROVIDER_ID_ALIASES = Object.freeze({
-  gemini: 'google',
-  qwen: 'alibaba',
-  moonshot: 'moonshotai',
-  zhipu: 'zhipuai',
-})
-
-/** The catalogue's id for one of this app's preset ids. */
-export function catalogIdForPreset(presetId) {
-  const id = String(presetId || '').trim()
-  if (!id) return ''
-  return PROVIDER_ID_ALIASES[id] || id
-}
+// Re-exported so callers of this service do not have to reach into `shared/`
+// for the mapping, while the mapping itself stays defined in exactly one place.
+export { PROVIDER_ID_ALIASES, catalogIdForPreset }
 
 function readSnapshotFile() {
   try {

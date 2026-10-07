@@ -109,11 +109,33 @@
 | GET | `/api/model/catalog/<providerId>` | 该供应商当前的模型清单 |
 | POST | `/api/model/catalog/refresh` | 拉取 models.dev 并返回刷新后的来源状态 |
 
+## 界面的两个来源
+
+新增供应商时打开的选择器有两个来源，对应读者实际可能拥有的两种东西
+（`src/components/modelProviders/ProviderSourcePicker.jsx`）：
+
+| 标签 | 内容 | 得到什么 |
+|---|---|---|
+| 第三方模型提供商 | 模型知识库：常用供应商直接列出，搜索框可检索目录里全部 226 个 | 选供应商 → 只填 API Key → 保存即用 |
+| 自定义模型 API | Provider ID / 显示名称 / API 地址 / API 协议 / API Key | 中转站、自部署服务、知识库不认识的接口 |
+
+设计取舍：
+
+- **知识库是默认标签**。这正是替代原来手写 preset 网格的地方：网格只能列出
+  有人记得写进去的供应商，`amazon-bedrock`、`cerebras` 这些因此长期无法配置。
+- **常用供应商不搜索也能一眼看到**，但名字用本应用 preset 的显示名
+  （`Google Gemini`、`阿里云通义千问`），而不是目录里的 `google`、`alibaba`；
+  模型数只在目录确认后才显示。目录 id 随条目一起带上，因为四个供应商两边 id 不同。
+- **搜索框输入任意 id 都能用**：命中 preset 走 preset 路径，否则按目录 id 走
+  自定义路径，因此"知道 id 但目录里没有"也不挡路。
+- **自定义接口按钮在知识库标签下也保留**，它是逃生口而不是第三个来源。
+- 本地模型（Ollama / LM Studio / llama.cpp / vLLM）仍在知识库标签下方，
+  它们不是供应商而是本机端点。
+
 供应商索引是**显式可选**的：设置页平时不需要 226 条目录，因此默认的
 `GET /api/model/catalog` 保持很小，只有要浏览目录时才带 `providers=1`。
 索引由知识库直接生成，客户端**不另存一份供应商名单**——两份清单必然与它们
-描述的知识库漂移。这正是让 `amazon-bedrock`、`cerebras` 这类没有 preset 的
-供应商可以被"浏览到"而不是"必须先知道 id"的原因。
+描述的知识库漂移。
 
 ## 维护
 

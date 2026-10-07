@@ -14,6 +14,31 @@
 export const SNAPSHOT_SCHEMA_VERSION = 1
 export const CATALOG_SOURCE_URL = 'https://models.dev/api.json'
 
+/**
+ * This app's preset id → the catalogue id that keys the same provider upstream.
+ *
+ * Four of them disagree: this app shipped `gemini`, `qwen`, `moonshot` and
+ * `zhipu` before the catalogue existed, and models.dev keys those providers as
+ * `google`, `alibaba`, `moonshotai` and `zhipuai`.
+ *
+ * It lives in `shared/` because both sides need exactly this mapping: the server
+ * to resolve a lookup, and the client to ask for the right provider without
+ * carrying a second copy of the table.
+ */
+export const PROVIDER_ID_ALIASES = Object.freeze({
+  gemini: 'google',
+  qwen: 'alibaba',
+  moonshot: 'moonshotai',
+  zhipu: 'zhipuai',
+})
+
+/** The catalogue's id for one of this app's preset ids. */
+export function catalogIdForPreset(presetId) {
+  const id = String(presetId || '').trim()
+  if (!id) return ''
+  return PROVIDER_ID_ALIASES[id] || id
+}
+
 export const MAX_PROVIDERS = 400
 export const MAX_MODELS_PER_PROVIDER = 400
 export const MAX_TEXT = 200
