@@ -85,6 +85,20 @@ test('a corrupt cache is treated as absent, not as a crash', async () => {
   })
 })
 
+test('cached models.dev metadata decorates the provider models, configuration winning', async () => {
+  await withHome(async (env) => {
+    await refreshModelsDev({ env, now: 5, fetchImpl: async () => ({ ok: true, json: async () => PAYLOAD }) })
+    const { listProviders, upsertProvider } = await import('../server/llm/llmProviderService.js')
+    upsertProvider({ id: 'meta-demo', api: 'openai-completions', baseURL: 'https://x/v1', models: [{ id: 'deepseek-chat' }, { id: 'claude-opus-4-6', contextWindow: 64 }] }, env)
+    const provider = listProviders(env).providers[0]
+    const [fromMeta, configured] = provider.models
+    assert.equal(fromMeta.displayName, 'DeepSeek Chat', 'the cache supplies the readable name')
+    assert.equal(configured.contextWindow, 64, 'a configured context window is never overwritten')
+    assert.equal(configured.displayName, 'Claude Opus 4.6')
+    assert.equal(configured.maxTokens, 8192)
+  })
+})
+
 test('opening a config file is limited to the two files the page shows', async () => {
   await withHome(async (env) => {
     const spawned = []

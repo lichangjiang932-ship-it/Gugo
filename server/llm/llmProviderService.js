@@ -11,6 +11,7 @@ import {
   writeSettings,
 } from './llmConfigStore.js'
 import { registerBuiltinLlmAdapters } from './adapters/index.js'
+import { modelsDevMeta } from './modelsDevCache.js'
 import {
   isValidProviderId,
   isSupportedProtocol,
@@ -37,6 +38,19 @@ function authHeaders(provider = {}, apiKey = '') {
     : { authorization: `Bearer ${key}` }
 }
 
+/** Cached models.dev metadata fills gaps; a configured value always wins. */
+function decorateModel(model, env) {
+  const entry = { ...model }
+  const meta = modelsDevMeta(entry.id, env)
+  if (!meta) return entry
+  return {
+    ...entry,
+    ...(!entry.displayName && meta.displayName ? { displayName: meta.displayName } : {}),
+    ...(!Number.isFinite(entry.contextWindow) && meta.contextWindow ? { contextWindow: meta.contextWindow } : {}),
+    ...(!Number.isFinite(entry.maxTokens) && meta.maxTokens ? { maxTokens: meta.maxTokens } : {}),
+  }
+}
+
 /** Never contains a key: the descriptor is what the UI shows. */
 export function publicProviderView(id, provider = {}, { defaultModel = {}, credentials = {}, env = process.env } = {}) {
   const resolved = resolveApiKey(id, provider, { env, credentials })
@@ -48,7 +62,7 @@ export function publicProviderView(id, provider = {}, { defaultModel = {}, crede
     apiKeyEnv: String(provider.apiKeyEnv || ''),
     autoProbe: provider.autoProbe === true,
     custom: provider.custom === true,
-    models: Array.isArray(provider.models) ? provider.models.map((model) => ({ ...model })) : [],
+    models: Array.isArray(provider.models) ? provider.models.map((model) => decorateModel(model, env)) : [],
     credential: {
       configured: Boolean(resolved.apiKey),
       source: resolved.source,
