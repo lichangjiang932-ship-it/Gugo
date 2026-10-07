@@ -201,7 +201,13 @@ for (const scenario of [
         assert.equal(document.querySelector('input[placeholder="https://api.example.com/v1"]'), null)
         assert.equal(document.querySelector('textarea'), null)
         assert.equal(document.querySelector('input[placeholder="my-provider"]'), null)
-        assert.equal(buttonByText('自动获取模型', { exact: true }), undefined)
+        // A preset now offers the same catalog controls as a custom endpoint, so
+        // the reader can fetch what the provider serves today and drop what it
+        // retired. Until a credential is present there is nothing to fetch with,
+        // so the control is offered but stays disabled rather than being hidden.
+        const fetchModels = buttonByText('自动获取模型', { exact: true })
+        assert.ok(fetchModels, 'a cloud preset offers the model catalog fetch control')
+        assert.equal(fetchModels.disabled, true)
       } else {
         assert.ok(document.querySelector('input[placeholder="https://api.example.com/v1"]'))
         assert.ok(document.querySelector('input[placeholder="model-name"]'))
@@ -221,6 +227,12 @@ for (const scenario of [
       await setInputValue(apiKeyInput, scenario.apiKey)
       await setInputValue(modelsInput, scenario.models)
       await setInputValue(headersInput, scenario.headers)
+
+      if (scenario.name === 'cloud') {
+        // The whole point of the catalog: with the credential present, a preset
+        // can fetch the live model list without a trip through advanced settings.
+        assert.equal(buttonByText('自动获取模型', { exact: true }).disabled, false)
+      }
 
       const save = buttonByText('保存', { exact: true })
       assert.equal(save.disabled, false)
@@ -439,7 +451,11 @@ test('a cloud preset accepts custom Headers as its only credential', async () =>
     await act(async () => buttonByText('新增', { exact: true }).click())
     await act(async () => buttonByText('OpenAI').click())
 
-    assert.equal(buttonByText('自动获取模型', { exact: true }), undefined)
+    // Headers alone are a valid credential, so the catalog control is present and
+    // becomes usable once those Headers are entered.
+    const fetchModels = buttonByText('自动获取模型', { exact: true })
+    assert.ok(fetchModels, 'a cloud preset offers the model catalog fetch control')
+    assert.equal(fetchModels.disabled, true)
     await ensureAdvancedOpen()
     const headersInput = [...document.querySelectorAll('textarea')]
       .find((input) => input.placeholder.includes('X-Custom-Header'))
@@ -1295,9 +1311,10 @@ test('provider editor displays Headers errors and blocks save and discovery unti
     await setInputValue(modelsInput, 'headers-model')
 
     const save = buttonByText('保存', { exact: true })
-    const discover = buttonByText('自动获取模型', { exact: true })
     assert.equal(save.disabled, false)
-    assert.equal(discover.disabled, false)
+    const discoverBefore = buttonByText('自动获取模型', { exact: true })
+    assert.ok(discoverBefore, 'a valid custom endpoint offers the model catalog fetch control')
+    assert.equal(discoverBefore.disabled, false)
 
     for (const [value, message] of [
       ['{', /Headers 必须是有效的 JSON/],
@@ -1312,13 +1329,18 @@ test('provider editor displays Headers errors and blocks save and discovery unti
       assert.equal(headersInput.getAttribute('aria-invalid'), 'true')
       assert.match(document.body.textContent, message)
       assert.equal(save.disabled, true)
-      assert.equal(discover.disabled, true)
+      // With no usable credential there is nothing to probe, so the catalog drops
+      // the fetch control entirely rather than offering a request that cannot work.
+      assert.equal(buttonByText('自动获取模型', { exact: true }), undefined)
     }
 
     await setInputValue(headersInput, '{"Authorization":"Bearer token"}')
     assert.equal(headersInput.getAttribute('aria-invalid'), 'false')
     assert.equal(save.disabled, false)
-    assert.equal(discover.disabled, false)
+    // Correcting the Headers brings the control back, enabled.
+    const discoverAfter = buttonByText('自动获取模型', { exact: true })
+    assert.ok(discoverAfter, 'the fetch control returns once the Headers are usable')
+    assert.equal(discoverAfter.disabled, false)
   } finally {
     globalThis.fetch = originalFetch
     await act(async () => root.unmount())
@@ -1429,7 +1451,7 @@ test('provider Base URL validation blocks credentials, query parameters, and fra
 
     assert.equal(baseUrlInput.getAttribute('aria-invalid'), 'true')
     assert.match(document.body.textContent, /不能包含用户名或密码/)
-    assert.equal(buttonByText('自动获取模型', { exact: true }).disabled, true)
+    assert.equal(buttonByText('自动获取模型', { exact: true }), undefined)
     assert.equal(buttonByText('保存', { exact: true }).disabled, true)
   } finally {
     globalThis.fetch = originalFetch

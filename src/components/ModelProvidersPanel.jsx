@@ -8,7 +8,7 @@ import ProviderList from './modelProviders/ProviderList.jsx'
 import { formatProviderError } from './modelProviders/providerError.js'
 import {
   emptyProvider, findConfiguredPresetProvider, mergeDiscoveredModelProfiles, normalizeEditorModelProfiles, numberOrNull,
-  providerBaseUrlError, PROVIDER_PRESETS, resolveProviderDefaultModel, selectToTribool, toEditor,
+  parseModelList, providerBaseUrlError, PROVIDER_PRESETS, resolveProviderDefaultModel, selectToTribool, toEditor,
 } from './modelProviders/providerConfig.js'
 import { buildProviderValidation, isAgentReady, readinessFromTestResult } from './modelProviders/providerPanelValidation.js'
 
@@ -61,7 +61,7 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
     try {
       const validationError = keyError || labelError || baseUrlError || modelsError || headersError || numericValidationError
       if (validationError) throw new Error(validationError)
-      const models = editing.modelsText.split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
+      const models = parseModelList(editing.modelsText)
       const preset = PROVIDER_PRESETS.find((item) => item.id === editing.presetId)
       if (preset && !preset.local && !hasCredentials) throw new Error(t('modelProviders.apiKeyRequired'))
       const existingPresetProvider = editing.id ? null : findConfiguredPresetProvider(providers, preset)

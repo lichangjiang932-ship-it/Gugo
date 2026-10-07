@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { ChevronDown, Cloud, RefreshCw, Save, X } from 'lucide-react'
+import { ChevronDown, Cloud, Plus, RefreshCw, Save, X } from 'lucide-react'
 import Modal from '../Modal.jsx'
 import {
-  CLOUD_PRESETS, effectiveUrl, emptyProvider, findConfiguredPresetProvider, formatContextTokens, KIND_OPTIONS, LOCAL_PRESETS,
-  nextCustomProviderKey, PROVIDER_PRESETS, toEditor, TRIBOOL_VALUES,
+  addModelToList, CLOUD_PRESETS, effectiveUrl, emptyProvider, findConfiguredPresetProvider, formatContextTokens, KIND_OPTIONS,
+  LOCAL_PRESETS, nextCustomProviderKey, parseModelList, PROVIDER_PRESETS, removeModelFromList, resolveProviderDefaultModel,
+  toEditor, TRIBOOL_VALUES,
 } from './providerConfig.js'
 
 function Field({ label, children, error = '' }) {
@@ -149,6 +150,61 @@ function PresetPicker({ editing, setEditing, setShowAdvanced, providers, t }) {
   </div>
 }
 
+/**
+ * The catalog this endpoint actually serves.
+ *
+ * A preset ships a checked default list, so choosing OpenAI or DeepSeek and
+ * pasting a key is the whole setup. Providers add and retire models faster than
+ * any bundled list can track, so the same list stays editable: fetch what the
+ * endpoint serves right now, then add or remove ids one at a time. An id outside
+ * the list is still accepted by the runtime, which is why the hint says so
+ * instead of making the catalog look like a closed set.
+ */
+function ModelCatalog({ editing, setEditing, models, busy, detecting, canDiscover, canFetch, onDiscover, t }) {
+  const [draft, setDraft] = useState('')
+  const commitDraft = () => {
+    const value = draft.trim()
+    if (!value) return
+    setEditing((current) => {
+      const next = addModelToList(current.modelsText, value)
+      return {
+        ...current,
+        modelsText: next.join('\n'),
+        defaultModel: resolveProviderDefaultModel(next, current.defaultModel || value),
+      }
+    })
+    setDraft('')
+  }
+  const removeModel = (model) => setEditing((current) => {
+    const next = removeModelFromList(current.modelsText, model, current.defaultModel)
+    return { ...current, modelsText: next.models.join('\n'), defaultModel: next.defaultModel }
+  })
+  return <div data-testid="provider-model-catalog" className="flex flex-col gap-2 rounded-xl border border-ink/15 p-3">
+    <div className="flex items-center gap-2">
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-medium text-ink">{t('modelProviders.modelCatalog')}</div>
+        <div className="mt-0.5 text-xs text-ink-fade">{t('modelProviders.modelCatalogHint')}</div>
+      </div>
+      {models.length > 0 && <span className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-ink-fade">{t('modelProviders.modelCount', { count: models.length })}</span>}
+      {canDiscover && <button type="button" disabled={busy || detecting || !canFetch} onClick={onDiscover} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-ink/20 px-3 text-xs text-ink-soft hover:bg-ink/[0.04] hover:text-ink disabled:opacity-40"><RefreshCw className={`h-3.5 w-3.5 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>}
+    </div>
+    {models.length > 0 && <ul className="flex max-h-56 flex-col overflow-y-auto rounded-md border border-ink/10 bg-paper">
+      {models.map((model) => {
+        const isDefault = model === editing.defaultModel
+        return <li key={model} className="group flex items-center gap-2 border-b border-ink/5 px-2.5 py-1.5 last:border-b-0 hover:bg-paper-2">
+          <button type="button" onClick={() => setEditing({ ...editing, defaultModel: model })} aria-pressed={isDefault} title={t('modelProviders.defaultModel')} className={`min-w-0 flex-1 truncate text-left text-xs ${isDefault ? 'font-medium text-ink' : 'text-ink-soft'} hover:text-ink`}>{model}</button>
+          {isDefault && <span className="shrink-0 rounded bg-accent-soft/40 px-1.5 py-0.5 text-[10px] text-accent-ink">{t('modelProviders.defaultModel')}</span>}
+          <button type="button" onClick={() => removeModel(model)} aria-label={t('modelProviders.removeModel', { model })} title={t('modelProviders.removeModel', { model })} className="shrink-0 rounded px-1 text-sm leading-none text-ink-fade opacity-60 hover:bg-ink/[0.06] hover:text-danger group-hover:opacity-100">×</button>
+        </li>
+      })}
+    </ul>}
+    <div className="flex items-center gap-2">
+      <input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key !== 'Enter') return; event.preventDefault(); commitDraft() }} aria-label={t('modelProviders.addModel')} placeholder={t('modelProviders.addModelPlaceholder')} className="h-8 min-w-0 flex-1 rounded-md border border-ink/15 bg-paper-2 px-2 text-xs" />
+      <button type="button" disabled={!draft.trim()} onClick={commitDraft} className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-ink/20 px-3 text-xs text-ink-soft hover:bg-ink/[0.04] hover:text-ink disabled:opacity-40"><Plus className="h-3.5 w-3.5" />{t('modelProviders.addModel')}</button>
+    </div>
+  </div>
+}
+
 function CapabilityFields({
   editing,
   setEditing,
@@ -203,7 +259,7 @@ function CapabilityFields({
 export default function ProviderEditor({
   editing, setEditing, providers = [], busy, detecting, canSave, keyError = '', labelError = '', baseUrlError = '',
   modelsError = '', headersError = '', contextWindowError = '', firstTokenTimeoutError = '', idleTimeoutError = '',
-  modelContextErrors = {}, message = '', onSave, onDiscover, portalTarget, t,
+  modelContextErrors = {}, message = '', onSave, onDiscover, portalTarget, t, hasCredentials = false,
 }) {
   const [showAdvanced, setShowAdvanced] = useState(editing.presetId === 'custom')
   const [touchedFields, setTouchedFields] = useState({})
@@ -211,10 +267,16 @@ export default function ProviderEditor({
   const isLocalPreset = selectedPreset?.local === true
   const isCloudPreset = Boolean(selectedPreset && !isLocalPreset)
   const isLocalOrCustom = isLocalPreset || editing.presetId === 'custom'
-  const modelList = [...new Set(String(editing.modelsText || '').split(/[\n,]/).map((model) => model.trim()).filter(Boolean))]
-  const selectedModel = modelList.includes(editing.defaultModel) ? editing.defaultModel : (modelList[0] || '')
+  // Parse the ids once: the catalog, the default-model select and the save path
+  // must agree on the same list, including after an in-place edit.
+  const modelList = parseModelList(editing.modelsText)
+  const selectedModel = resolveProviderDefaultModel(modelList, editing.defaultModel)
   const updateSingleModel = (value) => setEditing({ ...editing, modelsText: value, defaultModel: value })
   const canDiscover = isLocalOrCustom && editing.baseUrl.trim() && !baseUrlError && !headersError
+  // A preset's base URL is prefilled, so fetching needs only the credential the
+  // provider requires — the same condition `save` enforces.
+  const canDiscoverPreset = isCloudPreset && editing.baseUrl.trim() && !baseUrlError && !headersError
+  const canFetch = canDiscover || (canDiscoverPreset && hasCredentials)
   const touchField = (field) => setTouchedFields((current) => (
     current[field] ? current : { ...current, [field]: true }
   ))
@@ -248,16 +310,24 @@ export default function ProviderEditor({
           {isLocalOrCustom && <Field label="Base URL" error={visibleBaseUrlError}><input aria-invalid={Boolean(visibleBaseUrlError)} value={editing.baseUrl} onInput={(event) => { touchField('baseUrl'); setEditing({ ...editing, baseUrl: event.currentTarget.value }) }} placeholder="https://api.example.com/v1" /></Field>}
           <Field label={`API Key${isLocalOrCustom ? ` · ${t('modelProviders.optional')}` : ''}${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}><input type="password" disabled={Boolean(editing.hasApiKey && editing.clearApiKey)} value={editing.apiKey} onInput={(event) => setEditing({ ...editing, apiKey: event.currentTarget.value, clearApiKey: false })} placeholder={editing.hasApiKey ? '••••••••' : isLocalPreset ? t('modelProviders.localNoKey') : t('modelProviders.apiKeyPlaceholder')} /></Field>
           {editing.hasApiKey && <label className="flex items-start gap-2 text-xs text-ink-soft"><input type="checkbox" checked={editing.clearApiKey} onChange={(event) => setEditing({ ...editing, clearApiKey: event.target.checked, apiKey: event.target.checked ? '' : editing.apiKey })} /><span><span className="block text-danger">{t('modelProviders.clearApiKey')}</span><span className="block text-ink-fade">{t('modelProviders.clearApiKeyHint')}</span></span></label>}
-          <div className="flex items-end gap-2">
-            <div className="min-w-0 flex-1">
-              {modelList.length > 1 || isCloudPreset ? (
-                <Field label={t('modelProviders.defaultModel')} error={visibleModelsError}><select aria-invalid={Boolean(visibleModelsError)} value={selectedModel} onChange={(event) => { touchField('models'); setEditing({ ...editing, defaultModel: event.target.value }) }}>{modelList.map((model) => <option key={model} value={model}>{model}{selectedPreset?.legacyModels?.includes(model) ? ' · legacy' : ''}</option>)}</select></Field>
-              ) : (
-                <Field label={t('modelProviders.defaultModel')} error={visibleModelsError}><input aria-invalid={Boolean(visibleModelsError)} value={selectedModel} onInput={(event) => { touchField('models'); updateSingleModel(event.currentTarget.value) }} placeholder="model-name" /></Field>
-              )}
-            </div>
-            {isLocalOrCustom && <button type="button" disabled={busy || detecting || !canDiscover} onClick={onDiscover} className="mb-0.5 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-ink/20 px-3 text-xs text-ink-soft hover:bg-ink/[0.04] hover:text-ink disabled:opacity-40"><RefreshCw className={`h-3.5 w-3.5 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>}
+          <div className="min-w-0">
+            {modelList.length > 1 || isCloudPreset ? (
+              <Field label={t('modelProviders.defaultModel')} error={visibleModelsError}><select aria-invalid={Boolean(visibleModelsError)} value={selectedModel} onChange={(event) => { touchField('models'); setEditing({ ...editing, defaultModel: event.target.value }) }}>{modelList.map((model) => <option key={model} value={model}>{model}{selectedPreset?.legacyModels?.includes(model) ? ' · legacy' : ''}</option>)}</select></Field>
+            ) : (
+              <Field label={t('modelProviders.defaultModel')} error={visibleModelsError}><input aria-invalid={Boolean(visibleModelsError)} value={selectedModel} onInput={(event) => { touchField('models'); updateSingleModel(event.currentTarget.value) }} placeholder="model-name" /></Field>
+            )}
           </div>
+          <ModelCatalog
+            editing={editing}
+            setEditing={setEditing}
+            models={modelList}
+            busy={busy}
+            detecting={detecting}
+            canDiscover={canDiscover || canDiscoverPreset}
+            canFetch={canFetch}
+            onDiscover={onDiscover}
+            t={t}
+          />
         </div>}
         {editing.presetId && <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="flex items-center gap-2 text-xs text-ink-soft hover:text-ink self-start"><ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />{t('modelProviders.advanced')}</button>}
         {editing.presetId && showAdvanced && <div className="flex flex-col gap-3 rounded-xl border border-ink/15 p-4">

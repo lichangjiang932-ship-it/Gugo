@@ -170,6 +170,45 @@ export function resolveProviderDefaultModel(models, requestedModel) {
   return available.includes(requestedModel) ? requestedModel : (available[0] || '')
 }
 
+/** Split the free-text model box into a trimmed, de-duplicated, order-preserving list. */
+export function parseModelList(value) {
+  const entries = Array.isArray(value) ? value : String(value ?? '').split(/[\n,]/)
+  const seen = new Set()
+  const models = []
+  for (const entry of entries) {
+    const model = String(entry ?? '').trim()
+    if (!model || seen.has(model)) continue
+    seen.add(model)
+    models.push(model)
+  }
+  return models
+}
+
+/**
+ * Add a model to the catalog. Duplicates are a no-op, so a paste of an id the
+ * provider already returned does not create a second identical entry.
+ */
+export function addModelToList(models, value) {
+  const current = parseModelList(models)
+  const model = String(value ?? '').trim()
+  if (!model || current.includes(model)) return current
+  return [...current, model]
+}
+
+/**
+ * Remove one model. Dropping the current default never leaves the provider
+ * pointed at a model that is no longer in the catalog: the next surviving entry
+ * (or the first) takes over.
+ */
+export function removeModelFromList(models, value, defaultModel = '') {
+  const model = String(value ?? '').trim()
+  const remaining = parseModelList(models).filter((entry) => entry !== model)
+  return {
+    models: remaining,
+    defaultModel: resolveProviderDefaultModel(remaining, defaultModel === model ? '' : defaultModel),
+  }
+}
+
 export function providerBaseUrlError(value) {
   const input = String(value || '').trim()
   if (!input) return 'required'
