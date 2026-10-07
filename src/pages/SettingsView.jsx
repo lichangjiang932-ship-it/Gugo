@@ -5,7 +5,7 @@ import Modal from '../components/Modal.jsx'
 import SettingsDataExport from '../components/settings/SettingsDataExport.jsx'
 import SettingsDiagnosticsPanel from '../components/settings/SettingsDiagnosticsPanel.jsx'
 import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPanel.jsx'
-import SettingsModelsPanel from '../components/settings/SettingsModelsPanel.jsx'
+import ModelConfigPanel from '../components/modelConfig/ModelConfigPanel.jsx'
 import SettingsNetworkPolicyPanel from '../components/settings/SettingsNetworkPolicyPanel.jsx'
 import SettingsSideEffectRecoveryPanel from '../components/settings/SettingsSideEffectRecoveryPanel.jsx'
 import SettingsUsagePanel from '../components/settings/SettingsUsagePanel.jsx'
@@ -143,12 +143,7 @@ export default function SettingsView() {
   }, [t])
 
   function renderModels() {
-    return <SettingsModelsPanel
-      diagnostics={diagnostics}
-      onChanged={() => refreshDiagnostics()}
-      onReady={returnTo ? closeSettings : undefined}
-      t={t}
-    />
+    return <ModelConfigPanel onReady={returnTo ? closeSettings : undefined} />
   }
 
   function renderGeneral() {

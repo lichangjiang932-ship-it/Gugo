@@ -35,9 +35,11 @@ function parseProfileOverrides(raw) {
   }
 }
 
+import { providersFromSettings, readCredentials, readSettings, resolveApiKey } from '../llm/llmConfigStore.js'
+
 export function getModelProviders(env = process.env) {
   const ids = parseModelList(env.MODEL_PROVIDERS)
-  return ids.map((id) => {
+  const fromEnv = ids.map((id) => {
     const prefix = providerEnvPrefix(id)
     return {
       id,
@@ -49,6 +51,25 @@ export function getModelProviders(env = process.env) {
       profileOverrides: parseProfileOverrides(env[`${prefix}_PROFILE`]),
     }
   })
+  // Providers configured in settings.yaml are the same shape; the environment
+  // still wins on an id collision, because a deployment that exports MODEL_*
+  // means it.
+  const known = new Set(fromEnv.map((provider) => provider.id))
+  const settings = readSettings(env)
+  const credentials = readCredentials(env)
+  const fromSettings = Object.entries(providersFromSettings(settings))
+    .filter(([id]) => !known.has(id))
+    .map(([id, provider]) => ({
+      id,
+      label: String(provider.displayName || id),
+      baseUrl: String(provider.baseURL || ''),
+      apiKey: resolveApiKey(id, provider, { env, credentials }).apiKey,
+      models: (Array.isArray(provider.models) ? provider.models : []).map((model) => String(model?.id || model || '')).filter(Boolean),
+      headers: {},
+      profileOverrides: {},
+      api: String(provider.api || 'openai-completions'),
+    }))
+  return [...fromEnv, ...fromSettings]
 }
 
 function findProviderForModel(modelName, env = process.env, providerId = '') {

@@ -38,6 +38,7 @@ import { handleDeskRequest } from '../routes/deskRoutes.js'
 import { handleMobileRequest } from '../routes/mobileRoutes.js'
 import { handleToolPermissionsRequest } from '../routes/toolPermissionRoutes.js'
 import { handleModelProviderRequest } from '../routes/modelProviderRoutes.js'
+import { handleLlmConfigRequest } from '../routes/llmConfigRoutes.js'
 import { handleBrowserRequest } from '../routes/browserRoutes.js'
 import { handlePreviewRequest } from '../routes/previewRoutes.js'
 import { handleConnectorRequest } from '../routes/connectorRoutes.js'
@@ -79,6 +80,7 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.auth.account', 9_900, ['/api/auth', '/api/account']),
   descriptor('builtin.model.providers', 9_800, ['/api/model/providers', '/api/model/catalog']),
   descriptor('builtin.model.status', 9_700, ['/api/model/status']),
+  descriptor('builtin.llm.config', 9_760, ['/api/llm']),
   descriptor('builtin.system.runtime-config', 9_600, [
     '/api/system/runtime-config',
     '/api/system/network-policy',
@@ -212,6 +214,11 @@ export function createBuiltinHttpCapabilities({
       'builtin.model.status',
       (req) => req.url?.startsWith('/api/model/status'),
       (req, res) => handleModelStatusRequest(req, res),
+    ),
+    capability(
+      'builtin.llm.config',
+      (req) => req.url?.startsWith('/api/llm'),
+      (req, res) => handleLlmConfigRequest(req, res),
     ),
     capability(
       'builtin.system.runtime-config',
