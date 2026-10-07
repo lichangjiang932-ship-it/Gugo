@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, FileCog, Plus, Trash2 } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
-import { listLlmCatalog, listLlmProviders, removeLlmProvider, setLlmDefaultModel } from '../../lib/llmConfigClient.js'
+import { importLegacyLlmProviders, listLlmCatalog, listLlmProviders, removeLlmProvider, setLlmDefaultModel } from '../../lib/llmConfigClient.js'
 import AddProviderPanel from './AddProviderPanel.jsx'
 import ProviderModelDirectory from './ProviderModelDirectory.jsx'
 
@@ -49,6 +49,7 @@ export default function ModelConfigPanel({ onReady }) {
   const [adding, setAdding] = useState(false)
   const [expandedId, setExpandedId] = useState('')
   const [error, setError] = useState('')
+  const [note, setNote] = useState('')
 
   const reload = useCallback(async () => {
     // One microtask of separation: the effect below must not set state in its
@@ -106,6 +107,23 @@ export default function ModelConfigPanel({ onReady }) {
         <button
           type="button"
           className={BUTTON}
+          data-testid="import-legacy-providers"
+          onClick={async () => {
+            try {
+              const result = await importLegacyLlmProviders()
+              setError('')
+              setNote(t('settingsModels.importLegacyDone', { imported: result.imported, skipped: result.skipped }))
+              await reload()
+            } catch (failure) {
+              setError(failure.message)
+            }
+          }}
+        >
+          {t('settingsModels.importLegacy')}
+        </button>
+        <button
+          type="button"
+          className={BUTTON}
           data-testid="open-config-file"
           title={catalog?.settingsPath || ''}
           onClick={() => { if (catalog?.settingsPath) void globalThis.navigator?.clipboard?.writeText?.(catalog.settingsPath) }}
@@ -116,6 +134,7 @@ export default function ModelConfigPanel({ onReady }) {
       </div>
 
       {error && <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>}
+      {note && <p role="status" className="text-xs text-ink-fade" data-testid="model-config-note">{note}</p>}
 
       <ul className="flex flex-col gap-2" data-testid="provider-list">
         {state.providers.map((provider) => (

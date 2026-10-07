@@ -1,4 +1,5 @@
 import { readJson } from '../utils.js'
+import { importLegacyProviders } from '../llm/importLegacyProviders.js'
 import { authenticateRequest } from '../middleware.js'
 import {
   addModel,
@@ -74,6 +75,9 @@ export async function handleLlmConfigRequest(req, res) {
     }
     if (req.method === 'DELETE' && section === 'providers' && id && action === 'models') {
       return sendJson(res, 200, { ok: true, provider: removeModel(id, decodeURIComponent(suffix.split('/').slice(3).join('/'))) })
+    }
+    if (req.method === 'POST' && section === 'import') {
+      return sendJson(res, 200, { ok: true, ...importLegacyProviders({ userId }) })
     }
     if (req.method === 'PUT' && section === 'default-model') {
       return sendJson(res, 200, { ok: true, defaultModel: setDefaultModel(await readJson(req)) })
