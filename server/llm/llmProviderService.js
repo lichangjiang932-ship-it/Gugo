@@ -10,6 +10,7 @@ import {
   writeCredentials,
   writeSettings,
 } from './llmConfigStore.js'
+import { registerBuiltinLlmAdapters } from './adapters/index.js'
 import {
   isValidProviderId,
   isSupportedProtocol,
@@ -20,6 +21,9 @@ import {
 } from '../../shared/llmProviderCatalog.js'
 
 const PROBE_TIMEOUT_MS = 8000
+
+// Protocol adapters must exist before any request is built.
+registerBuiltinLlmAdapters()
 
 export function listCatalog() {
   return { protocols: LLM_PROTOCOLS, cloud: PROVIDER_CATALOG, local: LOCAL_PROVIDER_PRESETS }

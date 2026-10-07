@@ -75,7 +75,9 @@ export function getModelProviders(env = process.env) {
 /** A hand-declared gateway cannot be recognised from its URL, so the protocol it
  * was configured with is the authoritative hint for the request pipeline. */
 function protocolProfileOverrides(api = '') {
-  return String(api) === 'anthropic-messages' ? { kind: 'anthropic' } : {}
+  if (String(api) === 'anthropic-messages') return { kind: 'anthropic' }
+  if (String(api) === 'openai-responses') return { kind: 'openai-responses' }
+  return {}
 }
 
 function findProviderForModel(modelName, env = process.env, providerId = '') {
