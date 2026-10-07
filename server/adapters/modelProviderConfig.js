@@ -51,9 +51,11 @@ export function getModelProviders(env = process.env) {
       profileOverrides: parseProfileOverrides(env[`${prefix}_PROFILE`]),
     }
   })
-  // Providers configured in settings.yaml are the same shape; the environment
-  // still wins on an id collision, because a deployment that exports MODEL_*
-  // means it.
+  // Only a deployment that points GUGO_HOME at a config directory opts into the
+  // YAML layer. Without this gate, a developer's own ~/.gugo/settings.yaml would
+  // change provider resolution inside every test and every unrelated runtime.
+  const settingsHome = String(env.GUGO_HOME || '').trim()
+  if (!settingsHome) return fromEnv
   const known = new Set(fromEnv.map((provider) => provider.id))
   const settings = readSettings(env)
   const credentials = readCredentials(env)

@@ -3,6 +3,13 @@ import { ChevronDown, ChevronRight, Plus, RefreshCw, Trash2 } from 'lucide-react
 import { probeLlmDraft, saveLlmCredential, saveLlmProvider } from '../../lib/llmConfigClient.js'
 
 const INPUT = 'h-9 w-full rounded-control border border-ink/15 bg-paper px-2.5 text-sm text-ink outline-none focus:border-focus'
+// A select with no options renders blank, so the protocol list never depends on
+// a successful catalogue fetch.
+const FALLBACK_PROTOCOLS = Object.freeze([
+  { id: 'openai-completions', label: 'OpenAI Chat Completions' },
+  { id: 'openai-responses', label: 'OpenAI Responses' },
+  { id: 'anthropic-messages', label: 'Anthropic Messages' },
+])
 const LABEL = 'text-xs font-medium text-ink'
 const TAB = 'rounded-control px-3 py-1.5 text-sm transition-colors'
 const PRIMARY = 'h-9 rounded-control bg-ink px-4 text-sm text-paper disabled:opacity-40'
@@ -162,7 +169,9 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
           </Field>
           <Field label={t('settingsModels.protocol')}>
             <select className={INPUT} data-testid="custom-protocol" value={form.api} onChange={(event) => patch({ api: event.target.value })}>
-              {(catalog?.protocols || []).map((protocol) => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}
+              {(catalog?.protocols?.length ? catalog.protocols : FALLBACK_PROTOCOLS).map((protocol) => (
+                <option key={protocol.id} value={protocol.id}>{protocol.label}</option>
+              ))}
             </select>
           </Field>
           <Field label={t('settingsModels.apiKey')}>
@@ -172,6 +181,10 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
         </>
       )}
 
+      {/* While editing a saved provider, the card below already shows the live
+          directory; a second, draft-only copy here would silently disagree with
+          it and made "delete a model" look like it did nothing. */}
+      {!editing && (
       <div className="flex flex-col gap-2 border-t border-ink/10 pt-3" data-testid="form-model-directory">
         <div className="flex items-center justify-between gap-2">
           <span className={LABEL}>{t('settingsModels.modelDirectory')}</span>
@@ -207,13 +220,14 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
               event.preventDefault()
               addModel()
             }} />
-          <button type="button" className={SECONDARY} data-testid="draft-add-model" disabled={!modelDraft.trim()} onClick={addModel}>
+          <button type="button" className={`${SECONDARY} whitespace-nowrap`} data-testid="draft-add-model" disabled={!modelDraft.trim()} onClick={addModel}>
             <Plus className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />
             {t('settingsModels.addModel')}
           </button>
         </div>
         {note && <p role="status" className="text-xs text-ink-fade" data-testid="probe-note">{note}</p>}
       </div>
+      )}
 
       {error && <p role="alert" className="text-xs text-danger" data-testid="add-provider-error">{error}</p>}
       <div className="flex justify-end gap-2">

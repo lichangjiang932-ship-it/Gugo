@@ -9,7 +9,7 @@ const CARD = 'flex items-center gap-3 rounded-xl border border-ink/12 bg-surface
 const BUTTON = 'h-8 rounded-control border border-ink/15 bg-paper px-3 text-xs text-ink transition-colors hover:bg-paper-2'
 const DASHED = 'flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-ink/25 px-4 py-3 text-sm text-ink-soft transition-colors hover:border-ink/40 hover:text-ink'
 
-function ProviderCard({ defaultModel, expanded, onChangeDefault, onDelete, onExpand, onSaved, provider, t }) {
+function ProviderCard({ confirming = false, defaultModel, expanded, onChangeDefault, onDelete, onExpand, onSaved, provider, t }) {
   return (
     <li className="flex flex-col gap-2">
       <div className={CARD}>
@@ -29,12 +29,13 @@ function ProviderCard({ defaultModel, expanded, onChangeDefault, onDelete, onExp
         </button>
         <button type="button" className={`${BUTTON} text-danger`} data-testid="provider-delete" onClick={() => onDelete(provider)}>
           <Trash2 className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />
-          {t('settingsModels.remove')}
+          {t(confirming ? 'settingsModels.confirmRemoveShort' : 'settingsModels.remove')}
         </button>
       </div>
       {expanded && (
         <div className="rounded-xl bg-paper-2/60 p-3">
           <AddProviderPanel editing={provider} initialCatalogEntryId={provider.id} onCancel={() => onExpand(provider)} onSaved={onSaved} t={t} />
+          {/* The saved provider already has a live directory below. */}
           <ProviderModelDirectory defaultModel={defaultModel} onChangeDefault={onChangeDefault} onChanged={onSaved} provider={provider} t={t} />
         </div>
       )}
@@ -79,8 +80,15 @@ export default function ModelConfigPanel({ onReady }) {
     await reload()
     onReady?.()
   }
+  const [confirmingDelete, setConfirmingDelete] = useState('')
   const handleDelete = async (provider) => {
-    if (!globalThis.confirm?.(t('settingsModels.confirmRemove', { name: provider.displayName }))) return
+    // No native confirm(): the desktop shell can block it, and a blocked dialog
+    // reads as "the button does nothing". The button asks once, inline instead.
+    if (confirmingDelete !== provider.id) {
+      setConfirmingDelete(provider.id)
+      return
+    }
+    setConfirmingDelete('')
     try {
       await removeLlmProvider(provider.id)
       await reload()
@@ -180,6 +188,7 @@ export default function ModelConfigPanel({ onReady }) {
             expanded={expandedId === provider.id}
             onChangeDefault={handleDefault}
             onDelete={handleDelete}
+            confirming={confirmingDelete === provider.id}
             onExpand={(entry) => setExpandedId((current) => (current === entry.id ? '' : entry.id))}
             onSaved={afterChange}
             provider={provider}
