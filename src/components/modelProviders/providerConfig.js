@@ -30,6 +30,37 @@ export const CLOUD_PRESETS = Object.freeze([
 ])
 
 export const PROVIDER_PRESETS = Object.freeze([...CLOUD_PRESETS, ...LOCAL_PRESETS])
+
+/**
+ * Base URLs for catalogue-only OpenAI-compatible providers, so picking one does
+ * not start with an empty box.
+ *
+ * Only ids whose documented OpenAI-compatible endpoint is stable are listed. The
+ * rest (Bedrock, Vertex, GitHub Copilot and similar) use provider-specific
+ * authentication and are deliberately absent: guessing an endpoint would be
+ * worse than asking the reader for the one they actually use.
+ */
+export const CATALOG_BASE_URLS = Object.freeze({
+  cerebras: 'https://api.cerebras.ai/v1',
+  baseten: 'https://inference.baseten.co/v1',
+  'minimax-cn': 'https://api.minimaxi.com/v1',
+  minimax: 'https://api.minimax.io/v1',
+  deepinfra: 'https://api.deepinfra.com/v1/openai',
+  togetherai: 'https://api.together.xyz/v1',
+  fireworks: 'https://api.fireworks.ai/inference/v1',
+  'fireworks-ai': 'https://api.fireworks.ai/inference/v1',
+  novita: 'https://api.novita.ai/v3/openai',
+  'novita-ai': 'https://api.novita.ai/v3/openai',
+  hyperbolic: 'https://api.hyperbolic.xyz/v1',
+  nvidia: 'https://integrate.api.nvidia.com/v1',
+  nebius: 'https://api.studio.nebius.com/v1',
+  scaleway: 'https://api.scaleway.ai/v1',
+  venice: 'https://api.venice.ai/api/v1',
+  perplexity: 'https://api.perplexity.ai',
+  cohere: 'https://api.cohere.ai/compatibility/v1',
+  upstage: 'https://api.upstage.ai/v1',
+})
+
 export const KIND_OPTIONS = ['', 'ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible']
 export const TRIBOOL_VALUES = ['', '1', '0']
 const PROVIDER_KEY_RE = /^[a-z][a-z0-9_-]{0,39}$/
@@ -206,6 +237,71 @@ export function removeModelFromList(models, value, defaultModel = '') {
   return {
     models: remaining,
     defaultModel: resolveProviderDefaultModel(remaining, defaultModel === model ? '' : defaultModel),
+  }
+}
+
+/**
+ * Replace the model list wholesale — the "apply this source's list" action.
+ *
+ * A reader who has curated a list by hand must not lose the default they picked:
+ * it survives whenever it is still in the new list, and otherwise falls back to
+ * the first entry exactly as `removeModelFromList` does.
+ */
+export function replaceModelList(models, defaultModel = '') {
+  const next = parseModelList(models)
+  return { models: next, defaultModel: resolveProviderDefaultModel(next, defaultModel) }
+}
+
+/**
+ * Add the ids the list does not have yet, keeping the reader's order.
+ *
+ * This is a merge, not a sync: the reader's own list is never reordered or pruned
+ * by a source that happens to know fewer models. Because it is a merge, handing it
+ * a whole source list does re-add an id that was removed by hand — which is why a
+ * caller offering "add everything from this source" passes only the ids that are
+ * currently missing, and why the per-model toggle exists for a single id.
+ */
+export function applyModelList(models, incoming, defaultModel = '') {
+  const next = parseModelList(models)
+  const added = []
+  for (const entry of parseModelList(incoming)) {
+    if (next.includes(entry)) continue
+    next.push(entry)
+    added.push(entry)
+  }
+  return { models: next, added, defaultModel: resolveProviderDefaultModel(next, defaultModel) }
+}
+
+/**
+ * Seed a fresh custom endpoint edit.
+ *
+ * Both the `custom` button and a provider picked from the knowledge base enter
+ * through here, so "a provider with no bundled preset" is the custom path rather
+ * than a second activation model. Region-scoped header keys on the live edit are
+ * carried over: they belong to the local profile, not to the provider name.
+ */
+export function seedCustomEditor(current = {}, { key, label, isDefault = true } = {}) {
+  if (current.presetId === 'custom' && current.id) return current
+  const carry = current.id
+    ? {
+        id: current.id,
+        key: current.key,
+        label: current.label,
+        enabled: current.enabled,
+        isDefault: current.isDefault,
+        clearApiKey: Boolean(current.hasApiKey),
+        savedHeaderKeys: current.savedHeaderKeys || [],
+        removedHeaderKeys: current.savedHeaderKeys || [],
+        clearHeaders: Boolean(current.savedHeaderKeys?.length),
+      }
+    : {}
+  return {
+    ...emptyProvider(),
+    ...carry,
+    presetId: 'custom',
+    key: current.id ? current.key : String(key || '').trim(),
+    label: current.id ? current.label : String(label || '').trim(),
+    isDefault: current.id ? current.isDefault : isDefault,
   }
 }
 

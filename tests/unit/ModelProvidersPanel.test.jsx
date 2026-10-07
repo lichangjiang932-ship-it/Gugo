@@ -35,12 +35,27 @@ function buttonByText(text, { exact = false } = {}) {
   ))
 }
 
+// The panel reads the knowledge base's provenance on mount and its picker answers
+// catalogue lookups, so a stub that only knows `/api/model/providers` would make
+// every test exercise a server that cannot exist. `BUNDLED_CATALOG` is the shared
+// fixture each test answers those two routes with; a test that needs catalogue
+// models serves them itself.
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
 }
+
+const BUNDLED_CATALOG = Object.freeze({
+  available: true,
+  source: 'bundled',
+  providers: 226,
+  models: 8154,
+  generatedAt: '2026-10-07',
+  refreshedAt: 0,
+  error: '',
+})
 
 function providerTestResponse(provider, modelName, mode = 'agent') {
   const readiness = {
@@ -110,6 +125,158 @@ test('empty model settings state omits the removed billing notice container', as
     assert.doesNotMatch(document.body.textContent, /Gugo 不提供付费模型或平台计费/)
     assert.match(document.body.textContent, /请添加你自己的本地或云端模型/)
     assert.doesNotMatch(document.body.textContent, /\.env/)
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a provider id the preset catalogue never had can be selected and saved through the custom path', async () => {
+  const dom = setupDom()
+  const root = createRoot(document.getElementById('root'))
+  const originalFetch = globalThis.fetch
+  let submitted = null
+  let savedProvider = null
+  globalThis.fetch = async (url, init = {}) => {
+    if (url === '/api/model/catalog') return jsonResponse({ ok: true, catalog: BUNDLED_CATALOG })
+    if (String(url).startsWith('/api/model/catalog?')) {
+      // The picker loads the whole catalogue index on mount, so a provider with no
+      // bundled preset is browsable instead of needing its id typed from memory.
+      return jsonResponse({
+        ok: true,
+        catalog: BUNDLED_CATALOG,
+        providers: [
+          { id: 'amazon-bedrock', name: 'Amazon Bedrock', modelCount: 2 },
+          { id: 'cerebras', name: 'Cerebras', modelCount: 5 },
+        ],
+        providerCount: 2,
+      })
+    }
+    if (url === '/api/model/catalog/amazon-bedrock') {
+      return jsonResponse({
+        ok: true,
+        provider: { id: 'amazon-bedrock', name: 'Amazon Bedrock' },
+        models: [
+          { id: 'global.anthropic.claude-opus-4-8', name: 'Claude Opus 4.8', context: 200000, output: 32000, tools: true, vision: true, pdf: false, reasoning: false },
+          { id: 'legacy.titan-text', name: 'Titan Text', context: 8000, output: 2000, tools: false, vision: false, pdf: false, reasoning: false, deprecated: true },
+        ],
+        catalog: BUNDLED_CATALOG,
+      })
+    }
+    if (url === '/api/model/providers' && init.method === 'POST') {
+      submitted = JSON.parse(init.body)
+      savedProvider = { id: 'provider-bedrock', configRevision: 1, ...submitted }
+      return jsonResponse({ ok: true, provider: savedProvider })
+    }
+    if (url === '/api/model/providers/provider-bedrock/test') {
+      return providerTestResponse(savedProvider, submitted?.defaultModel)
+    }
+    if (url === '/api/model/providers') return jsonResponse({ ok: true, providers: savedProvider ? [savedProvider] : [] })
+    throw new Error(`Unexpected request: ${url}`)
+  }
+
+  try {
+    await act(async () => root.render(<I18nProvider><ModelProvidersPanel /></I18nProvider>))
+    await act(async () => { await Promise.resolve() })
+    await act(async () => buttonByText('新增', { exact: true }).click())
+
+    const search = document.querySelector('input[placeholder="输入供应商 ID"]')
+    assert.ok(search, 'the picker offers a knowledge base lookup by provider id')
+    await setInputValue(search, 'amazon-bedrock')
+    await act(async () => {
+      buttonByText('使用供应商 ID：amazon-bedrock', { exact: true }).click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    // No bundled preset, so this enters exactly where `自定义接口` enters.
+    assert.equal(document.querySelector('input[placeholder="my-provider"]').value, 'amazon-bedrock')
+    assert.ok(document.querySelector('input[placeholder="https://api.example.com/v1"]'))
+    assert.ok(document.querySelector('input[type="password"]'))
+    const save = buttonByText('保存', { exact: true })
+    assert.equal(save.disabled, true, 'a custom endpoint still needs a base URL and a model')
+
+    await setInputValue(
+      document.querySelector('input[placeholder="https://api.example.com/v1"]'),
+      'https://bedrock-runtime.us-east-1.amazonaws.com/v1',
+    )
+    await setInputValue(document.querySelector('input[type="password"]'), 'bedrock-key')
+    // Paste the id into the list the same way the advanced models box does; the
+    // knowledge base itself is covered by its own focused test file.
+    await ensureAdvancedOpen()
+    const modelsInput = [...document.querySelectorAll('textarea')]
+      .find((input) => input.placeholder.includes('model-a'))
+    await setInputValue(modelsInput, 'global.anthropic.claude-opus-4-8')
+
+    assert.equal(save.disabled, false)
+    await act(async () => {
+      save.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    assert.equal(submitted.key, 'amazon-bedrock')
+    assert.equal(submitted.baseUrl, 'https://bedrock-runtime.us-east-1.amazonaws.com/v1')
+    assert.deepEqual(submitted.models, ['global.anthropic.claude-opus-4-8'])
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('the provider picker names the knowledge base it reads and can refresh it', async () => {
+  const dom = setupDom()
+  const root = createRoot(document.getElementById('root'))
+  const originalFetch = globalThis.fetch
+  let resolveRefresh
+  const pendingRefresh = new Promise((resolve) => { resolveRefresh = resolve })
+  globalThis.fetch = async (url, init = {}) => {
+    if (url === '/api/model/catalog') return jsonResponse({ ok: true, catalog: BUNDLED_CATALOG })
+    if (String(url).startsWith('/api/model/catalog?')) {
+      return jsonResponse({
+        ok: true,
+        catalog: BUNDLED_CATALOG,
+        providers: [{ id: 'amazon-bedrock', name: 'Amazon Bedrock', modelCount: 2 }],
+        providerCount: 1,
+      })
+    }
+    if (url === '/api/model/catalog/refresh' && init.method === 'POST') {
+      await pendingRefresh
+      return jsonResponse({
+        ok: true,
+        catalog: { ...BUNDLED_CATALOG, source: 'models.dev', providers: 240, models: 9000, refreshedAt: 1_800_000_000_000 },
+      })
+    }
+    if (url === '/api/model/providers') return jsonResponse({ ok: true, providers: [] })
+    throw new Error(`Unexpected request: ${url}`)
+  }
+
+  try {
+    await act(async () => root.render(<I18nProvider><ModelProvidersPanel /></I18nProvider>))
+    await act(async () => { await Promise.resolve() })
+    await act(async () => buttonByText('新增', { exact: true }).click())
+
+    const status = document.querySelector('[data-testid="provider-knowledge-base-status"]')
+    assert.equal(status.querySelector('[data-catalog-source]').getAttribute('data-catalog-source'), 'bundled')
+    assert.match(status.textContent, /随应用发布的快照/)
+    assert.match(status.textContent, /226 个供应商 · 8154 个模型/)
+    assert.match(status.textContent, /2026-10-07/)
+
+    const refresh = buttonByText('从 models.dev 刷新模型知识库', { exact: true })
+    await act(async () => {
+      refresh.click()
+      await Promise.resolve()
+    })
+    // A refresh in flight says so instead of leaving the reader guessing.
+    assert.equal(buttonByText('正在刷新…', { exact: true }).disabled, true)
+
+    await act(async () => {
+      resolveRefresh()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    assert.equal(status.querySelector('[data-catalog-source]').getAttribute('data-catalog-source'), 'models.dev')
+    assert.match(status.textContent, /models\.dev（已刷新）/)
+    assert.match(status.textContent, /240 个供应商 · 9000 个模型/)
   } finally {
     globalThis.fetch = originalFetch
     await act(async () => root.unmount())

@@ -77,7 +77,7 @@ function descriptor(id, priority, apiPrefixes = []) {
 export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.mcp.server', 10_000),
   descriptor('builtin.auth.account', 9_900, ['/api/auth', '/api/account']),
-  descriptor('builtin.model.providers', 9_800, ['/api/model/providers']),
+  descriptor('builtin.model.providers', 9_800, ['/api/model/providers', '/api/model/catalog']),
   descriptor('builtin.model.status', 9_700, ['/api/model/status']),
   descriptor('builtin.system.runtime-config', 9_600, [
     '/api/system/runtime-config',
@@ -205,7 +205,7 @@ export function createBuiltinHttpCapabilities({
     ),
     capability(
       'builtin.model.providers',
-      (req) => req.url?.startsWith('/api/model/providers'),
+      (req) => req.url?.startsWith('/api/model/providers') || req.url?.startsWith('/api/model/catalog'),
       (req, res) => handleModelProviderRequest(req, res),
     ),
     capability(

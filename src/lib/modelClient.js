@@ -1,4 +1,5 @@
 // Stream completion event contract: { type: 'complete' }
+export { getCatalogProviderModels, getModelCatalog, listCatalogProviders, refreshModelCatalog } from './modelClient/modelCatalog.js'
 export { callModelThroughProxy, summarizeSessionTitle } from './modelClient/modelCompletion.js'
 export {
   deleteModelProvider,

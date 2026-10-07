@@ -1,16 +1,39 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Plus, Server } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
-import { deleteModelProvider, discoverModelProvider, listModelProviders, saveModelProvider, testModelProvider } from '../lib/modelClient.js'
+import {
+  deleteModelProvider, discoverModelProvider, getCatalogProviderModels, listCatalogProviders,
+  listModelProviders, refreshModelCatalog, saveModelProvider, testModelProvider,
+} from '../lib/modelClient.js'
 import ProviderDiagnostics from './modelProviders/ProviderDiagnostics.jsx'
 import ProviderEditor from './modelProviders/ProviderEditor.jsx'
 import ProviderList from './modelProviders/ProviderList.jsx'
 import { formatProviderError } from './modelProviders/providerError.js'
 import {
-  emptyProvider, findConfiguredPresetProvider, mergeDiscoveredModelProfiles, normalizeEditorModelProfiles, numberOrNull,
-  parseModelList, providerBaseUrlError, PROVIDER_PRESETS, resolveProviderDefaultModel, selectToTribool, toEditor,
+  CATALOG_BASE_URLS, emptyProvider, findConfiguredPresetProvider, mergeDiscoveredModelProfiles, normalizeEditorModelProfiles, numberOrNull,
+  parseModelList, providerBaseUrlError, PROVIDER_PRESETS, resolveProviderDefaultModel, seedCustomEditor, selectToTribool, toEditor,
 } from './modelProviders/providerConfig.js'
 import { buildProviderValidation, isAgentReady, readinessFromTestResult } from './modelProviders/providerPanelValidation.js'
+
+/**
+ * The catalogue-only provider list the picker can browse.
+ *
+ * The index is fetched once from the catalogue, so a provider with no bundled
+ * preset (amazon-bedrock, cerebras, baseten, …) is discoverable by browsing
+ * rather than by already knowing its id. Providers the reader then opens are
+ * folded back in with their live model count, newest-first, so the most recently
+ * used entry is the one nearest the top.
+ */
+function rememberCatalogProvider(known, provider) {
+  const id = String(provider?.id || '').trim()
+  if (!id) return known
+  const entry = {
+    id,
+    name: provider.name || id,
+    ...(typeof provider.modelCount === 'number' ? { modelCount: provider.modelCount } : {}),
+  }
+  return [entry, ...known.filter((item) => item.id !== id)]
+}
 
 export default function ModelProvidersPanel({ onChanged, onReady }) {
   const { t } = useT()
@@ -21,6 +44,15 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
   const [message, setMessage] = useState('')
   const [detecting, setDetecting] = useState(false)
   const [diagnostics, setDiagnostics] = useState(null)
+  const [catalog, setCatalog] = useState(null)
+  const [catalogProviders, setCatalogProviders] = useState([])
+  const [catalogModels, setCatalogModels] = useState([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogError, setCatalogError] = useState('')
+  const [refreshingCatalog, setRefreshingCatalog] = useState(false)
+  const [catalogRefreshError, setCatalogRefreshError] = useState('')
+  const [catalogMessage, setCatalogMessage] = useState('')
+  const catalogRequestVersion = useRef(0)
   const discoverRequestVersion = useRef(0)
   const updateEditing = useCallback((next) => {
     discoverRequestVersion.current += 1
@@ -54,6 +86,97 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
     })
     return () => { active = false }
   }, [t])
+
+  // Provenance is read once, on mount: it is the label on the knowledge base, and
+  // the surface must keep working when it cannot be read at all. The provider
+  // index rides along so the picker can offer every catalogue provider, not only
+  // the ones this app happens to ship a preset for.
+  useEffect(() => {
+    let active = true
+    Promise.resolve().then(async () => {
+      try {
+        const { providers: indexed, catalog: status } = await listCatalogProviders()
+        if (!active) return
+        if (status) setCatalog(status)
+        if (indexed.length) setCatalogProviders(indexed)
+      } catch {
+        if (active) setCatalog((current) => current || { available: false, source: 'none', generatedAt: '', error: '' })
+      }
+    })
+    return () => { active = false }
+  }, [])
+
+  const loadCatalogModels = useCallback(async (providerId) => {
+    const id = String(providerId || '').trim()
+    if (!id) return
+    const requestVersion = catalogRequestVersion.current + 1
+    catalogRequestVersion.current = requestVersion
+    setCatalogLoading(true)
+    setCatalogError('')
+    try {
+      const data = await getCatalogProviderModels(id)
+      if (catalogRequestVersion.current !== requestVersion) return
+      setCatalogModels(data.models)
+      setCatalogProviders((current) => rememberCatalogProvider(current, {
+        id: data.provider?.id || id,
+        name: data.provider?.name || id,
+        modelCount: data.models.length,
+      }))
+      if (data.catalog) setCatalog(data.catalog)
+    } catch (error) {
+      if (catalogRequestVersion.current !== requestVersion) return
+      setCatalogModels([])
+      setCatalogError(error?.code === 'CATALOG_PROVIDER_UNKNOWN'
+        ? t('modelProviders.knowledgeBaseUnknownProvider')
+        : t('modelProviders.catalogProviderFailed', { error: formatProviderError(error, t) }))
+    } finally {
+      if (catalogRequestVersion.current === requestVersion) setCatalogLoading(false)
+    }
+  }, [t])
+
+  const refreshCatalog = useCallback(async () => {
+    setRefreshingCatalog(true)
+    setCatalogRefreshError('')
+    setCatalogMessage('')
+    try {
+      const status = await refreshModelCatalog()
+      if (status) setCatalog(status)
+      if (status?.error) setCatalogRefreshError(status.error)
+      else setCatalogMessage(t('modelProviders.catalogRefreshOk'))
+    } catch (error) {
+      // A refresh only improves data the app already has, so a failure is shown
+      // beside the list rather than replacing it.
+      setCatalogRefreshError(formatProviderError(error, t))
+    } finally {
+      setRefreshingCatalog(false)
+    }
+  }, [t])
+
+  /**
+   * Choose a provider the bundled presets never covered.
+   *
+   * It enters through the `custom` path — service URL plus API key — instead of
+   * inventing a second activation model, so everything downstream (validation,
+   * saving, testing, discovery) is the behavior a custom endpoint already has.
+   */
+  const chooseCatalogProvider = (provider) => {
+    const id = String(provider?.id || '').trim()
+    if (!id) return
+    const name = String(provider?.name || id).trim()
+    updateEditing((current) => {
+      const seeded = current && typeof current === 'object' && current.presetId
+        ? seedCustomEditor(current, { key: id, label: name })
+        : { ...emptyProvider(), presetId: 'custom', key: id, label: name, isDefault: true }
+      return {
+        ...seeded,
+        ...(CATALOG_BASE_URLS[id] ? { baseUrl: CATALOG_BASE_URLS[id] } : {}),
+        catalogProviderId: id,
+      }
+    })
+    setCatalogProviders((current) => rememberCatalogProvider(current, provider))
+    setCatalogModels([])
+    setCatalogError('')
+  }
 
   const save = async () => {
     setBusy(true)
@@ -235,8 +358,12 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
     }
   }
 
+  // Keep the nested editor inside the React root that owns this panel: a portal
+  // that escapes to `document.body` sits outside the container React delegates
+  // events from, so a controlled input portalled there can never report a change.
   const capturePanel = useCallback((node) => {
-    if (node) setEditorPortalTarget(node.closest('[role="dialog"]') || document.body)
+    if (!node) return
+    setEditorPortalTarget(node.closest('[role="dialog"]') || node.parentElement || document.body)
   }, [])
 
   return <div ref={capturePanel} className="border border-ink/20 rounded-md bg-paper p-4 flex flex-col gap-3">
@@ -256,6 +383,11 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
       contextWindowError={contextWindowError} firstTokenTimeoutError={firstTokenTimeoutError}
       idleTimeoutError={idleTimeoutError} modelContextErrors={modelContextErrors}
       message={message} onSave={save} onDiscover={discover} portalTarget={editorPortalTarget} t={t}
+      catalog={catalog} catalogProviders={catalogProviders} catalogModels={catalogModels}
+      catalogLoading={catalogLoading} catalogError={catalogError} refreshingCatalog={refreshingCatalog}
+      catalogRefreshError={catalogRefreshError} catalogMessage={catalogMessage}
+      onRefreshCatalog={refreshCatalog} onChooseCatalogProvider={chooseCatalogProvider}
+      onLoadCatalogModels={loadCatalogModels} onCatalogMessage={setCatalogMessage}
     />}
   </div>
 }

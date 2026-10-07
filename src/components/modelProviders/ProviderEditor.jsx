@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { ChevronDown, Cloud, Plus, RefreshCw, Save, X } from 'lucide-react'
 import Modal from '../Modal.jsx'
+import ProviderKnowledgeBase from './ProviderKnowledgeBase.jsx'
+import ProviderKnowledgeBaseStatus from './ProviderKnowledgeBaseStatus.jsx'
 import {
-  addModelToList, CLOUD_PRESETS, effectiveUrl, emptyProvider, findConfiguredPresetProvider, formatContextTokens, KIND_OPTIONS,
-  LOCAL_PRESETS, nextCustomProviderKey, parseModelList, PROVIDER_PRESETS, removeModelFromList, resolveProviderDefaultModel,
-  toEditor, TRIBOOL_VALUES,
+  addModelToList, CATALOG_BASE_URLS, CLOUD_PRESETS, effectiveUrl, emptyProvider, findConfiguredPresetProvider, formatContextTokens,
+  KIND_OPTIONS, LOCAL_PRESETS, nextCustomProviderKey, parseModelList, PROVIDER_PRESETS, removeModelFromList,
+  resolveProviderDefaultModel, seedCustomEditor, toEditor, TRIBOOL_VALUES,
 } from './providerConfig.js'
 
 function Field({ label, children, error = '' }) {
@@ -70,7 +72,11 @@ function TriboolField({ label, value, onChange, t }) {
   </select></Field>
 }
 
-function PresetPicker({ editing, setEditing, setShowAdvanced, providers, t }) {
+function PresetPicker({
+  editing, setEditing, setShowAdvanced, providers, catalog = null, catalogProviders = [], catalogError = '',
+  refreshingCatalog = false, catalogRefreshError = '', onRefreshCatalog, onChooseCatalogProvider, t,
+}) {
+  const [query, setQuery] = useState('')
   const presetLabel = (preset) => preset.labelKey ? t(`modelProviders.${preset.labelKey}`) : preset.label
   const applyPreset = (preset) => {
     const caps = preset.caps || {}
@@ -114,38 +120,59 @@ function PresetPicker({ editing, setEditing, setShowAdvanced, providers, t }) {
     if (!tokens) return null
     return <span className="ml-auto shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-ink-fade">{tokens}</span>
   }
+  const needle = query.trim().toLowerCase()
+  const matches = catalogProviders.filter((provider) => (
+    !needle || String(provider.id).toLowerCase().includes(needle) || String(provider.name || '').toLowerCase().includes(needle)
+  ))
+  const typedId = query.trim().toLowerCase()
+  const useCustomPath = () => {
+    setEditing((current) => seedCustomEditor(current, {
+      key: nextCustomProviderKey(providers),
+      label: t('modelProviders.custom'),
+    }))
+    setShowAdvanced(true)
+  }
   return <div className="flex flex-col gap-3">
     <div className="flex items-center gap-2 text-xs font-medium text-ink"><Cloud className="h-4 w-4 text-accent-ink" />{t('modelProviders.chooseProvider')}</div>
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{CLOUD_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`min-h-14 rounded-lg border px-3 py-2 text-left text-xs flex flex-col gap-1 ${editing.presetId === preset.id ? 'border-accent bg-accent-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink-soft'}`}><span className="flex items-center gap-2"><span className="font-medium">{presetLabel(preset)}</span>{contextBadge(preset)}</span><span className="text-[10px] text-ink-fade">{preset.models?.length ? t('modelProviders.modelsCount', { count: preset.models.length }) : '—'}</span></button>)}</div>
     <div className="text-xs font-medium text-ink-soft">{t('modelProviders.localPreset')}</div>
     <div className="flex flex-wrap gap-2">
       {LOCAL_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === preset.id ? 'border-accent bg-accent-soft/30 text-ink' : 'border-ink-fade/50 bg-paper text-ink hover:border-ink'}`}>{preset.label}</button>)}
-      <button type="button" onClick={() => {
-        setEditing((current) => {
-          if (current.presetId === 'custom') return current
-          const fresh = emptyProvider()
-          return {
-            ...fresh,
-            ...(current.id ? {
-              id: current.id,
-              key: current.key,
-              label: current.label,
-              enabled: current.enabled,
-              isDefault: current.isDefault,
-              clearApiKey: Boolean(current.hasApiKey),
-              savedHeaderKeys: current.savedHeaderKeys || [],
-              removedHeaderKeys: current.savedHeaderKeys || [],
-              clearHeaders: Boolean(current.savedHeaderKeys?.length),
-            } : {
-              key: nextCustomProviderKey(providers),
-              label: t('modelProviders.custom'),
-              isDefault: true,
-            }),
-            presetId: 'custom',
-          }
-        })
-        setShowAdvanced(true)
-      }} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === 'custom' ? 'border-accent bg-accent-soft/30' : 'border-ink-fade/50 bg-paper'}`}>{t('modelProviders.custom')}</button>
+      <button type="button" onClick={useCustomPath} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === 'custom' ? 'border-accent bg-accent-soft/30' : 'border-ink-fade/50 bg-paper'}`}>{t('modelProviders.custom')}</button>
+    </div>
+    <ProviderKnowledgeBaseStatus catalog={catalog} refreshing={refreshingCatalog} error={catalogError} refreshError={catalogRefreshError} onRefresh={onRefreshCatalog} t={t} />
+    <div className="flex flex-col gap-2 rounded-xl border border-ink/15 p-3">
+      <div className="text-xs font-medium text-ink">{t('modelProviders.catalogSearchProvider')}</div>
+      <div className="flex items-center gap-2">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onInput={(event) => setQuery(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || !typedId) return
+            event.preventDefault()
+            onChooseCatalogProvider({ id: typedId })
+          }}
+          aria-label={t('modelProviders.catalogSearchProvider')}
+          placeholder={t('modelProviders.catalogSearchProviderPlaceholder')}
+          className="h-8 min-w-0 flex-1 rounded-md border border-ink/15 bg-paper-2 px-2 text-xs"
+        />
+        <button
+          type="button"
+          disabled={!typedId}
+          onClick={() => onChooseCatalogProvider({ id: typedId })}
+          className="inline-flex h-8 shrink-0 items-center rounded-md border border-ink/20 px-3 text-xs text-ink-soft hover:bg-ink/[0.04] hover:text-ink disabled:opacity-40"
+        >{t('modelProviders.catalogUseProviderId', { id: typedId || 'provider-id' })}</button>
+      </div>
+      {matches.length > 0 && <ul className="flex max-h-40 flex-col overflow-y-auto rounded-md border border-ink/10 bg-paper" aria-label={t('modelProviders.catalogSearchResults')}>
+        {matches.map((provider) => <li key={provider.id} className="border-b border-ink/5 last:border-b-0">
+          <button type="button" onClick={() => onChooseCatalogProvider(provider)} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-ink-soft hover:bg-paper-2 hover:text-ink">
+            <span className="min-w-0 flex-1 truncate">{provider.name || provider.id}</span>
+            <span className="shrink-0 text-[10px] text-ink-fade"><code>{provider.id}</code>{typeof provider.modelCount === 'number' ? ` · ${t('modelProviders.catalogProviderModelCount', { count: provider.modelCount })}` : ''}</span>
+          </button>
+        </li>)}
+      </ul>}
+      {!typedId && !matches.length && <div className="text-xs text-ink-fade">{t('modelProviders.catalogSearchHint')}</div>}
     </div>
   </div>
 }
@@ -260,6 +287,9 @@ export default function ProviderEditor({
   editing, setEditing, providers = [], busy, detecting, canSave, keyError = '', labelError = '', baseUrlError = '',
   modelsError = '', headersError = '', contextWindowError = '', firstTokenTimeoutError = '', idleTimeoutError = '',
   modelContextErrors = {}, message = '', onSave, onDiscover, portalTarget, t, hasCredentials = false,
+  catalog = null, catalogProviders = [], catalogModels = [], catalogLoading = false, catalogError = '',
+  catalogRefreshError = '', catalogMessage = '',
+  refreshingCatalog = false, onRefreshCatalog, onChooseCatalogProvider, onLoadCatalogModels, onCatalogMessage,
 }) {
   const [showAdvanced, setShowAdvanced] = useState(editing.presetId === 'custom')
   const [touchedFields, setTouchedFields] = useState({})
@@ -286,6 +316,17 @@ export default function ProviderEditor({
   const visibleHeadersError = visibleError('headers', headersError)
   const visibleKeyError = visibleError('key', keyError)
   const visibleLabelError = visibleError('label', labelError)
+  // A provider picked from the knowledge base is a custom endpoint, so it says
+  // what is still missing instead of only repeating the custom-path line.
+  const headerHint = isCloudPreset
+    ? t('modelProviders.presetFilled')
+    : isLocalPreset
+      ? t('modelProviders.localDetectHint')
+      : editing.catalogProviderId
+        ? t(CATALOG_BASE_URLS[editing.catalogProviderId]
+          ? 'modelProviders.catalogProviderChosen'
+          : 'modelProviders.catalogProviderNeedsBaseUrl', { name: editing.label || editing.key })
+        : t('modelProviders.custom')
   return <Modal
     onClose={() => setEditing(null)}
     closeOnBackdrop={false}
@@ -298,11 +339,24 @@ export default function ProviderEditor({
       <div className="flex items-center shrink-0 px-5 pt-5 pb-3 border-b border-ink/10"><div className="font-semibold text-ink flex-1">{t('modelProviders.editor')}</div><button type="button" onClick={() => setEditing(null)}><X className="w-4 h-4" /></button></div>
       <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-3">
         {!editing.presetId ? (
-          <PresetPicker editing={editing} setEditing={setEditing} setShowAdvanced={setShowAdvanced} providers={providers} t={t} />
+          <PresetPicker
+            editing={editing}
+            setEditing={setEditing}
+            setShowAdvanced={setShowAdvanced}
+            providers={providers}
+            catalog={catalog}
+            catalogProviders={catalogProviders}
+            catalogError={catalogError}
+            refreshingCatalog={refreshingCatalog}
+            catalogRefreshError={catalogRefreshError}
+            onRefreshCatalog={onRefreshCatalog}
+            onChooseCatalogProvider={onChooseCatalogProvider}
+            t={t}
+          />
         ) : <div className="flex items-center gap-3 rounded-lg border border-ink/10 bg-paper-2 px-3 py-2.5">
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium text-ink">{editing.label || selectedPreset?.label || t('modelProviders.custom')}</div>
-            <div className="mt-0.5 text-xs text-ink-fade">{isCloudPreset ? t('modelProviders.presetFilled') : isLocalPreset ? t('modelProviders.localDetectHint') : t('modelProviders.custom')}</div>
+            <div className="mt-0.5 text-xs text-ink-fade">{headerHint}</div>
           </div>
           {!editing.id && <button type="button" onClick={() => { setEditing(emptyProvider()); setShowAdvanced(false) }} className="shrink-0 text-xs text-ink-soft hover:text-ink">{t('modelProviders.chooseProvider')}</button>}
         </div>}
@@ -328,6 +382,17 @@ export default function ProviderEditor({
             onDiscover={onDiscover}
             t={t}
           />
+          <ProviderKnowledgeBase
+            editing={editing}
+            setEditing={setEditing}
+            catalogModels={catalogModels}
+            catalogLoading={catalogLoading}
+            catalogError={catalogError}
+            onLoadModels={onLoadCatalogModels}
+            onMessage={onCatalogMessage}
+            t={t}
+          />
+          {catalogMessage && <div data-model-provider-catalog-message role="status" aria-live="polite" className="text-xs text-ink-soft">{catalogMessage}</div>}
         </div>}
         {editing.presetId && <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="flex items-center gap-2 text-xs text-ink-soft hover:text-ink self-start"><ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />{t('modelProviders.advanced')}</button>}
         {editing.presetId && showAdvanced && <div className="flex flex-col gap-3 rounded-xl border border-ink/15 p-4">

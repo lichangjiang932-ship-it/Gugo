@@ -13,3 +13,13 @@
 - 踩坑：全量排序断言依赖真实 50ms 时钟，CPU 调度导致 coverage 正确降为 partial。
 - 解决：排序用确定性时钟，另以注入时钟验证时间限制仍生效；不调整生产护栏。
 - 交付：全量扫描及原失败批次整批复验闭环，保留失败历史；不将模拟验证写成真实模型或 Windows 安装结果。
+
+## 2026-10-07：模型设置页接入模型知识库（客户端）
+
+- 目标：模型设置页读取 `/api/model/catalog`（models.dev 知识库），且没有预设的供应商也能通过自定义路径配置。
+- 踩坑：`ProviderEditor` 通过 `createPortal` 挂载，而 `capturePanel` 的兜底目标是 `document.body`——它不在 React 根容器内。受控 input 在根容器外时，React 委托监听收不到事件，jsdom 里 `setInputValue` 便永远改不了组件状态（真实 Electron 里同样会丢输入）。
+- 解决：兜底改为 `node.parentElement`（面板自身所在容器），编辑器始终留在拥有它的 React 根内；新增输入控件沿用仓库既有的 `onInput` 写法，不依赖 `onChange` 的 value tracker 注册。
+- 踩坑：用 PowerShell `-replace` + `Set-Content` 改源码时把 `Get-Content` 的输入文件写成了输出路径，覆盖了 `ProviderEditor.jsx`。
+- 解决：`git checkout --` 恢复后改用局部 edit 工具重放改动，并立刻用 `git diff --stat` 核对；此后不再用字符串替换改源文件。
+- 约定：批量“加入全部”是合并语义（会重新加回手工删掉的 id），所以只把当前缺失的 id 交给纯函数，并在文档注释里写明这一点，不用断言掩盖。
+

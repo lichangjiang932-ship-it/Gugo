@@ -12,6 +12,7 @@ import {
   upsertModelProvider,
 } from '../services/modelProviderStore.js'
 import { getRuntimeEnv, getSystemDiagnostics } from '../adapters/modelProxy.js'
+import { catalogProvider, catalogStatus, listCatalogProviders, refreshCatalog } from '../services/modelCatalogService.js'
 import { discoverOllamaEndpoint, looksLikeOllama } from '../adapters/ollamaNative.js'
 import { discoverLmStudioEndpoint } from '../adapters/lmStudioNative.js'
 import { resolveEndpointProfile } from '../utils/endpointProfile.js'
@@ -201,10 +202,83 @@ async function testModelProvider(req, res, userId, id) {
   })
 }
 
+/**
+ * The provider/model knowledge base, served separately from `/api/model/providers`
+ * (which is the reader's own saved endpoints). Kept in this file so the whole
+ * model-settings surface has one authenticated entry point.
+ *
+ *   GET  /api/model/catalog                    → provenance of the catalogue in use
+ *   GET  /api/model/catalog?providers=1&q=<s>  → plus a searchable provider index
+ *   GET  /api/model/catalog/<providerId>       → that provider's current models
+ *   POST /api/model/catalog/refresh            → pull the catalogue from models.dev
+ *
+ * The index is served from the catalogue rather than mirrored into the client:
+ * a second copy of the provider list would drift from the knowledge base it is
+ * supposed to describe.
+ *
+ * A refresh reports its failure in the payload instead of failing the request:
+ * it only ever improves data the app already has, so it must never be the reason
+ * a settings page breaks.
+ */
+async function handleModelCatalogRequest(req, res, url) {
+  const suffix = url.pathname.slice('/api/model/catalog'.length).replace(/^\//, '')
+  const [id, action] = suffix.split('/')
+
+  if (req.method === 'GET' && !id) {
+    const wantIndex = ['1', 'true'].includes(String(url.searchParams.get('providers') || '').toLowerCase())
+    const providers = wantIndex
+      ? listCatalogProviders({ query: url.searchParams.get('q') || '' })
+      : undefined
+    return sendJson(res, 200, {
+      ok: true,
+      catalog: catalogStatus(),
+      ...(providers ? { providers, providerCount: providers.length } : {}),
+    })
+  }
+  if (req.method === 'POST' && id === 'refresh' && !action) {
+    const status = await refreshCatalog()
+    return sendJson(res, 200, { ok: status.error === '', catalog: status })
+  }
+  if (req.method === 'GET' && id && !action) {
+    const provider = catalogProvider(id)
+    if (!provider) {
+      return sendJson(res, 404, {
+        ok: false,
+        error: { code: 'CATALOG_PROVIDER_UNKNOWN', message: '模型知识库中没有这个供应商' },
+        catalog: catalogStatus(),
+      })
+    }
+    // Deprecated ids are still returned, flagged, so a provider still serving a
+    // retired model keeps it selectable instead of it silently vanishing.
+    const models = provider.models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      context: model.context,
+      output: model.output,
+      tools: model.tools,
+      vision: model.vision,
+      pdf: model.pdf,
+      reasoning: model.reasoning,
+      ...(model.deprecated ? { deprecated: true } : {}),
+      ...(model.released ? { released: model.released } : {}),
+    }))
+    return sendJson(res, 200, {
+      ok: true,
+      provider: { id: provider.id, name: provider.name, ...(provider.doc ? { doc: provider.doc } : {}) },
+      models,
+      catalog: catalogStatus(),
+    })
+  }
+  return sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' } })
+}
+
 export async function handleModelProviderRequest(req, res) {
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: '请先登录' } })
   const url = new URL(req.url, 'http://localhost')
+  if (url.pathname === '/api/model/catalog' || url.pathname.startsWith('/api/model/catalog/')) {
+    return handleModelCatalogRequest(req, res, url)
+  }
   const base = '/api/model/providers'
   const suffix = url.pathname.slice(base.length).replace(/^\//, '')
   const [id, action] = suffix.split('/')
