@@ -7,6 +7,7 @@ import test from 'node:test'
 import {
   addModel,
   listProviders,
+  probeDraftModels,
   probeModels,
   removeModel,
   removeProvider,
@@ -90,6 +91,23 @@ test('probing merges what the endpoint serves, and scrubs the key from failures'
       return true
     })
   })
+})
+
+test('the add panel can probe an unsaved provider', async () => {
+  const seen = []
+  const fetchImpl = async (url, options) => {
+    seen.push({ url, headers: options.headers })
+    return { ok: true, json: async () => ({ data: [{ id: 'draft-a' }, { id: 'draft-b' }] }) }
+  }
+  // Anthropic speaks x-api-key; openai-compatible speaks a bearer token.
+  assert.deepEqual(await probeDraftModels({ baseURL: 'http://127.0.0.1:9/v1', api: 'openai-completions', apiKey: 'k' }, { fetchImpl }),
+    { discovered: ['draft-a', 'draft-b'] })
+  assert.equal(seen[0].url, 'http://127.0.0.1:9/v1/models')
+  assert.equal(seen[0].headers.authorization, 'Bearer k')
+  await probeDraftModels({ baseURL: 'https://api.anthropic.com/v1', api: 'anthropic-messages', apiKey: 'k' }, { fetchImpl })
+  assert.equal(seen[1].headers['x-api-key'], 'k')
+  await assert.rejects(probeDraftModels({ baseURL: '', api: 'openai-completions' }, { fetchImpl }), /LLM_PROVIDER_URL_MISSING/u)
+  await assert.rejects(probeDraftModels({ baseURL: 'https://x/v1', api: 'carrier-pigeon' }, { fetchImpl }), /LLM_PROTOCOL_UNSUPPORTED/u)
 })
 
 test('settings.yaml providers reach the model resolution path, env keeping precedence', async () => {

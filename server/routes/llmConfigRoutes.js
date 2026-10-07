@@ -4,6 +4,7 @@ import {
   addModel,
   listCatalog,
   listProviders,
+  probeDraftModels,
   probeModels,
   removeModel,
   removeProvider,
@@ -60,6 +61,9 @@ export async function handleLlmConfigRequest(req, res) {
     if (req.method === 'PUT' && section === 'providers' && id && action === 'credential') {
       const body = await readJson(req)
       return sendJson(res, 200, { ok: true, descriptor: setCredential(id, body?.apiKey) })
+    }
+    if (req.method === 'POST' && section === 'probe' && !id) {
+      return sendJson(res, 200, { ok: true, ...(await probeDraftModels(await readJson(req))) })
     }
     if (req.method === 'POST' && section === 'providers' && id && action === 'probe') {
       return sendJson(res, 200, { ok: true, ...(await probeModels(id)) })

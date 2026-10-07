@@ -163,28 +163,43 @@ function parseProbePayload(payload) {
  * called, the key travels in the protocol's own header, and a failure is
  * reported with any secret already scrubbed out of it.
  */
-export async function probeModels(id, { env = process.env, fetchImpl = globalThis.fetch } = {}) {
-  const provider = providersFromSettings(readSettings(env))[id]
-  if (!provider) throw Object.assign(new Error('LLM_PROVIDER_NOT_FOUND'), { code: 'LLM_PROVIDER_NOT_FOUND' })
-  const baseURL = String(provider.baseURL || '').replace(/\/+$/u, '')
-  if (!baseURL) throw Object.assign(new Error('LLM_PROVIDER_URL_MISSING'), { code: 'LLM_PROVIDER_URL_MISSING' })
-  const { apiKey } = resolveApiKey(id, provider, { env })
+async function fetchModelList({ baseURL, provider = {}, apiKey = '', fetchImpl }) {
+  const endpoint = String(baseURL || '').replace(/\/+$/u, '')
+  if (!endpoint) throw Object.assign(new Error('LLM_PROVIDER_URL_MISSING'), { code: 'LLM_PROVIDER_URL_MISSING' })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
   try {
-    const response = await fetchImpl(`${baseURL}/models`, {
+    const response = await fetchImpl(`${endpoint}/models`, {
       headers: { accept: 'application/json', ...authHeaders(provider, apiKey) },
       signal: controller.signal,
     })
     if (!response.ok) throw Object.assign(new Error('LLM_PROBE_HTTP_ERROR'), { code: 'LLM_PROBE_HTTP_ERROR' })
-    const discovered = parseProbePayload(await response.json())
-    const merged = normalizeModels([...normalizeModels(provider.models), ...discovered.map((modelId) => ({ id: modelId }))])
-    upsertProvider({ id, models: merged }, env)
-    return { discovered, merged: merged.map((model) => model.id) }
+    return parseProbePayload(await response.json())
   } catch (error) {
     const message = redactSecrets(error?.message || error, [apiKey])
     throw Object.assign(new Error(message || 'LLM_PROBE_FAILED'), { code: error?.code || 'LLM_PROBE_FAILED' })
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * Probe a provider that is not saved yet: the add panel asks the endpoint what
+ * it serves before anything is written, so "获取可用模型" works on the form the
+ * user is still filling in. Nothing is persisted here.
+ */
+export async function probeDraftModels({ baseURL = '', api = 'openai-completions', apiKey = '' } = {}, { fetchImpl = globalThis.fetch } = {}) {
+  requireProtocol(api)
+  const discovered = await fetchModelList({ baseURL, provider: { api }, apiKey, fetchImpl })
+  return { discovered }
+}
+
+export async function probeModels(id, { env = process.env, fetchImpl = globalThis.fetch } = {}) {
+  const provider = providersFromSettings(readSettings(env))[id]
+  if (!provider) throw Object.assign(new Error('LLM_PROVIDER_NOT_FOUND'), { code: 'LLM_PROVIDER_NOT_FOUND' })
+  const { apiKey } = resolveApiKey(id, provider, { env })
+  const discovered = await fetchModelList({ baseURL: provider.baseURL, provider, apiKey, fetchImpl })
+  const merged = normalizeModels([...normalizeModels(provider.models), ...discovered.map((modelId) => ({ id: modelId }))])
+  upsertProvider({ id, models: merged }, env)
+  return { discovered, merged: merged.map((model) => model.id) }
 }

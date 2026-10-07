@@ -11,13 +11,18 @@ import {
   PROVIDER_CATALOG,
 } from '../shared/llmProviderCatalog.js'
 
-test('the catalogue is what the picker shows: twelve services plus the local runtimes', () => {
+test('the catalogue is what the picker shows: services plus the local runtimes', () => {
   const names = PROVIDER_CATALOG.map((entry) => entry.displayName)
+  assert.ok(PROVIDER_CATALOG.length >= 30, `catalogue covers real providers (got ${PROVIDER_CATALOG.length})`)
+  // Unique ids, because an id is a credential name and a request identity.
+  assert.equal(new Set(PROVIDER_CATALOG.map((entry) => entry.id)).size, PROVIDER_CATALOG.length)
   for (const expected of ['OpenAI', 'Anthropic Claude', 'Google Gemini', 'DeepSeek', 'OpenRouter', '阿里云通义千问',
-    '硅基流动', 'Moonshot Kimi', '智谱 GLM', 'xAI Grok', 'Groq', 'Mistral AI']) {
+    '硅基流动', 'Moonshot Kimi', '智谱 GLM', 'xAI Grok', 'Groq', 'Mistral AI',
+    'Amazon Bedrock', 'Google Vertex AI', 'Azure OpenAI', 'Together AI', 'Fireworks AI', 'Perplexity',
+    '火山方舟（豆包）', '百度千帆', '腾讯混元', '讯飞星火', '阶跃星辰', 'MiniMax', 'Cerebras', 'Nebius AI Studio']) {
     assert.ok(names.includes(expected), `${expected} is offered`)
   }
-  assert.deepEqual(LOCAL_PROVIDER_PRESETS.map((entry) => entry.id), ['ollama', 'lmstudio', 'llamacpp', 'vllm'])
+  assert.deepEqual(LOCAL_PROVIDER_PRESETS.map((entry) => entry.id), ['ollama', 'lmstudio', 'llamacpp', 'vllm', 'text-generation-webui', 'open-webui', 'localai', 'jan'])
   // Every entry names a protocol the adapter table actually implements.
   for (const entry of [...PROVIDER_CATALOG, ...LOCAL_PROVIDER_PRESETS]) {
     assert.ok(isSupportedProtocol(entry.api), `${entry.id} → ${entry.api}`)
@@ -27,7 +32,8 @@ test('the catalogue is what the picker shows: twelve services plus the local run
 
 test('a catalogue entry carries an endpoint and a key *name*, never a key', () => {
   for (const entry of PROVIDER_CATALOG) {
-    assert.match(entry.baseURL, /^https:\/\//u)
+    // Hosted providers are https; a local runtime is allowed to be plain http on loopback.
+    assert.match(entry.baseURL, /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)\b)/u)
     assert.match(entry.apiKeyEnv, /^[A-Z0-9_]+$/u)
     assert.equal(Object.hasOwn(entry, 'apiKey'), false)
     assert.ok(entry.models.length > 0)
