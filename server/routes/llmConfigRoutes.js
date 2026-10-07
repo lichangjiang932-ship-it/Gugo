@@ -14,6 +14,8 @@ import {
   upsertProvider,
 } from '../llm/llmProviderService.js'
 import { allStoredSecrets, readCredentials, redactSecrets, resolveGugoHome, settingsPath, credentialsPath } from '../llm/llmConfigStore.js'
+import { openConfigFile } from '../llm/openConfigFile.js'
+import { modelsDevStatus, refreshModelsDev } from '../llm/modelsDevCache.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -47,7 +49,14 @@ export async function handleLlmConfigRequest(req, res) {
   const [section, id, action] = suffix.split('/')
   try {
     if (req.method === 'GET' && section === 'catalog') {
-      return sendJson(res, 200, { ok: true, catalog: listCatalog(), home: resolveGugoHome(), settingsPath: settingsPath(), credentialsPath: credentialsPath() })
+      return sendJson(res, 200, { ok: true, catalog: listCatalog(), home: resolveGugoHome(), settingsPath: settingsPath(), credentialsPath: credentialsPath(), modelsDev: modelsDevStatus() })
+    }
+    if (req.method === 'POST' && section === 'open-config') {
+      const body = await readJson(req)
+      return sendJson(res, 200, { ok: true, ...openConfigFile(body?.target) })
+    }
+    if (req.method === 'POST' && section === 'models-dev') {
+      return sendJson(res, 200, { ok: true, ...(await refreshModelsDev()) })
     }
     if (req.method === 'GET' && section === 'providers' && !id) {
       return sendJson(res, 200, { ok: true, ...listProviders() })

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, FileCog, Plus, Trash2 } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
-import { importLegacyLlmProviders, listLlmCatalog, listLlmProviders, removeLlmProvider, setLlmDefaultModel } from '../../lib/llmConfigClient.js'
+import { importLegacyLlmProviders, listLlmCatalog, listLlmProviders, openLlmConfigFile, refreshLlmModelsDev, removeLlmProvider, setLlmDefaultModel } from '../../lib/llmConfigClient.js'
 import AddProviderPanel from './AddProviderPanel.jsx'
 import ProviderModelDirectory from './ProviderModelDirectory.jsx'
 
@@ -97,6 +97,32 @@ export default function ModelConfigPanel({ onReady }) {
     }
   }
 
+  const openConfig = async () => {
+    try {
+      const result = await openLlmConfigFile('settings')
+      if (result.ok) {
+        setNote(t('settingsModels.configOpened'))
+        return
+      }
+      // No desktop opener (web build): the path is still useful, so hand it over.
+      if (catalog?.settingsPath) await globalThis.navigator?.clipboard?.writeText?.(catalog.settingsPath)
+      setNote(t('settingsModels.configPathCopied'))
+    } catch (failure) {
+      setError(failure.message)
+    }
+  }
+  const refreshMetadata = async () => {
+    try {
+      const result = await refreshLlmModelsDev()
+      setNote(result.ok
+        ? t('settingsModels.modelsDevRefreshed', { count: result.count })
+        : t('settingsModels.modelsDevFailed'))
+      await reload()
+    } catch (failure) {
+      setError(failure.message)
+    }
+  }
+
   return (
     <section data-testid="model-config-panel" className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
@@ -126,7 +152,7 @@ export default function ModelConfigPanel({ onReady }) {
           className={BUTTON}
           data-testid="open-config-file"
           title={catalog?.settingsPath || ''}
-          onClick={() => { if (catalog?.settingsPath) void globalThis.navigator?.clipboard?.writeText?.(catalog.settingsPath) }}
+          onClick={openConfig}
         >
           <FileCog className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />
           {t('settingsModels.openConfigFile')}
@@ -135,6 +161,16 @@ export default function ModelConfigPanel({ onReady }) {
 
       {error && <p role="alert" className="rounded-control bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>}
       {note && <p role="status" className="text-xs text-ink-fade" data-testid="model-config-note">{note}</p>}
+      {catalog?.modelsDev && (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-ink-fade" data-testid="models-dev-status">
+          <span>
+            {t('settingsModels.modelsDevStatus', { count: catalog.modelsDev.count, hours: catalog.modelsDev.cacheTtlHours })}
+          </span>
+          <button type="button" className="text-accent hover:underline" data-testid="refresh-models-dev" onClick={refreshMetadata}>
+            {t('settingsModels.modelsDevRefresh')}
+          </button>
+        </p>
+      )}
 
       <ul className="flex flex-col gap-2" data-testid="provider-list">
         {state.providers.map((provider) => (

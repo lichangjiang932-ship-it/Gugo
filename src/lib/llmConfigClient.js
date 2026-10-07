@@ -29,4 +29,6 @@ export const probeLlmModels = (id) => request(`/api/llm/providers/${encodeURICom
 export const addLlmModel = (id, model) => request(`/api/llm/providers/${encodeURIComponent(id)}/models`, { method: 'POST', body: { model } })
 export const removeLlmModel = (id, model) => request(`/api/llm/providers/${encodeURIComponent(id)}/models/${encodeURIComponent(model)}`, { method: 'DELETE' })
 export const importLegacyLlmProviders = () => request('/api/llm/import', { method: 'POST' })
+export const openLlmConfigFile = (target) => request('/api/llm/open-config', { method: 'POST', body: { target } })
+export const refreshLlmModelsDev = () => request('/api/llm/models-dev', { method: 'POST' })
 export const setLlmDefaultModel = ({ provider, model }) => request('/api/llm/default-model', { method: 'PUT', body: { provider, model } })
