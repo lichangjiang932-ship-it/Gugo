@@ -261,7 +261,7 @@ function completeLegacyToolHistory(history, checkpoint) {
   return pairs
 }
 
-export function shouldRepairLegacyWorkspaceMutationCheckpoint(messages, checkpoint = {}) {
+export function shouldRepairLegacyWorkspaceMutationCheckpoint(messages, checkpoint = {}, scope = {}) {
   if (Object.hasOwn(checkpoint.completionGuards || {}, 'mutationVerificationVersion')) return false
   const history = Array.isArray(messages) ? messages : []
   const pairs = completeLegacyToolHistory(history, checkpoint)
@@ -270,7 +270,7 @@ export function shouldRepairLegacyWorkspaceMutationCheckpoint(messages, checkpoi
   for (const { call, result } of pairs) {
     // Failed or incomplete mutations can still have changed files. Never use
     // their result status to discard a checkpoint's outstanding verification.
-    if (isMutationExecutionCall(call, result?.artifactId)) return false
+    if (isMutationExecutionCall(call, result?.artifactId, scope)) return false
     const command = String(call?.args?.command || '')
     if (result?.ok === true && isSuccessfulToolResult(result)
       && LEGACY_DOTNET_FILE_READ.test(command) && isReadOnlyPowerShellVerificationCall(call)) {
@@ -280,7 +280,7 @@ export function shouldRepairLegacyWorkspaceMutationCheckpoint(messages, checkpoi
   return legacyReadObserved
 }
 
-export function recoverPriorLocalMutationTargets(messages, currentUserMessage, { intentMode = 'auto' } = {}) {
+export function recoverPriorLocalMutationTargets(messages, currentUserMessage, { intentMode = 'auto', userId = null } = {}) {
   const history = Array.isArray(messages) ? messages : []
   const currentUserIndex = history.lastIndexOf(currentUserMessage)
   if (currentUserIndex <= 0) return { mutationTargets: [], deletionTargets: [] }
@@ -305,8 +305,8 @@ export function recoverPriorLocalMutationTargets(messages, currentUserMessage, {
   for (const { call, result } of pairedHistoricalToolCalls(
     history.slice(priorUserIndex + 1, currentUserIndex),
   )) {
-    if (!isMutationExecutionCall(call)
-      || !isLocalMutationCall(call)
+    if (!isMutationExecutionCall(call, null, { userId })
+      || !isLocalMutationCall(call, { userId })
       || result?.ok !== true
       || !isSuccessfulToolResult(result)) continue
     const deleted = looksLikeDeletionCommand(call?.args?.command)

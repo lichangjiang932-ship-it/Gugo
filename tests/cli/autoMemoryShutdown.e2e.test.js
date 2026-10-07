@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 import { CLI_PATH, NETWORK_GUARD, MODEL_NAME, isolatedEnvironment, seedProvider, modelReply } from './helpers/artifactCompletionHarness.js'
 
-test('real CLI closes promptly after final output without waiting for optional memory', { timeout: 30_000 }, async (t) => {
+test('real CLI closes promptly after final output without waiting for optional memory', { timeout: 65_000 }, async (t) => {
   const parent = realpathSync(tmpdir())
   const root = mkdtempSync(join(parent, 'gugo-cli-memory-close-'))
   const paths = Object.fromEntries(['workspace', 'data', 'config', 'artifacts', 'tokenHome', 'temp', 'output']
@@ -68,7 +68,9 @@ test('real CLI closes promptly after final output without waiting for optional m
     let stdout = ''
     let stderr = ''
     let terminalAt = null
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`CLI timed out: ${stderr}`)) }, 20_000)
+    // The existing final-to-close assertion below is the latency contract.
+    // This finite outer budget includes seeding and a cold real CLI import.
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`CLI timed out: ${stderr}`)) }, 45_000)
     child.stdout.setEncoding('utf8').on('data', (chunk) => {
       stdout += chunk
       if (terminalAt === null && stdout.includes('"type":"turn.completed"')) terminalAt = Date.now()

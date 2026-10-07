@@ -1,7 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+const { runToolsLoop: runToolsLoopRuntime, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+const { hostPdfLayoutExecutor } = await import('./helpers/pdfLayoutFixture.js')
+function runToolsLoop(options) {
+  return runToolsLoopRuntime({
+    ...options,
+    executeTool: typeof options.executeTool === 'function'
+      ? hostPdfLayoutExecutor(options.executeTool) : options.executeTool,
+  })
+}
 const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
 const INTERNAL_APPROVAL_PRINCIPAL = trustedInternalLoopPrincipal()
 

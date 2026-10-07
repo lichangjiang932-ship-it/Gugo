@@ -204,8 +204,12 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
   if (repoPath) statArgs.push('--', repoPath)
   const stat = await runGit(statArgs, { cwd: root, rejectOnError: false })
   if (!stat.ok) return { ...context, ...gitDiffFailure(stat) }
+  const repository = await runGit(['rev-parse', '--show-toplevel'], { cwd: root, rejectOnError: false })
+  if (!repository.ok) return { ...context, ...gitDiffFailure(repository) }
   return {
     ok: diff.ok,
+    executionCwd: root,
+    repositoryRoot: repository.stdout.trim(),
     path: repoPath || null,
     staged: Boolean(staged),
     stat: clip(stat.stdout, 80_000),

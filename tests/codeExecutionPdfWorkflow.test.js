@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-code-execution-pdf-'))
@@ -15,7 +16,15 @@ const { createInitialState } = await import('../src/store/appStateBootstrap.js')
 const { buildServerToolsConfig } = await import('../src/pages/ChatSplit/serverTurnFlow.js')
 const { dispatchFsShellTool } = await import('../server/adapters/fsShellTools.js')
 const { closeDb } = await import('../server/db.js')
-const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
+const { runToolsLoop: runToolsLoopRuntime, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
+const { hostPdfLayoutExecutor } = await import('./helpers/pdfLayoutFixture.js')
+function runToolsLoop(options) {
+  return runToolsLoopRuntime({
+    ...options,
+    executeTool: typeof options.executeTool === 'function'
+      ? hostPdfLayoutExecutor(options.executeTool) : options.executeTool,
+  })
+}
 const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
 
@@ -68,10 +77,25 @@ test('absolute PDF edit and PNG generation reject a fake blocker, execute code, 
   fs.writeFileSync(pdfPath, '%PDF-1.4\nBT (Old placeholder) Tj ET\n%%EOF', 'latin1')
   fs.writeFileSync(scriptPath, [
     "const fs = require('node:fs')",
+    `const { PDFDocument, StandardFonts } = require(${JSON.stringify(fileURLToPath(new URL('../node_modules/pdf-lib', import.meta.url)))})`,
+    `const { createCanvas } = require(${JSON.stringify(fileURLToPath(new URL('../node_modules/@napi-rs/canvas', import.meta.url)))})`,
     'const [pdfPath, pngPath] = process.argv.slice(2)',
-    "const pdf = ['%PDF-1.4', 'BT', '(Task 1 essay written by real code execution.) Tj', 'ET', '%%EOF'].join('\\n')",
-    "fs.writeFileSync(pdfPath, Buffer.from(pdf, 'latin1'))",
-    "fs.writeFileSync(pngPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'))",
+    ';(async () => {',
+    'const document = await PDFDocument.create()',
+    'const font = await document.embedFont(StandardFonts.Helvetica)',
+    'const page = document.addPage([595, 842])',
+    "page.drawText('Writing Task 1 essay written by real code execution.', { x: 40, y: 780, size: 12, font })",
+    'const bytes = Buffer.from(await document.save())',
+    'fs.writeFileSync(pdfPath, bytes)',
+    `const pdfjs = await import(${JSON.stringify(new URL('../node_modules/pdfjs-dist/legacy/build/pdf.mjs', import.meta.url).href)})`,
+    `const parsed = await pdfjs.getDocument({data: new Uint8Array(bytes), disableWorker: true, isEvalSupported: false, standardFontDataUrl: ${JSON.stringify(fileURLToPath(new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url)))}}).promise`,
+    'const renderedPage = await parsed.getPage(1)',
+    'const viewport = renderedPage.getViewport({ scale: 1 })',
+    'const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height))',
+    "await renderedPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise",
+    "fs.writeFileSync(pngPath, canvas.toBuffer('image/png'))",
+    'await parsed.destroy()',
+    '})().catch((error) => { console.error(error); process.exitCode = 1 })',
   ].join('\n'), 'utf8')
 
   const command = `node ${path.basename(scriptPath)} ${pdfPath} ${pngPath}`
@@ -224,7 +248,8 @@ test('absolute PDF edit and PNG generation reject a fake blocker, execute code, 
   assert.deepEqual(shellArgs.expected_outputs, [pdfPath, pngPath])
   assert.ok(path.isAbsolute(shellArgs.expected_outputs[0]))
   assert.ok(path.isAbsolute(shellArgs.expected_outputs[1]))
-  assert.match(fs.readFileSync(pdfPath, 'latin1'), /Task 1 essay written by real code execution/)
+  const finalPdf = await dispatchFsShellTool('read_file', { path: pdfPath }, { userId: null })
+  assert.match(finalPdf.content, /Task 1 essay written by real code execution/)
   assert.deepEqual([...fs.readFileSync(pngPath).subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
 })
 
@@ -265,7 +290,7 @@ test('PDF layout work preserves an explicit Task 1 target and cannot finish befo
         assert.match(systemText, /\[PDF LAYOUT EXECUTION CONTRACT\]/)
         assert.match(systemText, /authoritative requested section is Writing Task 1|explicitly selected Writing Task 1/i)
         assert.match(systemText, /never switch to another task, section, or page/i)
-        assert.match(systemText, /verify_pdf_layout\.py/)
+        assert.match(systemText, /builtin pdf_text with.*verifyLayout/i)
         assert.match(systemText, /do not call browser_open_url with a local file:\/\//i)
         assert.match(systemText, /browser tools accept only http\/https/i)
         return {

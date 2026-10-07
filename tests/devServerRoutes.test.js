@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { BUILTIN_HTTP_API_PREFIXES } from '../server/core/builtinHttpCapabilities.js'
+import { enforceLocalRequestBoundary } from '../server/utils/localRequestPolicy.js'
 import {
   developmentHttpCapabilityPlugin,
   runtimeLifecyclePlugin,
@@ -129,6 +130,7 @@ function createDevelopmentHttpHarness() {
     disposeAll() {},
   }
   const plugin = developmentHttpCapabilityPlugin({
+    enforceLocalRequestBoundary,
     bindRuntimePluginHttpCapabilities: () => () => {},
     createHttpCapabilityRegistry: () => registry,
     healthCheck: () => calls.push('health'),
@@ -152,7 +154,7 @@ test('vite dev handles query-string liveness requests before the SPA fallback', 
   const { calls, handler } = createDevelopmentHttpHarness()
   let nextCalls = 0
 
-  handler({ url: '/api/health?source=startup-probe' }, {}, () => { nextCalls += 1 })
+  handler({ url: '/api/health?source=startup-probe', method: 'GET', headers: { host: '127.0.0.1:5175' } }, {}, () => { nextCalls += 1 })
 
   assert.deepEqual(calls, ['health'])
   assert.equal(nextCalls, 0)
@@ -162,7 +164,7 @@ test('vite dev authenticates query-string full-health requests before dispatch',
   const { calls, handler } = createDevelopmentHttpHarness()
   let nextCalls = 0
 
-  handler({ url: '/api/health/full?source=doctor' }, {}, () => { nextCalls += 1 })
+  handler({ url: '/api/health/full?source=doctor', method: 'GET', headers: { host: '127.0.0.1:5175' } }, {}, () => { nextCalls += 1 })
 
   assert.deepEqual(calls, ['auth', 'health-full'])
   assert.equal(nextCalls, 0)

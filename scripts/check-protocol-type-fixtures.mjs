@@ -12,6 +12,8 @@ export const PROTOCOL_NEGATIVE_FIXTURES = Object.freeze({
   'durable-store-method.ts': 2322,
   'event-kind.ts': 2322,
   'event-payload.ts': 2322,
+  'execution-scope-owner.ts': 2322,
+  'execution-scope-project.ts': 2322,
   'frame-version.ts': 2322,
   'governance-operation-id.ts': 2322,
   'loop-host-version.ts': 2322,

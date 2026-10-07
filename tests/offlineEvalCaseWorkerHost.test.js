@@ -33,6 +33,18 @@ test('offline eval worker deadlines preserve short fixtures and bound cold-start
   )
 })
 
+test('a bounded startup override changes readiness only, preserving case execution limits', () => {
+  const env = { OFFLINE_EVAL_WORKER_STARTUP_TIMEOUT_MS: '30000' }
+  assert.equal(offlineEvalCaseWorkerStartupDeadlineMs({ platform: 'linux', env }), 30_000)
+  assert.equal(offlineEvalCaseWorkerDeadlineMs({}, { platform: 'linux', env }), 9_000)
+  assert.equal(offlineEvalCaseTestDeadlineMs({}, { platform: 'linux', env }), 43_000)
+  for (const value of ['0', '999', '120001', 'unlimited', 'NaN']) {
+    assert.equal(offlineEvalCaseWorkerStartupDeadlineMs({
+      platform: 'linux', env: { OFFLINE_EVAL_WORKER_STARTUP_TIMEOUT_MS: value },
+    }), 10_000)
+  }
+})
+
 test('offline eval worker exits naturally after reporting a valid result', async () => {
   const evalCase = {
     id: 'PASS',

@@ -69,7 +69,9 @@ function baseEnv({ dataDir, homeDir }) {
     HOME: homeDir,
     USERPROFILE: homeDir,
     GUGO_LOAD_DOTENV: '0',
-    TURN_EXECUTION_LEASE_MS: '1000',
+    // Selection is tested against the production lease, not a one-second
+    // event-loop/cold-import benchmark. Dedicated lease tests expire exact rows.
+    TURN_EXECUTION_LEASE_MS: '120000',
     MODEL_BASE_URL: '',
     MODEL_NAME: '',
     MODEL_API_KEY: '',

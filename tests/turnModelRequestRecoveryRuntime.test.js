@@ -122,7 +122,9 @@ test('TurnEngine consumes a verified completed response after a process crash wi
     scheduleMemoryExtraction: () => {},
     executionLeases: createTurnExecutionLeaseCoordinator({
       ownerId: 'turn-model-recovery-resumed-worker',
-      leaseMs: 1_000,
+      // The crashed predecessor's short lease/expiry assertions above remain
+      // real. The resumed turn uses normal headroom to test verified no-replay.
+      leaseMs: 120_000,
     }),
     toolSpecs: [],
     readApprovalMode: () => 'normal',

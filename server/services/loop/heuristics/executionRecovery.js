@@ -144,11 +144,11 @@ export function serializeExecutionConvergence(value) {
   }
 }
 
-export function isProductiveExecutionOutcome(call, result, artifactId = null) {
+export function isProductiveExecutionOutcome(call, result, artifactId = null, scope = {}) {
   if (!isSuccessfulToolResult(result)) return false
   if (artifactId) return true
   if (isProbeLikeCall(call) || installAttemptSignature(call)) return false
-  if (!isMutationExecutionCall(call, artifactId)) return false
+  if (!isMutationExecutionCall(call, artifactId, scope)) return false
   if (Object.hasOwn(result || {}, 'changed')) return result.changed === true
   if (isCommandExecutionTool(call)
     && Array.isArray(call?.args?.expected_outputs)
@@ -167,8 +167,8 @@ export function shouldReflectOnFailure(result) {
     && result?.cancelled !== true
 }
 
-export function progressChangesFor(call, result) {
-  if (!isLocalMutationCall(call)) return { changedPaths: [], changes: [] }
+export function progressChangesFor(call, result, scope = {}) {
+  if (!isLocalMutationCall(call, scope)) return { changedPaths: [], changes: [] }
   const changes = Array.isArray(result?.changes) ? result.changes : []
   const changedPaths = []
   if (result?.path) changedPaths.push(result.path)

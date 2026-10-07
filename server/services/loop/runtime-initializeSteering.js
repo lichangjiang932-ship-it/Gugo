@@ -47,6 +47,7 @@ function installSteeringMessageRuntime(s) {
         s.activeArtifactOutputPrompt = String(steering.content || '').trim()
       }
       s.refreshArtifactContractFromSteering(steering.content)
+      s.requestedMutationContract.steer(steering.content)
       if (hasMutationExecutionIntent(String(steering?.content || ''))) {
         s.mutationSteeringPending = true
         s.verifiedRecoveredMutationObserved = false

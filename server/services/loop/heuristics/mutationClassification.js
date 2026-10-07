@@ -1,3 +1,4 @@
+import path from 'node:path'
 import {
   CONNECTOR_WRITE_TOOL_NAMES,
 } from '../../connectorTools.js'
@@ -124,7 +125,7 @@ export function isReadOnlyWindowsCmdVerificationCall(call) {
   return inspectionObserved
 }
 
-export function isLocalMutationCall(call) {
+export function isLocalMutationCall(call, { userId = null } = {}) {
   if (call?.name === 'rewind_files' || call?.name === 'git_rollback') return true
   if (call?.name === 'git_write') {
     return ['checkout', 'pull'].includes(String(call?.args?.action || '').trim().toLowerCase())
@@ -132,11 +133,11 @@ export function isLocalMutationCall(call) {
   if (LOCAL_MUTATION_TOOLS.has(call?.name)) {
     return !(['apply_patch', 'patch_file'].includes(call?.name) && call?.args?.dry_run === true)
   }
-  if (!isCommandExecutionTool(call) || isVerificationCall(call)) return false
-  return getToolMetadata(call.name, { args: call.args }).isReadOnly !== true
+  if (!isCommandExecutionTool(call) || isVerificationCall(call, { userId })) return false
+  return getToolMetadata(call.name, { args: call.args, userId }).isReadOnly !== true
 }
 
-export function isVerificationCall(call) {
+export function isVerificationCall(call, { userId = null } = {}) {
   if (VERIFICATION_TOOLS.has(call?.name)) return true
   if (!isCommandExecutionTool(call)) return false
   // Declared outputs make the command a mutation contract even when the same
@@ -154,15 +155,15 @@ export function isVerificationCall(call) {
     || isReadOnlyPythonVerificationCall(call)
     || isReadOnlyPowerShellVerificationCall(call)
     || isReadOnlyWindowsCmdVerificationCall(call)
-    || getToolMetadata(call.name, { args: call.args }).isReadOnly === true
+    || getToolMetadata(call.name, { args: call.args, userId }).isReadOnly === true
 }
 
-export function isMutationExecutionCall(call, artifactId = null) {
+export function isMutationExecutionCall(call, artifactId = null, { userId = null } = {}) {
   if (!isSubstantiveToolCall(call)) return false
   if (artifactId || isFileArtifactTool(call?.name) || CONNECTOR_WRITE_TOOL_NAMES.includes(call?.name)) return true
-  if (LOCAL_MUTATION_TOOLS.has(call?.name)) return isLocalMutationCall(call)
-  if (isCommandExecutionTool(call)) return isLocalMutationCall(call)
-  const metadata = getToolMetadata(call?.name, { args: call?.args })
+  if (LOCAL_MUTATION_TOOLS.has(call?.name)) return isLocalMutationCall(call, { userId })
+  if (isCommandExecutionTool(call)) return isLocalMutationCall(call, { userId })
+  const metadata = getToolMetadata(call?.name, { args: call?.args, userId })
   // Dynamic MCP/plugin writes normally use riskClass=external and do not
   // appear in the built-in connector-name list. A successful one is concrete
   // mutation evidence; ignoring it makes the completion guard ask the model
@@ -198,7 +199,7 @@ export function normalizeMutationTarget(rawTarget, { platform = process.platform
   return target
 }
 
-export function targetsMatch(left, right) {
+export function targetsMatch(left, right, { projectDirectory = null } = {}) {
   const a = normalizeMutationTarget(left)
   const b = normalizeMutationTarget(right)
   if (!a || !b) return false
@@ -212,12 +213,12 @@ export function targetsMatch(left, right) {
   const absolute = aAbsolute ? comparableA : comparableB
   const relative = aAbsolute ? b : a
   const workspaceRoot = normalizeMutationTarget(
-    process.env.WORKSPACE_ROOT?.trim() || process.cwd(),
+    projectDirectory || process.env.WORKSPACE_ROOT?.trim() || process.cwd(),
   )
   if (!workspaceRoot) return false
-  const resolvedRelative = normalizeMutationTarget(
+  const resolvedRelative = normalizeMutationTarget(path.posix.normalize(
     relative === '.' ? workspaceRoot : `${workspaceRoot}/${relative}`,
-  )
+  ))
   return absolute === normalizeCase(resolvedRelative)
 }
 

@@ -6,6 +6,7 @@ import { createInitialState } from '../src/store/appStateBootstrap.js'
 import { applyServerToolsConfig } from '../server/services/turnToolSpecs.js'
 import { parseModelProviderResponse } from '../server/adapters/modelProviderResponse.js'
 import { createLoopEvents } from '../server/services/loop/events.js'
+import { hostPdfLayoutExecutor, pdfLayoutReceiptForTest } from './helpers/pdfLayoutFixture.js'
 
 const {
   runToolsLoop: runToolsLoopRuntime,
@@ -35,6 +36,9 @@ function runToolsLoop(options = {}) {
       approvalId: 'tool-loop-regression-approved',
     }),
     ...options,
+    executeTool: typeof options.executeTool === 'function'
+      ? hostPdfLayoutExecutor(options.executeTool)
+      : options.executeTool,
     job: {
       ...job,
       userId: job.userId || TEST_USER_ID,
@@ -3325,7 +3329,7 @@ test('PDF layout marker preserves unrelated same-turn mutation debt', async () =
   assert.equal(result.reason, 'post_mutation_verification_missing')
 })
 
-test('PDF layout completion accepts only controlled validator commands and result lines', () => {
+test('PDF layout completion accepts only controlled validator commands with host receipts and result lines', async () => {
   const comprehensive = {
     name: 'bash_exec',
     args: { command: 'python verify_comprehensive.py' },
@@ -3334,6 +3338,7 @@ test('PDF layout completion accepts only controlled validator commands and resul
     ok: true,
     exitCode: 0,
     stdout: 'all structural checks passed\nRESULT: PDF_LAYOUT_VERIFICATION_OK\n',
+    pdfLayoutVerification: await pdfLayoutReceiptForTest(),
   }
 
   assert.equal(isVerificationCall(comprehensive), true)

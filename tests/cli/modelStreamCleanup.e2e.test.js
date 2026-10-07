@@ -2,9 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createModelProgressHarness, PROGRESS_TOOL_CALL_ID } from './helpers/modelProgressHarness.js'
 
-test('real CLI disposes terminal and DONE response bodies even when the provider keeps sending trailing keepalives', { timeout: 45_000 }, async (t) => {
+test('real CLI disposes terminal and DONE response bodies even when the provider keeps sending trailing keepalives', { timeout: 65_000 }, async (t) => {
   const harness = await createModelProgressHarness(t, 'done_open')
-  const run = await harness.run()
+  const run = await harness.run({ timeoutMs: 45_000 })
   const diagnosis = JSON.stringify({ status: run.status, timedOut: run.timedOut, stderr: run.stderr,
     failures: harness.provider.failures, terminalBodies: harness.provider.terminalBodies,
     events: run.events.map((event) => ({ type: event.type, phase: event.payload?.phase, code: event.payload?.code })) })

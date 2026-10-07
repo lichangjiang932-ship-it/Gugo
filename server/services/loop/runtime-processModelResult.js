@@ -118,6 +118,7 @@ async function handleExecutionVerificationCompletion(s) {
       systemContent: [
         EXECUTION_EVIDENCE_GUARD_MARKER,
         'The previous response did not establish execution evidence for the current modification target, so it was not accepted as completion.',
+        `Required files without matching write evidence: ${s.requestedMutationContract?.missing().join(', ') || '(none)'}.`,
         'Continue until the requested target has concrete mutation evidence, or an inherited successful mutation has been strictly verified.',
         'If indispensable information is missing, call request_clarification instead of presenting instructions as a completed result.',
       ].join(' '),
@@ -204,10 +205,10 @@ async function handleExecutionVerificationCompletion(s) {
       requestedPdfSectionLabel(s.executionIntentText)
         ? `The authoritative requested section is ${requestedPdfSectionLabel(s.executionIntentText)}.`
         : 'Use the exact page or section named by the user.',
-      `Create or correct a separate read-only verify_pdf_layout.py, then run it with ${commandExecutionToolLabel(s.activeToolSpecs)} after all writes.`,
-      'It must assert target-page text, unchanged non-target pages, full text/order, glyph bounds, forbidden-line clearance, paragraph continuation/indentation, and one fresh non-empty PNG per output page.',
+      'Call builtin pdf_text with verifyLayout after all writes: include expectedText, exact pages/sectionLabel, source for an existing PDF, required rectangles, and every requested preview path/page.',
+      'The host must issue a receipt for the actual output bytes after parsing text and bounds and checking non-target pages/previews.',
       `Do not use browser_open_url for local file:// PDF or PNG paths; browser tools accept only http/https URLs. Use ${commandExecutionToolLabel(s.activeToolSpecs)} and the validator for local visual evidence.`,
-      `Only a successful validator that prints the standalone marker ${PDF_LAYOUT_VERIFICATION_OK} is accepted. Do not echo the marker or print it from the generation script.`,
+      `The marker ${PDF_LAYOUT_VERIFICATION_OK} from an external script is supplementary output and cannot replace a host verification receipt.`,
     ].join(' '),
   })
 }

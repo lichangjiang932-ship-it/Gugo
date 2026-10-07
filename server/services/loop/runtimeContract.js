@@ -3,6 +3,27 @@ import { inspectRuntimeDependencies } from './dependencyBagContract.js'
 export const LOOP_RUNTIME_CONTRACT_ERROR_CODE = 'LOOP_RUNTIME_CONTRACT_VIOLATION'
 
 const STAGE_SCHEMAS = Object.freeze({
+  'execution-scope': Object.freeze({
+    executionScope: 'object',
+    'executionScope.userId': 'nullable-string',
+    'executionScope.projectDirectory': 'nullable-string',
+    'executionScope.modelName': 'nullable-string',
+    'executionScope.modelProviderId': 'nullable-string',
+  }),
+  'model-request': Object.freeze({
+    iteration: 'object',
+    convo: 'array',
+    activeToolSpecs: 'array',
+    callTrackedModel: 'function',
+    requestedMutationContract: 'object',
+    'requestedMutationContract.satisfied': 'function',
+  }),
+  'model-result': Object.freeze({
+    iteration: 'object',
+    'iteration.modelResult': 'object',
+    hasRequiredExecutionEvidence: 'function',
+    steeringController: 'object',
+  }),
   'execute-tool-calls': Object.freeze({
     iteration: 'object',
     'iteration.toolCalls': 'array',
@@ -36,6 +57,7 @@ function valueAtPath(value, path) {
 }
 
 function matchesType(value, expectedType) {
+  if (expectedType === 'nullable-string') return value === null || typeof value === 'string'
   if (expectedType === 'array') return Array.isArray(value)
   if (expectedType === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value)
   return typeof value === expectedType

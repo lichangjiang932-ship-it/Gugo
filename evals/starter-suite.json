@@ -29,6 +29,38 @@
       "verify": [
         { "script": "./verifiers/report-repair.mjs" }
       ]
+    },
+    {
+      "id": "desktop-multi-file-repair",
+      "prompt": "Update both src/totals.js and src/labels.js and update README.md. sumAmounts must include positive and negative finite amounts and ignore missing or non-finite values. labelCount must use '1 item' for one and '<n> items' for every other non-negative count. Document that negative amounts are included. Preserve the exported APIs and run the project checks.",
+      "workspace": "./fixtures/multi-file-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/multi-file-repair.mjs" }]
+    },
+    {
+      "id": "desktop-cancellation-repair",
+      "prompt": "Fix src/worker.js so runTask honors an already-aborted AbortSignal before calling work, aborts while awaiting work, ignores late work results, and removes its abort listener when settled. Preserve runTask({signal, work}) and ordinary successful work. Run the project checks.",
+      "workspace": "./fixtures/cancellation-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/cancellation-repair.mjs" }]
+    },
+    {
+      "id": "desktop-recovery-state-repair",
+      "prompt": "Update src/recovery.js and README.md. projectOutcome must preserve failed, cancelled and unknown as distinct outcomes. Return completed only for status='completed' with verificationPassed=true. Missing, malformed or unrecognized input stays unknown. Document that unknown remains unknown. Preserve the exported API and run the project checks.",
+      "workspace": "./fixtures/recovery-state-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/recovery-state-repair.mjs" }]
+    },
+    {
+      "id": "desktop-project-path-repair",
+      "prompt": "Repair src/paths.js. resolveTarget(projectRoot, target) must resolve paths using the explicitly selected project, support POSIX and Windows roots, normalize dot segments, and reject non-string, empty, drive-relative or escaping targets. It must never substitute process.cwd() for projectRoot. Preserve the exported API and run the project checks.",
+      "workspace": "./fixtures/project-path-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/project-path-repair.mjs" }]
     }
   ]
 }

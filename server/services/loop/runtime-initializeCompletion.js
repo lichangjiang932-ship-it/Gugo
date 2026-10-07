@@ -1,6 +1,8 @@
 import { ARTIFACT_DELIVERY_INCOMPLETE_REASON } from '../turnTerminalProjection.js'
 import { restoreCompletionPolicyState } from './completionPolicy.js'
 import { restoreMutationVerificationRecovery } from './mutationVerificationRecovery.js'
+import { createRequestedMutationContract } from './requestedMutationContract.js'
+import { initializePdfLayoutCompletion } from './runtime-pdfLayoutCompletion.js'
 
 /** Restored completion-policy counters, memoized on the loop state when present. */
 function completionPolicyCounters(s) {
@@ -157,7 +159,7 @@ function initializeMutationVerification(s) {
   const repairedLegacyDebt = rawTargets.length === 1
     && normalizeMutationTarget(rawTargets[0]) === PROJECT_SCOPE_TARGET
     && !(s.restoredState?.completionGuards?.pendingDeletionTargets || []).length
-    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages, s.restoredState)
+    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages, s.restoredState, s.executionScope)
   s.restoredMutationTargets = repairedLegacyDebt ? [] : rawTargets
   s.recoveredHistoricalTargets = s.recoveredPriorLocalTargets
   s.pendingMutationTargets = new Set([
@@ -184,9 +186,7 @@ function initializeMutationVerification(s) {
   s.mutationVerificationRecovery = restoreMutationVerificationRecovery(
     s.restoredState?.completionGuards?.mutationVerificationRecovery,
   )
-  s.pdfLayoutVerificationObserved = Boolean(
-    s.restoredState?.completionGuards?.pdfLayoutVerificationObserved,
-  )
+  initializePdfLayoutCompletion(s)
   s.pdfLayoutVerificationRetries = restoredPolicies.pdfLayoutVerificationRetries || 0
 }
 
@@ -217,7 +217,7 @@ function installLocalHtmlVerification(s) {
   }
   s.readSourceForHtmlTarget = (target) => {
     for (const [candidate, source] of s.localHtmlReadSources) {
-      if (targetsMatch(candidate, target)) return source
+      if (targetsMatch(candidate, target, s.executionScope)) return source
     }
     return undefined
   }
@@ -290,7 +290,7 @@ function installTaskVerification(s) {
     for (const match of command.matchAll(quoted)) addReference(match[1] || match[2])
     const literal = /(?:^|[\s=,(])([^\s"'<>|;&,)]+)/g
     for (const match of command.replace(quoted, ' ').matchAll(literal)) addReference(match[1])
-    return [...references].some((candidate) => targetsMatch(candidate, target))
+    return [...references].some((candidate) => targetsMatch(candidate, target, s.executionScope))
   }
   s.taskVerificationRepair = restoreTaskVerificationRepair(
     s.restoredState?.completionGuards?.taskVerificationRepair,
@@ -411,12 +411,20 @@ function installFinalAnswerEvidence(s) {
     finalAnswerEvidenceDigest,
     normalizeFinalAnswerToolEvidence,
   } = s.d
+  s.requestedMutationContract = createRequestedMutationContract({
+    text: s.executionIntentText,
+    scope: s.executionScope,
+    enabled: s.job?.origin === 'chat' && s.mutationExecutionRequested
+      && !s.explicitReadOnlyConstraint && !s.generatedWorkflowStep,
+    restored: s.restoredState?.completionGuards?.requestedMutationContract,
+  })
   s.missingArtifactTools = () => {
     s.recomputeDeliveredArtifactTools()
     return [...s.expectedArtifactTools].filter((name) => !s.deliveredArtifactTools.has(name))
   }
   s.hasRequiredArtifacts = () => !s.requiresPersistedArtifact || s.missingArtifactTools().length === 0
-  s.hasRequiredExecutionEvidence = () => !s.requiresExecutionEvidence
+  s.hasRequiredExecutionEvidence = () => s.requestedMutationContract.satisfied()
+    && (!s.requiresExecutionEvidence
     || (s.mutationExecutionRequested
       ? !s.mutationSteeringPending && (s.mutationExecutionObserved || (
           !s.requiresPersistedArtifact
@@ -424,7 +432,7 @@ function installFinalAnswerEvidence(s) {
           && s.executionEvidenceObserved
           && !s.hasPendingMutationVerification()
         ))
-      : s.executionEvidenceObserved)
+      : s.executionEvidenceObserved))
   s.deliveryContractReadyForSelection = () => s.hasRequiredArtifacts()
     && s.hasRequiredExecutionEvidence()
     && !s.hasPendingMutationVerification()

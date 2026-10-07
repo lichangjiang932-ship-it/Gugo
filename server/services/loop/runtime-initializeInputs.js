@@ -1,4 +1,5 @@
 import { userMessageText } from './userMessageText.js'
+import { createLoopExecutionScope } from './executionScope.js'
 
 function bindRuntimeInputs(s) {
   const {
@@ -11,6 +12,7 @@ function bindRuntimeInputs(s) {
     resolveSideEffectExecutionLedger,
   } = s.d
   ;({ job: s.job, step: s.step, messages: s.messages, signal: s.signal } = s.context.input)
+  s.executionScope = createLoopExecutionScope({ job: s.job, step: s.step })
   s.locale = normalizeTurnLocale(s.job?.locale)
   ;({ run: s.runModel, reconcileRequest: s.reconcileModelRequest = null, compactionArchivePort: s.compactionArchivePort = null, contextWindow: s.contextWindow, onPhase: s.onModelPhase = null, onDelta: s.onModelDelta = null, onReasoningDelta: s.onReasoningDelta = null } = s.context.model)
   ;({ specs: s.toolSpecs, fallbackSpecs: s.fallbackToolSpecs, config: s.toolsConfig = null, resolutionDecision: s.toolResolutionDecision = null, onProgress: s.onProgress = null, onCall: s.onToolCall = null, onStarted: s.onToolStarted = null, onCompleted: s.onToolCompleted = null } = s.context.tools)

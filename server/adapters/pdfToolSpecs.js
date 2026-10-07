@@ -56,6 +56,38 @@ export const PDF_TOOL_SPECS = [
           path: { type: 'string', description: 'Workspace-relative or user-authorized PDF path.' },
           ...pageSelectionProperties,
           includeItems: { type: 'boolean', description: 'Defaults true. Set false to omit coordinate items and return page text only.' },
+          verifyLayout: {
+            type: 'object',
+            description: 'Host verification of complete PDF text, glyph bounds, unchanged non-target pages and fresh PNG previews. Returns an identity-bound receipt; script output markers are not verification.',
+            properties: {
+              expectedText: { type: 'string', minLength: 1, maxLength: 100000 },
+              source: { type: 'string' },
+              pages: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'integer', minimum: 1 } },
+              sectionLabel: { type: 'string', maxLength: 200 },
+              rectangles: {
+                type: 'array', maxItems: 200,
+                items: {
+                  type: 'object',
+                  properties: {
+                    page: { type: 'integer', minimum: 1 },
+                    x: { type: 'number' }, y: { type: 'number' },
+                    width: { type: 'number', exclusiveMinimum: 0 },
+                    height: { type: 'number', exclusiveMinimum: 0 },
+                  },
+                  required: ['page', 'x', 'y', 'width', 'height'], additionalProperties: false,
+                },
+              },
+              previews: {
+                type: 'array', maxItems: 100,
+                items: {
+                  type: 'object',
+                  properties: { page: { type: 'integer', minimum: 1 }, path: { type: 'string' } },
+                  required: ['page', 'path'], additionalProperties: false,
+                },
+              },
+            },
+            required: ['expectedText'], additionalProperties: false,
+          },
         },
         required: ['path'],
       },

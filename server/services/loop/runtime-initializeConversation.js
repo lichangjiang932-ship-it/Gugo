@@ -5,6 +5,7 @@ import { withAssistantCommunicationPolicy } from '../../../shared/assistantCommu
 import { messageTextContent } from './userMessageText.js'
 import { completionPolicyAttempts } from './completionPolicy.js'
 import { createPreviewVerification } from '../previewVerification.js'
+import { createLoopExecutionScope } from './executionScope.js'
 
 // Exact legacy host records, not a substring/marker match: quoted examples,
 // user content and other system safety instructions must survive recovery.
@@ -58,6 +59,9 @@ function initializeConversationContext(s) {
     ? path.resolve(String(s.outputDirectoryContext.projectDirectory).trim())
     : ''
   s.verificationProjectDirectory = configuredRoot || authorizedRoots[0] || ''
+  s.executionScope = createLoopExecutionScope({
+    job: s.job, step: s.step, projectDirectory: s.verificationProjectDirectory,
+  })
   s.verificationProjectDirectories = [...new Set([configuredRoot, ...authorizedRoots].filter(Boolean))]
   // The preview verifies this conversation's own project, one observation per
   // edit batch, and obeys that project's .gugo/launch.json about whether to run.

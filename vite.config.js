@@ -158,7 +158,7 @@ export function runtimeLifecyclePlugin({
   }
 }
 
-function turnRealtimePlugin({ attachTurnWebSocketServer, getTurnEngine }) {
+function turnRealtimePlugin({ attachTurnWebSocketServer, getTurnEngine, runtimeEnv }) {
   return {
     name: 'turn-realtime-websocket',
     configureServer(server) {
@@ -166,6 +166,7 @@ function turnRealtimePlugin({ attachTurnWebSocketServer, getTurnEngine }) {
         throw new Error('Vite HTTP server is unavailable for /api/realtime')
       }
       attachTurnWebSocketServer(server.httpServer, {
+        getEnv: () => runtimeEnv,
         listEvents: (scope) => getTurnEngine().listEvents(scope),
       })
     },
@@ -173,6 +174,7 @@ function turnRealtimePlugin({ attachTurnWebSocketServer, getTurnEngine }) {
 }
 
 export function developmentHttpCapabilityPlugin({
+  enforceLocalRequestBoundary,
   bindRuntimePluginHttpCapabilities,
   createHttpCapabilityRegistry,
   healthCheck,
@@ -182,6 +184,9 @@ export function developmentHttpCapabilityPlugin({
   runtimeCwd,
   runtimeEnv,
 }) {
+  if (typeof enforceLocalRequestBoundary !== 'function') {
+    throw new TypeError('The development HTTP host requires a local request boundary.')
+  }
   return {
     name: 'local-runtime-http-capabilities',
     enforce: 'pre',
@@ -211,7 +216,7 @@ export function developmentHttpCapabilityPlugin({
       }
       server.httpServer?.once('close', dispose)
 
-      server.middlewares.use((req, res, next) => {
+      server.middlewares.use((req, res, next) => enforceLocalRequestBoundary(req, res, () => {
         const pathname = new URL(String(req.url || '/'), 'http://localhost').pathname
         if (pathname === '/api/health') {
           healthCheck(req, res)
@@ -227,7 +232,7 @@ export function developmentHttpCapabilityPlugin({
         })
         if (dispatched.handled) return
         next()
-      })
+      }, runtimeEnv))
     },
   }
 }
@@ -262,6 +267,7 @@ async function loadDevelopmentRuntime({ runtimeCwd, startupEnv }) {
     runtimeCapabilityHost,
     sqliteSubagentRunPersistence,
     database,
+    localRequestPolicy,
   ] = await Promise.all([
     import('./server/appServer.js'),
     import('./server/core/builtinHttpCapabilities.js'),
@@ -274,6 +280,7 @@ async function loadDevelopmentRuntime({ runtimeCwd, startupEnv }) {
     import('./server/core/runtimeCapabilityHost.js'),
     import('./server/adapters/sqliteSubagentRunPersistenceAdapter.js'),
     import('./server/db.js'),
+    import('./server/utils/localRequestPolicy.js'),
   ])
 
   pluginRegistry.initializeRuntimePluginConfig({ cwd: runtimeCwd, env: runtimeEnv })
@@ -291,6 +298,7 @@ async function loadDevelopmentRuntime({ runtimeCwd, startupEnv }) {
     runtimeEnv,
     plugins: [
       developmentHttpCapabilityPlugin({
+        enforceLocalRequestBoundary: localRequestPolicy.enforceLocalRequestBoundary,
         bindRuntimePluginHttpCapabilities: pluginRegistry.bindRuntimePluginHttpCapabilities,
         createHttpCapabilityRegistry: httpCapabilityRegistry.createHttpCapabilityRegistry,
         healthCheck: appServer.healthCheck,
@@ -319,6 +327,7 @@ async function loadDevelopmentRuntime({ runtimeCwd, startupEnv }) {
         turnPersistenceAdapter: persistenceBootstrap.adapter,
       }),
       turnRealtimePlugin({
+        runtimeEnv,
         attachTurnWebSocketServer: turnWebSocket.attachTurnWebSocketServer,
         getTurnEngine: turnEngineHost.getTurnEngine,
       }),

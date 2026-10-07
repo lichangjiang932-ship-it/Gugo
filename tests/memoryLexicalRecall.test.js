@@ -3,6 +3,7 @@ import test, { after } from 'node:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-memory-lexical-'))
 process.env.APP_DATA_DIR = dataDir
@@ -10,6 +11,7 @@ process.env.APP_DB_PATH = path.join(dataDir, 'app.db')
 const { getDb, closeDb } = await import('../server/db.js')
 const { createAgent } = await import('../server/services/agentStore.js')
 const { getMemory, listMemories, selectActiveMemoriesForInjection, upsertMemory } = await import('../server/services/memoryStore.js')
+const { searchLexicalMemories } = await import('../server/services/memoryLexicalSearch.js')
 const db = getDb()
 let sequence = 0
 
@@ -37,7 +39,10 @@ function noise(userId, count, options = {}) {
   })()
 }
 
-test('lexical recall ranks the whole bounded history before limiting to 240 candidates', () => {
+test('lexical recall ranks the whole bounded history before limiting to 240 candidates', (t) => {
+  // This assertion covers ranking/cardinality; elapsed-time enforcement has an
+  // independent deterministic clock test below and must not depend on CPU load.
+  t.mock.method(performance, 'now', () => 0)
   const userId = owner()
   const target = remember(userId, 'Alpha guidelines', 'Use the documented deployment procedure.')
   db.prepare('UPDATE memories SET updated_at = 1 WHERE id = ?').run(target.id)
@@ -49,6 +54,18 @@ test('lexical recall ranks the whole bounded history before limiting to 240 cand
   assert.equal(result.diagnostics.lexical.matched, 261)
   assert.equal(result.diagnostics.lexical.candidateTruncated, true)
   assert.equal(result.diagnostics.tokenTruncated, false)
+})
+
+test('lexical elapsed-time exhaustion stays partial and never claims complete coverage', () => {
+  const userId = owner()
+  noise(userId, 3)
+  let clock = 0
+  const result = searchLexicalMemories(db, { userId, query: 'alpha' }, {
+    now: () => { const value = clock; clock += 1000; return value },
+  })
+  assert.equal(result.diagnostics.coverage, 'partial')
+  assert.equal(result.diagnostics.code, 'MEMORY_LEXICAL_TIME_LIMIT')
+  assert.ok(result.diagnostics.nextCursor)
 })
 
 test('old exact title remains reachable beyond the bounded general scan', () => {

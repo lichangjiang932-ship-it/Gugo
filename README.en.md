@@ -2,9 +2,10 @@
 
 [简体中文](README.md) | **English**
 
-Gugo is a local-first, general-purpose agent workspace for tools, memory, background jobs,
-subagents, MCP integrations, and generated artifacts. It is available as both
-a browser application and a Windows Electron desktop app, backed by Node.js and SQLite.
+Gugo is a free, open-source, local-first desktop agent for tools, memory, background jobs,
+subagents, MCP integrations, and generated artifacts. The Windows Electron application
+is the primary product; the browser interface supports the transition and development.
+Node.js and SQLite run the local backend. Users choose and configure their model endpoints.
 
 The default `local` mode is single-user and requires no sign-up or login. Bring
 your own model endpoint and API key in Settings after startup.

@@ -1,0 +1,1 @@
+{"name":"gugo-eval-cancellation","private":true,"type":"module","scripts":{"test":"node test.mjs"}}

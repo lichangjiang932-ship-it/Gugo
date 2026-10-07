@@ -1,6 +1,9 @@
 import { assertRuntimeStage } from './runtimeContract.js'
 import { withProviderExecutionArguments } from '../../adapters/providerReplayState.js'
 import { recordMutationVerificationRecoveryOutcome } from './mutationVerificationRecovery.js'
+import { recordVerificationObservations } from './runtime-recordVerificationObservations.js'
+import { recordPdfLayoutMutation } from './runtime-pdfLayoutCompletion.js'
+import { recordMutationEvidence } from './runtime-recordMutationEvidence.js'
 import { artifactPreviewIdentity } from '../artifactPreviewIdentity.js'
 import { toolStopBoundary } from './runtimeToolStop.js'
 
@@ -187,12 +190,12 @@ function recordExecutionProgress(s, outcome, executedCall, succeeded) {
   const { installAttemptSignature, isExplorationOnlyCall,
     isProductiveExecutionOutcome, progressChangesFor, recordToolProgress } = s.d
   s.partialResultFallback.record(executedCall, outcome.result)
-  const progressChanges = progressChangesFor(executedCall, outcome.result)
+  const progressChanges = progressChangesFor(executedCall, outcome.result, s.executionScope)
   const semanticControlCall = executedCall?.name === 'set_deliverables'
   const installSignature = installAttemptSignature(executedCall)
   if (installSignature) s.rememberInstallAttempt(installSignature)
   const productiveExecution = !semanticControlCall && s.executionConvergenceEnabled
-    && isProductiveExecutionOutcome(executedCall, outcome.result, outcome.artifactId)
+    && isProductiveExecutionOutcome(executedCall, outcome.result, outcome.artifactId, s.executionScope)
   if (productiveExecution) {
     i.convergenceBatch.productiveSuccess = true
     s.loopGuard.markProgress?.(executedCall)
@@ -249,24 +252,18 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
     clearVerifiedMutationTargets,
     extractMutationTargets,
     isLocalMutationCall,
-    isMutationExecutionCall,
     isVerificationCall,
     looksLikeDeletionCommand,
     normalizeMutationTarget,
     staticDeletionTargets,
     targetsMatch,
   } = s.d
-  const { semanticControlCall, productiveExecution } = execution
-  const mutationSucceeded = semanticControlCall
-    ? false
-    : s.executionConvergenceEnabled
-      ? productiveExecution
-      : succeeded && isMutationExecutionCall(executedCall, outcome.artifactId)
+  const mutationSucceeded = recordMutationEvidence(s, outcome, executedCall, succeeded, execution)
   if (succeeded && s.patchOnlyWorkspaceIntent
     && PATCH_WRITE_TOOL_NAMES.has(String(executedCall?.name || ''))) {
     const targets = extractMutationTargets(executedCall, outcome.result)
     if (s.exactWorkspaceTargetPaths.some((expected) => (
-      [...targets].some((target) => targetsMatch(target, expected))
+      [...targets].some((target) => targetsMatch(target, expected, s.executionScope))
     ))) {
       s.successfulExpectedPathWriteObserved = true
       s.requiresPersistedArtifact = false
@@ -275,14 +272,10 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
       s.clearArtifactRecovery()
     }
   }
-  if (mutationSucceeded) {
-    s.mutationExecutionObserved = true
-    s.priorOutcomeMutationObserved = true
-    s.mutationSteeringPending = false
-  }
-  if (mutationSucceeded && isLocalMutationCall(executedCall)) {
+  if (mutationSucceeded && isLocalMutationCall(executedCall, s.executionScope)) {
     if (s.requiresPdfLayoutVerification) s.pdfLayoutVerificationObserved = false
     const currentTargets = extractMutationTargets(executedCall, outcome.result)
+    recordPdfLayoutMutation(s, currentTargets)
     // Look at the app the edit was meant to change. The observation lands on this
     // call's own result (screenshot included) and is awaited at the batch
     // boundary, so the model reads it together with the edit it belongs to.
@@ -302,19 +295,19 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
     if (deletions?.size) {
       for (const target of deletions) {
         const auxiliary = [...s.auxiliaryMutationTargets]
-          .find((pending) => targetsMatch(pending, target))
+          .find((pending) => targetsMatch(pending, target, s.executionScope))
         if (auxiliary) {
           s.auxiliaryMutationTargets.delete(auxiliary)
           continue
         }
         for (const pending of [...s.pendingMutationTargets]) {
-          if (pending !== PROJECT_SCOPE_TARGET && targetsMatch(pending, target)) {
+          if (pending !== PROJECT_SCOPE_TARGET && targetsMatch(pending, target, s.executionScope)) {
             s.pendingMutationTargets.delete(pending)
           }
         }
         s.pendingDeletionTargets.add(target)
         for (const htmlTarget of [...s.localHtmlDeliveryTargets]) {
-          if (targetsMatch(htmlTarget, target)) {
+          if (targetsMatch(htmlTarget, target, s.executionScope)) {
             s.localHtmlDeliveryTargets.delete(htmlTarget)
             s.localHtmlReadSources.delete(htmlTarget)
           }
@@ -326,7 +319,7 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
         if (s.isLocalHtmlTarget(target)) s.localHtmlDeliveryTargets.add(target)
         if (target === PROJECT_SCOPE_TARGET) continue
         for (const deleted of [...s.pendingDeletionTargets]) {
-          if (targetsMatch(deleted, target)) s.pendingDeletionTargets.delete(deleted)
+          if (targetsMatch(deleted, target, s.executionScope)) s.pendingDeletionTargets.delete(deleted)
         }
       }
       for (const target of s.exactWorkspaceTargetPaths) {
@@ -342,7 +335,7 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
       ))
       for (const pending of [...currentTargets, ...helpers]) {
         if (!s.auxiliaryScriptTarget(pending)) continue
-        if (declaredOutputs.some((output) => targetsMatch(pending, output))) continue
+        if (declaredOutputs.some((output) => targetsMatch(pending, output, s.executionScope))) continue
         s.pendingMutationTargets.delete(pending)
         s.auxiliaryMutationTargets.add(pending)
       }
@@ -364,7 +357,7 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
     }
     s.localHtmlDeliveryValidationPending = s.localHtmlDeliveryTargets.size > 0
     s.mutationVerificationRetries = 0
-  } else if (succeeded && s.hasPendingMutationVerification() && isVerificationCall(executedCall)) {
+  } else if (succeeded && s.hasPendingMutationVerification() && isVerificationCall(executedCall, s.executionScope)) {
     const clearedMutation = clearVerifiedMutationTargets(
       s.pendingMutationTargets,
       executedCall,
@@ -377,6 +370,7 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
     )
     const clearedDeletion = clearVerifiedDeletionTargets(
       s.pendingDeletionTargets, executedCall, outcome.result,
+      s.executionScope,
     )
     if (clearedMutation || clearedDeletion) {
       s.loopGuard.markProgress?.()
@@ -389,36 +383,6 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
   }
 }
 
-function recordVerificationObservations(s, outcome, executedCall, succeeded) {
-  const { isSuccessfulPdfLayoutVerification, normalizeMutationTarget, targetsMatch } = s.d
-  const observation = s.observeTaskVerificationRepair(executedCall, outcome.result)
-  if (observation.changed && !observation.failed && !observation.indeterminate) {
-    s.loopGuard.markProgress?.()
-    s.mutationVerificationRetries = 0
-  }
-  if (observation.failed || observation.indeterminate) {
-    const prompt = s.taskVerificationRepairPrompt()
-    if (prompt) s.iteration.deferredPostBatchMessages.push({ role: 'system', content: prompt })
-  }
-  if (succeeded && executedCall?.name === 'read_file'
-    && typeof outcome.result?.content === 'string' && outcome.result?.truncated !== true) {
-    const targets = [outcome.result?.path, executedCall?.args?.path]
-      .map(normalizeMutationTarget).filter(Boolean)
-    for (const htmlTarget of s.localHtmlDeliveryTargets) {
-      if (targets.some((candidate) => targetsMatch(candidate, htmlTarget))) {
-        s.localHtmlReadSources.set(htmlTarget, outcome.result.content)
-      }
-    }
-  }
-  if (s.requiresPdfLayoutVerification
-    && isSuccessfulPdfLayoutVerification(executedCall, outcome.result)) {
-    // Layout markers contain no path-scoped write/deletion evidence. Keep those
-    // debts until recordMutationExecution observes matching verification results.
-    s.pdfLayoutVerificationObserved = true
-    s.pdfLayoutVerificationRetries = 0
-  }
-}
-
 function recordArtifactOutcome(s, outcome, succeeded) {
   const { isFileArtifactTool, normalizeArtifactIdList } = s.d
   const deliverySatisfied = !s.requiresLocalArtifactDelivery
@@ -427,6 +391,8 @@ function recordArtifactOutcome(s, outcome, succeeded) {
   const receipts = Array.isArray(outcome.artifactValidationReceipts)
     ? outcome.artifactValidationReceipts
     : []
+  recordPdfLayoutMutation(s, receipts.filter((receipt) => receipt?.format === 'pdf')
+    .map((receipt) => receipt.sourcePath).filter(Boolean))
   const validatedIds = new Set(receipts.filter((receipt) => receipt?.verified === true)
     .map((receipt) => String(receipt.artifactId || '').trim()).filter(Boolean))
   const metadataById = new Map((Array.isArray(outcome.artifacts) ? outcome.artifacts : [])

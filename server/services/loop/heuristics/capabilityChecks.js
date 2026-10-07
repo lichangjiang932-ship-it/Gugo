@@ -23,7 +23,9 @@ import {
 } from './commandCapabilities.js'
 import {
   isReadOnlyPythonVerificationCall,
+  targetsMatch,
 } from './mutationClassification.js'
+import { isTrustedPdfLayoutReceipt } from '../../../utils/pdfLayoutReceipt.js'
 import {
   isSuccessfulToolResult,
 } from './resultStatus.js'
@@ -165,18 +167,26 @@ export function buildPdfLayoutExecutionContract(text) {
       : 'If the user names a page, section, form field, or document label, that target is authoritative; never infer a different target from the content.',
     'Before writing, inspect the source PDF with code, extract each page heading, determine the exact target page indices, writable rectangles, ruled-line positions, and forbidden/red-line boundaries. Do not guess page numbers.',
     'Generate the requested PDF and every requested page preview with real code. Preserve the original paragraph text and structure exactly, and keep non-target pages unchanged.',
-    'After generation, create a separate read-only validator named verify_pdf_layout.py and run it after the write. It must reopen both source and output and assert: the requested heading maps to the written pages; the full requested text appears in order on target pages; non-target pages remain unchanged; every inserted glyph bbox stays inside the writable rectangle and above forbidden boundaries; continuation and indentation rules hold; and all requested PNG previews are present, non-empty, and match freshly rendered output pages.',
+    'After generation, call the builtin pdf_text with the output path and verifyLayout: expectedText containing the required text, pages containing the exact target pages, sectionLabel when the user selected a section, source for an existing PDF, rectangles for required writable bounds, and previews containing every requested PNG path/page. The host parses all pages and verifies text, glyph bounds, unchanged non-target pages and fresh previews.',
     'Do not call browser_open_url with a local file:// PDF or PNG; browser tools accept only http/https URLs. Inspect local PDF and image files through an exposed command tool (bash_exec or run_command) and the read-only validator.',
-    `Only after every assertion passes may the validator print the exact standalone marker ${PDF_LAYOUT_VERIFICATION_OK}. A read_file or directory listing proves existence only and is not layout verification. Do not claim completion without a successful validator result containing that marker.`,
+    'Completion requires the identity-bound pdfLayoutVerification receipt from the host. A script marker, existence probe or directory listing cannot supply that receipt. An external script can provide additional observations but cannot certify its own assertions.',
     // ★ 实事求是汇报(用户明确要求):验证通过就直说「验证器打印了 PDF_LAYOUT_VERIFICATION_OK」,
     // 不要用「通过全部断言」这类转述猜测;产出文件用 Markdown 链接给出完整路径,
     // 供用户直接点击打开;永远不要把设备重定向(nul)当成产出文件列出来。
-    'Report results as plain fact: if the validator printed PDF_LAYOUT_VERIFICATION_OK, say exactly that — do not paraphrase it as assertions passing or speculate about internals. List every produced file with its full path as a Markdown link so it can be clicked. Never list device-redirection targets (nul) as output files.',
+    'Report only the checks recorded in the host receipt. List every produced file with its full path as a Markdown link so it can be clicked. Never list device-redirection targets (nul) as output files.',
   ].join(' ')
 }
 
-export function isSuccessfulPdfLayoutVerification(call, result) {
-  if (!isCommandExecutionTool(call) || !isSuccessfulToolResult(result)) return false
+export function isSuccessfulPdfLayoutVerification(call, result, binding = {}) {
+  if (!isSuccessfulToolResult(result)
+    || !isTrustedPdfLayoutReceipt(result?.pdfLayoutVerification, binding)) return false
+  const receipt = result.pdfLayoutVerification
+  if (binding.sectionLabel && receipt.sectionLabel !== binding.sectionLabel) return false
+  if (binding.targets?.length && !binding.targets.some((target) => (
+    targetsMatch(receipt.output.path, target, binding)
+  ))) return false
+  if (call?.name === 'pdf_text' && call?.args?.verifyLayout) return true
+  if (!isCommandExecutionTool(call)) return false
   if (Array.isArray(call?.args?.expected_outputs) && call.args.expected_outputs.length > 0) return false
   const command = String(call?.args?.command || '')
   if (command.includes(PDF_LAYOUT_VERIFICATION_OK)) return false

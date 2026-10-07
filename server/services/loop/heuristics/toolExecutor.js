@@ -257,7 +257,12 @@ async function executeFileOrMediaTool(context) {
   ]
   for (const [names, dispatch, fallbackCode] of dispatchers) {
     if (!names.has(name)) continue
-    try { return await dispatch(name, args || {}, { userId: job?.userId || null, signal }) }
+    try {
+      return await dispatch(name, args || {}, {
+        userId: job?.userId || null, signal,
+        sessionId: job?.sessionId || null, executionId: job?.id || null,
+      })
+    }
     catch (error) { return normalizeToolError(error, { fallbackCode }) }
   }
   if (CODING_AGENT_TOOL_NAMES.has(name)) {

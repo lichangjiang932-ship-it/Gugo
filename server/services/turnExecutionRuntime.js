@@ -29,6 +29,7 @@ import { filterAuthorizedDirectoryResolutions } from './turnResolutionRuntime.js
 import { normalizeTurnApprovalMode } from './turnStartRuntime.js'
 import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
 import { createTurnPublicTimeline } from './turnPublicTimeline.js'
+import { createBoundBackgroundModelCaller } from '../adapters/modelInvocationRuntime.js'
 
 export function checkpointStateForFailedRetry(state, { manualRetry = false } = {}) {
   if (!state || typeof state !== 'object') return state || null
@@ -267,6 +268,19 @@ function createTurnExecutionState(runtime, input, recovery, prepared) {
     agentId: input.agentId,
     failedRetryActive: input.failedRetryActive,
     manualFailedRetryActive: input.manualFailedRetryActive,
+    bindBackgroundModel: (callModel) => input.modelRuntimeEnv && input.modelName && input.modelProviderId
+      ? createBoundBackgroundModelCaller({
+          callModel,
+          env: input.modelRuntimeEnv,
+          modelName: input.modelName,
+          providerId: input.modelProviderId,
+          usageOwnerId: input.userId,
+        })
+      : ({ messages, signal }) => callModel({
+          messages, signal, userId: input.userId,
+          ...(input.modelName ? { modelName: input.modelName } : {}),
+          ...(input.modelProviderId ? { modelProviderId: input.modelProviderId } : {}),
+        }),
   })
   return { state, recordCanaryTerminal, readTerminalState }
 }

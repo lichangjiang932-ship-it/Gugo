@@ -109,18 +109,21 @@ export function createArtifactReplacementGuard({
 export function createWorkspaceTargetGuard({
   enabled = false,
   exactTargetPaths = [],
+  getExecutionScope = () => ({}),
 } = {}) {
   const allowedPaths = Array.isArray(exactTargetPaths) ? [...exactTargetPaths] : []
   const isManagedArtifactStorePath = (candidate) => (
     /(?:^|[\\/])\.artifacts(?:[\\/]|$)/i.test(String(candidate || '').trim())
   )
-  const isAllowedTarget = (candidate) => allowedPaths.some((target) => targetsMatch(candidate, target))
+  const isAllowedTarget = (candidate) => allowedPaths.some((target) => (
+    targetsMatch(candidate, target, getExecutionScope())
+  ))
 
   function validate(name, args = {}) {
     if (!enabled) return null
     const call = { name, args }
     const fileMutationTool = ['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file'].includes(name)
-    const commandMutationTool = isCommandExecutionTool(call) && isLocalMutationCall(call)
+    const commandMutationTool = isCommandExecutionTool(call) && isLocalMutationCall(call, getExecutionScope())
     if (!fileMutationTool && !commandMutationTool) return null
 
     const candidatePaths = fileMutationTool

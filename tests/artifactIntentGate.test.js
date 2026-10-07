@@ -4,7 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
-import { PDFDocument } from 'pdf-lib'
+import { PDFDocument, StandardFonts } from 'pdf-lib'
+import { hostPdfLayoutExecutor } from './helpers/pdfLayoutFixture.js'
 import {
   allowedArtifactTools,
   detectArtifactIntent,
@@ -19,7 +20,7 @@ import {
   resolveArtifactDeliveryTargets,
   resolveArtifactRevisionMode,
 } from '../server/services/artifactIntent.js'
-import { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
+import { runToolsLoop as runToolsLoopRuntime, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
 import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkflow.js'
 import { validateHtmlArtifactSource } from '../server/services/artifactGen.js'
 import { createUser, getDb } from '../server/db.js'
@@ -27,6 +28,13 @@ import { upsertSession } from '../server/services/sessionStore.js'
 import { appendTurnArtifact, listTurnArtifacts } from '../server/services/turnArtifactStore.js'
 
 const nameOf = (specs) => specs.map((s) => s?.function?.name)
+function runToolsLoop(options) {
+  return runToolsLoopRuntime({
+    ...options,
+    executeTool: typeof options.executeTool === 'function'
+      ? hostPdfLayoutExecutor(options.executeTool) : options.executeTool,
+  })
+}
 const ARTIFACT_GENERATOR_NAMES = [
   'create_docx',
   'create_html_app',
@@ -1644,7 +1652,9 @@ test('a structurally verified declared shell PDF satisfies delivery without call
         }
         assert.deepEqual(args.expected_outputs, [outputPath])
         const document = await PDFDocument.create()
-        document.addPage([595, 842])
+        const page = document.addPage([595, 842])
+        const font = await document.embedFont(StandardFonts.Helvetica)
+        page.drawText('Generated PDF document', { x: 40, y: 790, size: 12, font })
         const bytes = Buffer.from(await document.save())
         fs.writeFileSync(outputPath, bytes)
         return {

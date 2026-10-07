@@ -58,6 +58,19 @@ test('checkpoint state fails fast before budget and loop guard initialization', 
   )
 })
 
+test('model phases require their own prepared inputs and explicit completion contract', () => {
+  assert.throws(() => assertRuntimeStage({ iteration: {} }, 'model-request'),
+    isContractError('model-request', 'callTrackedModel'))
+  assert.throws(() => assertRuntimeStage({ iteration: {} }, 'model-result'),
+    isContractError('model-result', 'iteration.modelResult'))
+  assert.throws(() => assertRuntimeStage({ executionScope: {} }, 'execution-scope'),
+    isContractError('execution-scope', 'executionScope.userId'))
+  assert.doesNotThrow(() => assertRuntimeStage({
+    iteration: {}, convo: [], activeToolSpecs: [], callTrackedModel: async () => ({}),
+    requestedMutationContract: { satisfied: () => true },
+  }, 'model-request'))
+})
+
 test('tool phases report an actionable error when invoked out of order', async () => {
   await assert.rejects(
     executeToolCalls({ iteration: {} }),

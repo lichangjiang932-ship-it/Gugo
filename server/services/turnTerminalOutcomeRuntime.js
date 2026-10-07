@@ -31,6 +31,12 @@ function requirePort(name, value) {
   return value
 }
 
+function backgroundModelCaller(state, runtime, userId) {
+  return typeof state.bindBackgroundModel === 'function'
+    ? state.bindBackgroundModel(runtime.ports.runMemoryModel)
+    : ({ messages, signal }) => runtime.ports.runMemoryModel({ messages, signal, userId })
+}
+
 function usageFields(state) {
   return {
     ...(state.latestModelUsage ? { usage: state.latestModelUsage } : {}),
@@ -336,7 +342,7 @@ async function settleCompletedResult(runtime, context) {
       agentId: state.promptContext?.effectiveAgentId || state.agentId || null,
       messages: state.historyMessages,
       assistantText: text,
-      callModel: ({ messages }) => runtime.ports.runMemoryModel({ messages, userId }),
+      callModel: backgroundModelCaller(state, runtime, userId),
     })
   } catch (error) {
     logWarn('turn.memory_extraction_schedule', error, { userId, sessionId, turnId })
@@ -346,7 +352,7 @@ async function settleCompletedResult(runtime, context) {
     // call once it has earned one (see experienceAbstraction).
     runtime.ports.scheduleExperienceAbstraction?.({
       userId,
-      callModel: ({ messages }) => runtime.ports.runMemoryModel({ messages, userId }),
+      callModel: backgroundModelCaller(state, runtime, userId),
     })
   } catch (error) {
     logWarn('turn.experience_abstraction_schedule', error, { userId, sessionId, turnId })

@@ -2,8 +2,8 @@
 
 **简体中文** | [English](README.en.md)
 
-> 本地/内网可用的 Web + Windows 桌面 AI 工作台 — Agent · Skill · Memory · Tool · Subagent · Job
-> 默认本机单用户免登录，可通过浏览器或桌面应用使用；模型 API 由使用者自行配置。
+> 开源、免费、本地优先的 Windows 桌面 Agent — Agent · Skill · Memory · Tool · Subagent · Job
+> 桌面端是主要产品形态，网页用于过渡和开发；默认本机单用户免登录，模型端点由使用者自行配置。
 
 Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、余额、套餐、订阅或按量收费系统。模型及连接器可能产生的费用由用户自行选择的上游 Provider 直接收取；Gugo 只可在用户显式启用时，依据用户填写的费率做本地只读估算，默认关闭。估算结果绝不影响模型调用、权限、限流、自我进化、晋升或回滚。
 
@@ -21,7 +21,7 @@ Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、�
 
 ## 这是什么
 
-一个**本地优先的通用 Agent 工作台**，同时提供浏览器版本和 Windows Electron 桌面应用。既能回答和处理文本，也能通过经过授权的工具完成文件、代码、资料和产物任务；任务完成以真实执行与验证为依据。
+一个**开源、免费的本地桌面 Agent**，主要通过 Windows Electron 应用使用；保留网页作为过渡和开发界面。Node.js HTTP 与 SQLite 在本机承载执行和数据，模型由用户选择和配置。既能回答和处理文本，也能通过经过授权的工具完成文件、代码、资料和产物任务；任务完成以真实执行与验证为依据。
 
 Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.com/lichangjiang932-ship-it/Gugo/releases)。
 

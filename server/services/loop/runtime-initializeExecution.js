@@ -174,7 +174,7 @@ function restoreExecutionProgress(s) {
     recordToolProgress(s.progressState, {
       call,
       succeeded: isSuccessfulToolResult(result),
-      ...progressChangesFor(call, result),
+      ...progressChangesFor(call, result, s.executionScope),
     })
   }
   s.failureRecovery = restoreFailureRecovery(s.restoredState?.failureRecovery)
@@ -326,6 +326,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       deliveryArtifactSelectionArtifactIds: [...s.deliveryArtifactSelectionArtifactIds],
       executionEvidenceObserved: s.executionEvidenceObserved,
       mutationExecutionObserved: s.mutationExecutionObserved,
+      requestedMutationContract: s.requestedMutationContract.snapshot(),
       priorOutcomeMutationObserved: s.priorOutcomeMutationObserved,
       dynamicallyMountedToolNames: [...s.dynamicallyMountedToolNames],
       dynamicallyLoadedSkillIds: [...s.dynamicallyLoadedSkillIds],
@@ -346,6 +347,8 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       localHtmlDeliveryTargets: [...s.localHtmlDeliveryTargets],
       localHtmlDeliveryRetries: s.localHtmlDeliveryRetries,
       pdfLayoutVerificationObserved: s.pdfLayoutVerificationObserved,
+      pdfLayoutTargets: [...s.pdfLayoutTargets],
+      pdfLayoutReceipts: [...s.pdfLayoutReceipts.values()],
       pdfLayoutVerificationRetries: s.pdfLayoutVerificationRetries,
       executionConvergence: serializeExecutionConvergence(s.executionConvergence),
       finalAnswerToolEvidence: s.finalAnswerToolEvidence,

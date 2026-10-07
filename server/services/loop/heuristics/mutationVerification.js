@@ -17,7 +17,13 @@ import {
   targetsMatch,
 } from './mutationClassification.js'
 
-export function readResultCanVerifyMutation(result) {
+export function readResultCanVerifyMutation(result, call = null) {
+  if (result?.truncated === true || Number(result?.offset ?? call?.args?.offset ?? 0) > 0) return false
+  const hasRange = result?.totalLines !== undefined || result?.returnedLines !== undefined
+  if (hasRange && (!Number.isSafeInteger(result.totalLines)
+    || !Number.isSafeInteger(result.returnedLines)
+    || result.totalLines < 0 || result.returnedLines !== result.totalLines)) return false
+  if (!hasRange && Number(call?.args?.limit || 0) > 0) return false
   const extractionStatus = String(result?.extractionStatus || '').trim().toLowerCase()
   if (extractionStatus) {
     const target = String(result?.path || '').trim().toLowerCase()
@@ -97,7 +103,7 @@ export function listDirectoryVerificationTargets(call, result) {
   return targets
 }
 
-export function clearVerifiedDeletionTargets(pendingTargets, call, result) {
+export function clearVerifiedDeletionTargets(pendingTargets, call, result, scope = {}) {
   if (!pendingTargets.size || call?.name !== 'list_directory') return false
   // Absence is evidence only when the executor explicitly confirms that the
   // parent listing is complete. A limited/truncated listing cannot prove that
@@ -122,20 +128,20 @@ export function clearVerifiedDeletionTargets(pendingTargets, call, result) {
       : separator === 0
         ? '/'
         : normalized.slice(0, separator)
-    if (![...directoryCandidates].some((candidate) => targetsMatch(parent, candidate))) continue
-    if ([...listedTargets].some((listed) => targetsMatch(normalized, listed))) continue
+    if (![...directoryCandidates].some((candidate) => targetsMatch(parent, candidate, scope))) continue
+    if ([...listedTargets].some((listed) => targetsMatch(normalized, listed, scope))) continue
     pendingTargets.delete(pending)
     cleared = true
   }
   return cleared
 }
 
-export function clearExplicitTargetsMatchingEvidence(pendingTargets, evidenceTargets) {
+export function clearExplicitTargetsMatchingEvidence(pendingTargets, evidenceTargets, scope = {}) {
   if (!evidenceTargets.size) return false
   let cleared = false
   for (const pending of [...pendingTargets]) {
     if (pending === PROJECT_SCOPE_TARGET) continue
-    if ([...evidenceTargets].some((evidence) => targetsMatch(pending, evidence))) {
+    if ([...evidenceTargets].some((evidence) => targetsMatch(pending, evidence, scope))) {
       pendingTargets.delete(pending)
       cleared = true
     }
@@ -143,17 +149,28 @@ export function clearExplicitTargetsMatchingEvidence(pendingTargets, evidenceTar
   return cleared
 }
 
-export function clearTargetsMatchingEvidence(pendingTargets, evidenceTargets) {
+export function clearTargetsMatchingEvidence(pendingTargets, evidenceTargets, scope = {}) {
   if (!evidenceTargets.size) return false
   let cleared = false
   if (pendingTargets.delete(PROJECT_SCOPE_TARGET)) cleared = true
   for (const pending of [...pendingTargets]) {
-    if ([...evidenceTargets].some((evidence) => targetsMatch(pending, evidence))) {
+    if ([...evidenceTargets].some((evidence) => targetsMatch(pending, evidence, scope))) {
       pendingTargets.delete(pending)
       cleared = true
     }
   }
   return cleared
+}
+
+function clearGitDiffTargets(pendingTargets, call, result, projectDirectory) {
+  const root = result?.repositoryRoot ?? result?.executionCwd ?? result?.cwd
+    ?? call?.args?.cwd ?? projectDirectory
+  if (root && (typeof root !== 'string' || !path.isAbsolute(root))) return false
+  if (projectDirectory && pendingTargets.has(PROJECT_SCOPE_TARGET)
+    && root && !targetsMatch(root, projectDirectory)) return false
+  return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, result), {
+    projectDirectory: root || projectDirectory,
+  })
 }
 
 const STRUCTURAL_ARTIFACT_FORMATS = new Set([
@@ -225,7 +242,7 @@ export function clearVerifiedMutationTargets(
     )
   }
   if (call?.name === 'git_diff') {
-    return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, result))
+    return clearGitDiffTargets(pendingTargets, call, result, projectDirectory)
   }
   const projectVerdict = projectVerificationFields(result)
   const deterministicProjectPass = result?.ok === true
@@ -247,10 +264,10 @@ export function clearVerifiedMutationTargets(
   if (isCommandExecutionTool(call)) {
     const command = String(call?.args?.command || '')
     if (/^git(?:\.exe)?\s+diff\b[^&|;<>`\r\n]*$/iu.test(command.trim())) {
-      return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, {
+      return clearGitDiffTargets(pendingTargets, call, {
         ...result,
         diff: result?.diff || result?.stdout,
-      }))
+      }, projectDirectory)
     }
     if (taskVerificationScopes(call, result).length > 0) {
       return clearCoveredProjectTargets()
@@ -261,11 +278,11 @@ export function clearVerifiedMutationTargets(
     }
   }
   if (call?.name === 'read_file') {
-    if (!readResultCanVerifyMutation(result)) return false
+    if (!readResultCanVerifyMutation(result, call)) return false
     const evidence = new Set()
     addVerificationTarget(evidence, result?.path)
     addVerificationTarget(evidence, call?.args?.path)
-    return clearExplicitTargetsMatchingEvidence(pendingTargets, evidence)
+    return clearExplicitTargetsMatchingEvidence(pendingTargets, evidence, { projectDirectory })
   }
   const evidence = new Set()
   addVerificationTarget(evidence, result?.path)

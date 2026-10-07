@@ -58,6 +58,7 @@ import {
   serveStatic,
 } from './appServerHttpSurface.js'
 import { RUNTIME_KERNEL_REVISION } from '../shared/runtimeCapabilities.js'
+import { enforceLocalRequestBoundary } from './utils/localRequestPolicy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -74,7 +75,7 @@ export {
   resolveEffectiveExposureAddress,
 } from './appServerHttpSurface.js'
 
-function applyMiddlewares(handler, apiRateLimitMiddleware, runtimeReadiness) {
+function applyMiddlewares(handler, apiRateLimitMiddleware, runtimeReadiness, env) {
   return (req, res) => {
     // 请求级关联 ID：客户端可透传 x-request-id，否则生成一个，
     // 让这一整条请求链上的结构化日志都能按 requestId 串起来。
@@ -82,7 +83,7 @@ function applyMiddlewares(handler, apiRateLimitMiddleware, runtimeReadiness) {
     req.requestId = requestId
     res.setHeader('X-Request-Id', requestId)
     // 顺序：CORS → 安全头 → 日志 → runtime readiness → 限流 → 错误边界 → 业务逻辑
-    corsMiddleware(req, res, () => {
+    enforceLocalRequestBoundary(req, res, () => corsMiddleware(req, res, () => {
       securityHeaders(req, res, () => {
         requestLogger(req, res, () => {
           if (!runtimeReadiness.isReady()) {
@@ -98,7 +99,7 @@ function applyMiddlewares(handler, apiRateLimitMiddleware, runtimeReadiness) {
           })
         })
       })
-    })
+    }), env)
   }
 }
 
@@ -183,6 +184,7 @@ export function createAppServer({
   })
   const server = http.createServer()
   const webSocketServer = attachTurnWebSocketServer(server, {
+    getEnv: () => env,
     isRuntimeReady: () => runtimeReadiness.isReady(),
     getRuntimeReadinessState: () => runtimeReadiness.getState(),
     listEvents: (scope) => getTurnEngine().listEvents(scope),
@@ -192,6 +194,7 @@ export function createAppServer({
     createRouter(getEnv, staticDir, capabilities, runtimeReadiness),
     apiRateLimitMiddleware,
     runtimeReadiness,
+    env,
   ))
   Object.defineProperty(server, 'httpCapabilities', {
     value: capabilities,

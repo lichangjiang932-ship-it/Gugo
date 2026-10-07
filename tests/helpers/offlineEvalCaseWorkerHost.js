@@ -46,7 +46,13 @@ export function offlineEvalCaseWorkerDeadlineMs(evalCase, { platform = process.p
     : deadlineMs
 }
 
-export function offlineEvalCaseWorkerStartupDeadlineMs({ platform = process.platform } = {}) {
+export function offlineEvalCaseWorkerStartupDeadlineMs({
+  platform = process.platform, env = process.env,
+} = {}) {
+  const configured = Number(env.OFFLINE_EVAL_WORKER_STARTUP_TIMEOUT_MS)
+  if (Number.isSafeInteger(configured) && configured >= 1_000 && configured <= 120_000) {
+    return configured
+  }
   return platform === 'win32'
     ? WINDOWS_WORKER_STARTUP_TIMEOUT_MS
     : DEFAULT_WORKER_STARTUP_TIMEOUT_MS

@@ -76,7 +76,8 @@ import { completeIteration } from './runtime-completeIteration.js'
 import { runModelRequest } from './runtime-runModelRequest.js'
 import { processModelResult } from './runtime-processModelResult.js'
 import { finalizeRuntime } from './runtime-finalizeRuntime.js'
-import { assertRuntimeDependencies } from './runtimeContract.js'
+import { assertLoopExecutionScope } from './executionScope.js'
+import { assertRuntimeDependencies, assertRuntimeStage } from './runtimeContract.js'
 import { isTrustedInternalLoopPrincipal } from './internalExecutionPrincipal.js'
 import {
   budgetExceededCopy,
@@ -401,6 +402,12 @@ const runtimeDependencies = {
 }
 
 async function runPhase(phase, state) {
+  if (state.executionScope) {
+    assertRuntimeStage(state, 'execution-scope')
+    assertLoopExecutionScope(state.executionScope, state)
+  }
+  if (phase === runModelRequest) assertRuntimeStage(state, 'model-request')
+  if (phase === processModelResult) assertRuntimeStage(state, 'model-result')
   const outcome = await phase(state)
   if (outcome?.kind === 'return') {
     const value = await outcome.value

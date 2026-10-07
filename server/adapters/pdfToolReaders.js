@@ -1,4 +1,5 @@
 import { createCanvas } from '@napi-rs/canvas'
+import { verifyPdfLayout } from './pdfLayoutVerification.js'
 import {
   DEFAULT_RENDER_DPI,
   MAX_RENDER_DIMENSION,
@@ -324,7 +325,15 @@ async function renderPdfPages(args, { userId = null, signal = null } = {}) {
   }
 }
 
-async function pdfText(args, { userId = null } = {}) {
+async function pdfText(args, binding = {}) {
+  const { userId = null } = binding
+  if (args?.verifyLayout) {
+    const pdfLayoutVerification = await verifyPdfLayout(args, binding, { readText: pdfText })
+    return {
+      ok: true, path: pdfLayoutVerification.output.path,
+      pageCount: pdfLayoutVerification.pageCount, pdfLayoutVerification,
+    }
+  }
   const input = readPdfInput(args?.path || args?.input, { userId })
   const includeItems = args?.includeItems !== false && args?.include_items !== false
   const maxPages = textPageLimit()
@@ -395,6 +404,8 @@ async function pdfText(args, { userId = null } = {}) {
         // pdf_transform.overlay_text even when the page has /Rotate=90/270.
         width: roundedCoordinate(Math.abs(viewX2 - viewX1)),
         height: roundedCoordinate(Math.abs(viewY2 - viewY1)),
+        originX: roundedCoordinate(Math.min(viewX1, viewX2)),
+        originY: roundedCoordinate(Math.min(viewY1, viewY2)),
         rotation: viewport.rotation,
         text,
         ...(includeItems ? { items } : {}),

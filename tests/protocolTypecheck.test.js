@@ -56,8 +56,8 @@ test('the strict pilot checks real JavaScript modules and a correctly typed prod
 
 test('wrong fields, versions, parameter types and un-narrowed results fail for their intended type errors', () => {
   const result = verifyProtocolTypeFixtures()
-  assert.equal(result.fixtureCount, 14)
-  assert.equal(result.diagnosticCount, 14)
+  assert.equal(result.fixtureCount, 16)
+  assert.equal(result.diagnosticCount, 16)
   for (const name of Object.keys(PROTOCOL_NEGATIVE_FIXTURES)) {
     const source = fs.readFileSync(path.join(root, 'types/fixtures/protocol-invalid', name), 'utf8')
     assert.doesNotMatch(source, /@ts-(?:nocheck|ignore|expect-error)\b/u, name)

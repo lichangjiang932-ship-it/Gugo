@@ -86,6 +86,19 @@ const OFFLINE_EVAL_SUITE_CONTRACTS = Object.freeze({
       ['mechanical-fallback-summary-always-present', 'compaction-fidelity'],
     ],
   },
+  'desktop-execution': {
+    minimumCases: 7,
+    requiredCategories: ['local-authority', 'task-completion', 'verification-scope', 'evidence-authority', 'local-model-binding'],
+    coverageSignals: [
+      ['DESKTOP-01', 'local-authority'],
+      ['DESKTOP-02', 'task-completion'],
+      ['DESKTOP-03', 'task-completion'],
+      ['DESKTOP-04', 'task-completion'],
+      ['DESKTOP-05', 'verification-scope'],
+      ['DESKTOP-06', 'evidence-authority'],
+      ['DESKTOP-07', 'local-model-binding'],
+    ],
+  },
   'compaction-port': {
     minimumCases: 3,
     requiredCategories: ['boundary', 'runtime', 'prompt'],

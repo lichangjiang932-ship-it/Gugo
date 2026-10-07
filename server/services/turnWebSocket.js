@@ -25,6 +25,7 @@ import {
 import { isHttpServerDraining } from '../core/httpServerDrain.js'
 import { runtimeNotReadyMessage } from '../core/runtimeReadiness.js'
 import { publicTurnFailureFrameFields } from './turnWebSocketFailureProjection.js'
+import { localRequestRejection } from '../utils/localRequestPolicy.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const CROSS_PROCESS_POLL_MS = 1_000
@@ -324,7 +325,8 @@ function handleTurnWebSocketUpgrade(runtime, request, socket, head) {
     socket.destroy()
     return
   }
-  if (!isAllowedTurnWebSocketOrigin(request)) {
+  if (localRequestRejection(request, runtime.getEnv())
+    || !isAllowedTurnWebSocketOrigin(request)) {
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
     socket.destroy()
     return
@@ -532,6 +534,7 @@ function attachTurnWebSocketConnection(runtime, socket, request) {
 }
 
 export function attachTurnWebSocketServer(server, {
+  getEnv = () => process.env,
   isRuntimeReady = () => true,
   getRuntimeReadinessState = () => (isRuntimeReady() ? 'ready' : 'starting'),
   listEvents = listTurnEvents,
@@ -557,6 +560,7 @@ export function attachTurnWebSocketServer(server, {
   })
 
   const runtime = {
+    getEnv,
     server,
     webSocketServer,
     isRuntimeReady,

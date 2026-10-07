@@ -10,6 +10,13 @@ The runner uses the normal Headless Turn runtime, permission mode, checkpoints, 
 
 ## Dataset
 
+The bundled `evals/starter-suite.json` now contains seven tasks. In addition to
+the original counter, configuration and report repairs, desktop runtime cases
+exercise three-file completion, asynchronous cancellation, distinct recovery
+outcomes and explicit POSIX/Windows project roots. Each verifier stays outside
+the agent's mutable task directory. These fixtures are intentional failures
+before repair; adding them does not constitute a measured model pass rate.
+
 ```json
 {
   "tasks": [

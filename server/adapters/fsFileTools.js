@@ -93,6 +93,7 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
       mimeType: extracted.mimeType,
       extractionStatus: extracted.extractionStatus,
       requiresVision: extracted.requiresVision,
+      truncated: extracted.truncated === true,
     } : {}),
     ...(isOffice ? {
       formatValidated,

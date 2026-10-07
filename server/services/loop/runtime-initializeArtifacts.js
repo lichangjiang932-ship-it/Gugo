@@ -179,7 +179,7 @@ function initializeExecutionIntent(s) {
   s.recoveredPriorLocalTargets = recoverPriorLocalMutationTargets(
     s.messages,
     s.currentUserMessage,
-    { intentMode: s.intentMode },
+    { intentMode: s.intentMode, userId: s.executionScope.userId },
   )
   s.recoveredPriorLocalTargetPaths = [...new Set([
     ...s.recoveredPriorLocalTargets.mutationTargets,
@@ -224,6 +224,7 @@ function initializeExecutionIntent(s) {
   s.workspaceTargetValidationError = createWorkspaceTargetGuard({
     enabled: s.exactWorkspaceTargetConstraint,
     exactTargetPaths: s.exactWorkspaceTargetPaths,
+    getExecutionScope: () => s.executionScope,
   }).validate
   s.directExecutionRequested = s.enforceExecutionIntent && (
     shouldRequireExecution({ intentMode: s.intentMode, text: s.executionIntentText })

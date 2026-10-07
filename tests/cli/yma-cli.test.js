@@ -16,6 +16,7 @@ import { Readable, Writable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import Database from 'better-sqlite3'
 import {
   CLI_VERSION,
   cmdRun,
@@ -91,7 +92,7 @@ function cliE2eEnv({ dataDir, modelPort, homeDir }) {
     MODEL_NAME: 'gpt-cli-e2e',
     MODEL_API_KEY: 'sk-cli-e2e',
     MODEL_PROVIDERS: '',
-    TURN_EXECUTION_LEASE_MS: '1000',
+    TURN_EXECUTION_LEASE_MS: '120000',
     HOME: homeDir,
     USERPROFILE: homeDir,
   }
@@ -1415,7 +1416,7 @@ test('real CLI subprocess preserves outcome-unknown safety after a durable in-fl
     const checkpoint = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error(`checkpoint event timed out\nstdout:\n${firstStdout}\nstderr:\n${firstStderr}`))
-      }, 15_000)
+      }, 45_000)
       firstChild.stderr.on('data', (chunk) => { firstStderr += chunk })
       firstChild.stdout.on('data', (chunk) => {
         firstStdout += chunk
@@ -1463,6 +1464,20 @@ test('real CLI subprocess preserves outcome-unknown safety after a durable in-fl
     const killed = await firstExit
     assert.notEqual(killed.status, 0)
     assert.equal(parseJsonLines(firstStdout).some((event) => event.type.startsWith('turn.') && ['turn.completed', 'turn.failed', 'turn.blocked', 'turn.cancelled'].includes(event.type)), false)
+    // Expire only this killed owner's exact lease. Recovery semantics must
+    // not depend on a one-second wall clock during cold module imports.
+    const leaseDb = new Database(env.APP_DB_PATH, { fileMustExist: true })
+    try {
+      const lease = leaseDb.prepare(
+        'SELECT user_id, owner_id, fencing_token FROM turn_execution_leases WHERE session_id = ? AND turn_id = ?',
+      ).get(checkpoint.sessionId, checkpoint.turnId)
+      assert.ok(lease)
+      const expired = leaseDb.prepare(`
+        UPDATE turn_execution_leases SET expires_at = 0
+        WHERE user_id = ? AND session_id = ? AND turn_id = ? AND owner_id = ? AND fencing_token = ?
+      `).run(lease.user_id, checkpoint.sessionId, checkpoint.turnId, lease.owner_id, lease.fencing_token)
+      assert.equal(expired.changes, 1)
+    } finally { leaseDb.close() }
     allowCompletion = true
 
     const resumedRun = await runCliProcess([

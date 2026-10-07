@@ -196,7 +196,7 @@ function createProvider(paths, scenario) {
   return { state, server, dispose() { for (const timer of timers) clearTimeout(timer); timers.clear() } }
 }
 
-function runProcess(t, paths, env, providerId) {
+function runProcess(t, paths, env, providerId, { timeoutMs = 25_000 } = {}) {
   return new Promise((resolveRun, reject) => {
     const argv = ['--import', NETWORK_GUARD, CLI_PATH, 'run',
       `Read ${basename(paths.source)} and report its exact text. Do not create or edit any files.`,
@@ -206,7 +206,7 @@ function runProcess(t, paths, env, providerId) {
     let stdout = ''
     let stderr = ''
     let timedOut = false
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, 25_000)
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, timeoutMs)
     t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk })
@@ -248,5 +248,5 @@ export async function createModelProgressHarness(t, scenario) {
   const env = isolatedEnvironment(paths, provider.server.address().port)
   const providerId = seedProvider(env, paths, provider.server.address().port)
   return { paths, provider: provider.state,
-    run: () => runProcess(t, paths, env, providerId), snapshot: () => readSnapshot(paths) }
+    run: (options) => runProcess(t, paths, env, providerId, options), snapshot: () => readSnapshot(paths) }
 }
