@@ -243,9 +243,14 @@ export default function EmbeddedBrowser({ active = true, t }) {
           </div>
         )}
         {frameFailed && (
-          <p role="alert" data-testid="embedded-browser-failed" className="px-2.5 py-3 text-xs leading-5 text-ink-fade">
-            {t('workbench.browserFailed')}
-          </p>
+          <div role="alert" data-testid="embedded-browser-failed" className="flex flex-col items-center gap-2 border-b border-ink/10 bg-paper-2/60 px-3 py-2.5 text-xs leading-5 text-ink-soft">
+            <span>{t('workbench.browserFailed')}</span>
+            <a href={browser.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+              data-testid="browser-embed-refused-open"
+              className="rounded-control bg-ink px-3 py-1.5 text-xs text-paper">
+              {t('workbench.openBrowser')}
+            </a>
+          </div>
         )}
         {browser.url && browser.backend === 'frame' && (
           <iframe
