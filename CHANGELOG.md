@@ -6,7 +6,72 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Preparing 0.11.68. It carries the preview panel and its verification loop (unreleased since
+Preparing 0.11.71. It carries everything since 0.11.69 — the model configuration rework
+(`settings.yaml` as the one source, the models.dev catalogue, an OpenAI Responses adapter, import of
+existing providers), the agent review fixes R1–R9, the preview zoom and file-type work — and a pass
+that closes the verification bypasses and edge-path bugs a second review confirmed. The Windows
+build remains explicitly unsigned through the version-bound `scripts/release/policy.json`.
+
+`v0.11.70` (main commit `fe1363d`) stopped at the required-gates stage and published nothing: the
+release bump left `PLUGIN_HOST_VERSION` at 0.11.69, which the offline capability eval and the runtime
+compatibility jobs check, and the secret scan found a synthetic `sk-…` key in the new provider-import
+test. 0.11.71 syncs the plugin host version, assembles that fixture key at runtime and excludes only
+the exact historical finding. The tag is not moved or reused.
+
+### Fixed
+
+- Verification could be talked around. A script named `probe_*.py`/`inspect_*.py` was always
+  exploration, so after a verified edit the model could write one with file-writing code, run it,
+  and finish: the run created no verification debt. A probe is now judged by what it is — a
+  model-written script that can write files, or any command whose executor reports changed paths,
+  creates debt like every other execution. Read-only probes stay exploration.
+- Any non-empty `git diff` cleared the workspace sentinel (the debt of a command whose targets
+  nobody can name), including a diff of an earlier, already verified edit, while the command's real
+  output could be an untracked file no diff shows. A diff now verifies only the files it shows;
+  `git status` (untracked included) turns the sentinel into the concrete changed files, and a clean
+  status closes it.
+- A read-back verified a write by path alone, so a write that "succeeded" but left the file
+  truncated or replaced was verified by any read. `read_file` now reports the SHA-256 of the bytes on
+  disk, and a write's debt clears only when the read-back finds the digest that write reported.
+- A pause with a steering message still queued looped without bound, appending "已暂停。" and a
+  checkpoint every pass. The queued message is now taken into the paused checkpoint (read on resume),
+  and a pause never extends the turn more than a few passes.
+- When the model budget ran out with the response that proposed a batch, only the first call ran
+  and the rest were recorded as skipped forever, while the turn said the last batch ran. The batch
+  now runs to the end; exhausting the tool budget mid-batch still stops it.
+- A whitespace-only reply ended the turn as a normal completion with an empty answer. It is now an
+  incomplete `empty_model_response`.
+- A passing `pnpm test` could clear a failing `npm test`: package-script checks are now kept apart
+  per package manager (`run_project_check`, which runs `npm run …`, still covers npm).
+- The host's own fence on a changed automatic read-back was counted as a blocked read and disabled
+  automatic verification of that file for the rest of the turn.
+- Calls superseded by steering now report their completed row, so the trace has no gaps.
+- Cron next-run computation no longer brute-forces every second for up to a year: an impossible
+  schedule such as 30 February returns at once instead of blocking the event loop.
+- Streaming usage is recorded once per response, so gateways that send cumulative usage on every
+  chunk no longer multiply token and request accounting.
+- SSE parsing follows the spec: a bare `data` line, comment lines and multi-line `data:` fields no
+  longer kill the stream and discard its partial output.
+- A preview renderer that throws while parsing an untrusted docx/xlsx/pptx now fails inside the
+  pane, with retry, instead of unmounting the chat; images fit by height as well as width; the Word
+  frame follows the app theme; file menus close on an outside click; more binary formats are
+  recognised instead of shown as garbled text.
+- The repeat-call guard no longer keeps a digest of every call a long turn makes.
+
+### Security
+
+- Host (non-sandboxed) Shell is refused by default when `AUTH_MODE` is multi-user, since every
+  account would run commands as the server process. Use `SHELL_SANDBOX_MODE=docker`, or set
+  `SHELL_ALLOW_HOST_IN_MULTI_USER=1` to accept host execution. Single-user local mode is unchanged.
+
+## [0.11.69] - 2026-10-03
+
+See the GitHub release notes for `v0.11.69` (the preview open-with submenu and responsive document
+layout).
+
+## [0.11.68] - 2026-10-02
+
+0.11.68 carries the preview panel and its verification loop (unreleased since
 0.11.66) and a pass over the agent's behaviour and the interface to bring both closer to Claude Code
 and Codex. The Windows build remains explicitly unsigned through the version-bound
 `scripts/release/policy.json`; verification of checksums and build provenance stays required.
