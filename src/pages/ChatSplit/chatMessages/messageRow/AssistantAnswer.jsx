@@ -88,7 +88,18 @@ export default function AssistantAnswer({
   // The model writes plain-text ReAct sections; the front end owns grouping and
   // markup. A message without markers (older turns, other flows) keeps the
   // previous rendering exactly: the report falls back to the whole answer.
-  const sections = parseAgentReportSections(presentation.answer)
+  // Mid-turn the narrative can still sit inside `execution` — the model wrote it
+  // before its next tool call — where parsing only the answer misses the markers
+  // and falls back to a plain-markdown layout that is replaced wholesale once the
+  // turn ends. Parse the trailing text as well, but only when it actually carries
+  // a trajectory, so nothing is rendered twice and a message without markers keeps
+  // its previous rendering exactly.
+  const trailingText = [...timeline].reverse()
+    .find((segment) => segment.kind === 'text' && String(segment.text || '').trim())
+  const trailingSections = presentation.answer ? null : parseAgentReportSections(String(trailingText?.text || ''))
+  const sections = trailingSections?.trajectory.length > 0
+    ? trailingSections
+    : parseAgentReportSections(presentation.answer)
   // A report marker with an empty body is not an answer. Treating it as one
   // folded the steps away *and* left the top level blank, so the message said
   // nothing at all; an empty body counts as "no report" and the steps stand in.

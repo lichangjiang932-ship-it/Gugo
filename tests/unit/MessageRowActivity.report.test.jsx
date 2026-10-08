@@ -61,6 +61,29 @@ async function renderHarness(t, { withTool = true, toolName = 'read_file', final
   return { element, root, render, state }
 }
 
+test('a running turn renders the same rounds when the narrative precedes the tool call', async (t) => {
+  const dom = setupDom()
+  const element = dom.window.document.getElementById('root')
+  const root = createRoot(element)
+  const state = streamedMessage()
+  const render = () => act(async () => root.render(<I18nProvider><MessageRow msg={state.message()}
+    rowKey="report-message" generatingMessageId={state.message().meta.streaming ? 'report-message' : ''}
+    lang="en" t={translate} /></I18nProvider>))
+  t.after(async () => { await act(async () => root.unmount()); dom.window.close() })
+
+  await state.emit('turn.started', {})
+  // The model writes its ReAct narrative first and only then calls a tool, so the
+  // narrative is still inside `execution` while the turn runs. It must already be
+  // presented as rounds — the finished layout — instead of plain markdown that is
+  // replaced wholesale on completion.
+  await state.emit('assistant.delta', { text: TRAJECTORY })
+  await state.emit('tool.call', { toolCallId: 'read-later', name: 'read_file', args: { path: 'report.md' } })
+  await render()
+  assert.ok(element.querySelector('[data-testid="agent-rounds"]'), 'the running turn uses the rounds layout')
+  assert.match(element.textContent, /Check the source table structure/u)
+  assert.doesNotMatch(element.textContent, /【Thought】/u, 'raw markers are never shown as prose')
+})
+
 test('a completed turn shows the report at the top and folds every intermediate step', async (t) => {
   const { element, render } = await renderHarness(t)
 
