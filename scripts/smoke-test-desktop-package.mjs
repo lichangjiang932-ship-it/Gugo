@@ -235,7 +235,12 @@ export async function smokeTestDesktopPackage({
     await stopChild(child)
     const resolvedSmokeRoot = path.resolve(smokeRoot)
     if (resolvedSmokeRoot.startsWith(`${tempBase}${path.sep}`)) {
-      await fs.rm(resolvedSmokeRoot, { recursive: true, force: true })
+      // `taskkill /F` returns before Windows has released the killed processes'
+      // handles, so the backend's app.db can still be locked for a moment. The
+      // checks above are what this script verifies; a temp directory that takes
+      // longer to free is retried, then left to the OS rather than failing them.
+      await fs.rm(resolvedSmokeRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+        .catch((error) => console.warn(`[desktop-smoke] could not remove ${resolvedSmokeRoot}: ${error?.code || error}`))
     }
   }
 }
