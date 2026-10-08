@@ -6,7 +6,7 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Preparing 0.11.71. It carries everything since 0.11.69 — the model configuration rework
+Preparing 0.11.72. It carries everything since 0.11.69 — the model configuration rework
 (`settings.yaml` as the one source, the models.dev catalogue, an OpenAI Responses adapter, import of
 existing providers), the agent review fixes R1–R9, the preview zoom and file-type work — and a pass
 that closes the verification bypasses and edge-path bugs a second review confirmed. The Windows
@@ -17,6 +17,12 @@ release bump left `PLUGIN_HOST_VERSION` at 0.11.69, which the offline capability
 compatibility jobs check, and the secret scan found a synthetic `sk-…` key in the new provider-import
 test. 0.11.71 syncs the plugin host version, assembles that fixture key at runtime and excludes only
 the exact historical finding. The tag is not moved or reused.
+
+`v0.11.71` (main commit `8858fa7`) passed every required gate and built the installer, then failed in
+the packaged-app smoke test's cleanup: `taskkill /F` returned before Windows released the killed
+backend's `app.db`, and deleting the temp directory hit `EBUSY`. The app itself had started and
+served. The cleanup now retries and only warns if the directory stays locked. Nothing was published
+for `v0.11.71`.
 
 ### Fixed
 
