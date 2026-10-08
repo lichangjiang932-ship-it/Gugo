@@ -16,6 +16,10 @@ const SAFE_DELIMITER = '<<<USER_CRON_PROMPT_BEGIN>>>'
 const SAFE_DELIMITER_END = '<<<USER_CRON_PROMPT_END>>>'
 const CRON_TIME_ZONE_PREFIX = /^(?:CRON_TZ|TZ)=([^\s]+)\s+/
 const WEEKDAY_INDEX = Object.freeze({ Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 })
+const CRON_DAY_MS = 24 * 60 * 60 * 1000
+// The zone offset is re-read at least this often, so one jump never hides two transitions.
+const CRON_MAX_JUMP_MS = 6 * 60 * 60 * 1000
+const CRON_MONTH_MAX_DAYS = Object.freeze([31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])
 
 function normalizeAfter(after) {
   if (after instanceof Date) return after.getTime()
@@ -105,6 +109,7 @@ function cronDatePartsReader(timeZone) {
         hour: date.getHours(),
         day: date.getDate(),
         month: date.getMonth() + 1,
+        year: date.getFullYear(),
         weekday: date.getDay(),
       }
     }
@@ -113,6 +118,7 @@ function cronDatePartsReader(timeZone) {
   const formatter = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
     timeZone,
     weekday: 'short',
+    year: 'numeric',
     month: 'numeric',
     day: 'numeric',
     hour: 'numeric',
@@ -128,9 +134,84 @@ function cronDatePartsReader(timeZone) {
       hour: Number(parts.hour),
       day: Number(parts.day),
       month: Number(parts.month),
+      year: Number(parts.year),
       weekday: WEEKDAY_INDEX[parts.weekday],
     }
   }
+}
+
+// Wall-clock fields encoded as a UTC timestamp, so wall-clock arithmetic is plain math.
+function civilTimestamp(parts) {
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+}
+
+function sortedValues(set) {
+  return [...set].sort((a, b) => a - b)
+}
+
+/**
+ * Field-wise search in wall-clock space: skip whole days that fail the
+ * month/day rules, then pick the first matching hour/minute/second of the
+ * first day that passes. Returns a civil timestamp or null when none occurs
+ * at or before `limit`.
+ */
+function civilMatcher({ seconds, minutes, hours, days, months, weekdays, domRestricted, dowRestricted }) {
+  const secondList = sortedValues(seconds)
+  const minuteList = sortedValues(minutes)
+  const hourList = sortedValues(hours)
+
+  const matchesDay = (dayStart) => {
+    const date = new Date(dayStart)
+    if (!months.has(date.getUTCMonth() + 1)) return false
+    const matchesDom = days.has(date.getUTCDate())
+    const matchesDow = weekdays.has(date.getUTCDay())
+    return domRestricted && dowRestricted ? matchesDom || matchesDow : matchesDom && matchesDow
+  }
+
+  // First matching second-of-day at or after `fromSec`, or null.
+  const firstTimeOfDay = (fromSec) => {
+    const fromHour = Math.floor(fromSec / 3600)
+    for (const hour of hourList) {
+      if (hour < fromHour) continue
+      const fromMinute = hour === fromHour ? Math.floor((fromSec % 3600) / 60) : 0
+      for (const minute of minuteList) {
+        if (minute < fromMinute) continue
+        const fromSecond = hour === fromHour && minute === fromMinute ? fromSec % 60 : 0
+        for (const second of secondList) {
+          if (second >= fromSecond) return hour * 3600 + minute * 60 + second
+        }
+      }
+    }
+    return null
+  }
+
+  return (from, limit) => {
+    let dayStart = Math.floor(from / CRON_DAY_MS) * CRON_DAY_MS
+    let fromSec = Math.floor((from - dayStart) / 1000)
+    while (dayStart <= limit) {
+      if (matchesDay(dayStart)) {
+        const timeOfDay = firstTimeOfDay(fromSec)
+        if (timeOfDay != null) {
+          const candidate = dayStart + timeOfDay * 1000
+          return candidate <= limit ? candidate : null
+        }
+      }
+      dayStart += CRON_DAY_MS
+      fromSec = 0
+    }
+    return null
+  }
+}
+
+// A day-of-month list that no allowed month can contain (e.g. Feb 30) never fires.
+function cronDaysAreReachable({ days, months, domRestricted, dowRestricted }) {
+  if (!domRestricted || dowRestricted) return true
+  for (const month of months) {
+    for (const day of days) {
+      if (day <= CRON_MONTH_MAX_DAYS[month - 1]) return true
+    }
+  }
+  return false
 }
 
 function nextCronRun(expr, after) {
@@ -143,15 +224,21 @@ function nextCronRun(expr, after) {
   const hasSeconds = parts.length === 6
   const fields = hasSeconds ? parts : ['0', ...parts]
   const [secExpr, minExpr, hourExpr, domExpr, monthExpr, dowExpr] = fields
-  const seconds = parseCronField(secExpr, 0, 59)
-  const minutes = parseCronField(minExpr, 0, 59)
-  const hours = parseCronField(hourExpr, 0, 23)
-  const days = parseCronField(domExpr, 1, 31)
-  const months = parseCronField(monthExpr, 1, 12)
-  const weekdays = parseCronField(dowExpr, 0, 6, { weekday: true })
-  const domRestricted = domExpr !== '*'
-  const dowRestricted = dowExpr !== '*'
+  const spec = {
+    seconds: parseCronField(secExpr, 0, 59),
+    minutes: parseCronField(minExpr, 0, 59),
+    hours: parseCronField(hourExpr, 0, 23),
+    days: parseCronField(domExpr, 1, 31),
+    months: parseCronField(monthExpr, 1, 12),
+    weekdays: parseCronField(dowExpr, 0, 6, { weekday: true }),
+    domRestricted: domExpr !== '*',
+    dowRestricted: dowExpr !== '*',
+  }
+  if (!cronDaysAreReachable(spec)) {
+    throw new Error('cron expression never matches: day-of-month does not exist in the selected months')
+  }
   const readDateParts = cronDatePartsReader(timeZone)
+  const nextCivil = civilMatcher(spec)
 
   const stepMs = hasSeconds ? 1000 : 60_000
   const start = new Date(after + stepMs)
@@ -161,21 +248,35 @@ function nextCronRun(expr, after) {
     start.setSeconds(0, 0)
   }
   const end = start.getTime() + CRON_SEARCH_LIMIT_MS
+  const offsetAt = (ts) => civilTimestamp(readDateParts(ts)) - ts
 
-  for (let ts = start.getTime(); ts <= end; ts += stepMs) {
-    const date = readDateParts(ts)
-    if (!seconds.has(date.second)) continue
-    if (!minutes.has(date.minute)) continue
-    if (!hours.has(date.hour)) continue
-    if (!months.has(date.month)) continue
-
-    const matchesDom = days.has(date.day)
-    const matchesDow = weekdays.has(date.weekday)
-    const matchesDay = domRestricted && dowRestricted
-      ? matchesDom || matchesDow
-      : matchesDom && matchesDow
-    if (!matchesDay) continue
-    return ts
+  // Same answer as checking every `stepMs` instant in order, but jumps straight
+  // to the next wall-clock match. Within one zone offset wall-clock time moves
+  // in lockstep with real time; where the offset changes inside a jump, we
+  // binary-search the change and resume from it, so DST gaps never match and
+  // repeated hours match on their first occurrence, exactly as before.
+  let ts = start.getTime()
+  while (ts <= end) {
+    const offset = offsetAt(ts)
+    const civil = ts + offset
+    const target = nextCivil(civil, civil + CRON_MAX_JUMP_MS)
+    if (target === civil) return ts
+    const jump = target == null
+      ? CRON_MAX_JUMP_MS
+      : Math.ceil((target - civil) / stepMs) * stepMs
+    const next = ts + jump
+    if (offsetAt(next) === offset) {
+      ts = next
+      continue
+    }
+    let lo = ts
+    let hi = next
+    while (hi - lo > stepMs) {
+      const mid = lo + Math.floor((hi - lo) / stepMs / 2) * stepMs
+      if (offsetAt(mid) === offset) lo = mid
+      else hi = mid
+    }
+    ts = hi
   }
 
   throw new Error('cron expression has no run within 366 days')

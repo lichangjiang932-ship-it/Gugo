@@ -225,17 +225,64 @@ export function checkShellPathSyntax(command, { platform = process.platform } = 
 // 测试用
 export const _internals = { RULES }
 
+// Same spellings server/utils/localRequestPolicy.js and resolveAuthMode accept.
+const MULTI_USER_AUTH_MODES = new Set(['multi_user', 'multi-user', 'multiuser'])
+
+export function isMultiUserAuthMode(env = process.env) {
+  return MULTI_USER_AUTH_MODES.has(String(env.AUTH_MODE || 'local').trim().toLowerCase())
+}
+
+/**
+ * Why host (non-sandboxed) Shell is refused under this env, or null when it is
+ * allowed. Multi-user servers default to refusing it: every account would run
+ * commands as the server process. SHELL_ALLOW_HOST_IN_MULTI_USER=1 opts back in.
+ *
+ * @returns {{code: string, message: string} | null}
+ */
+export function hostShellRefusal(env = process.env) {
+  if (String(env.SHELL_REQUIRE_OS_ISOLATION || '') === '1') {
+    return {
+      code: 'SHELL_OS_ISOLATION_REQUIRED',
+      message: 'Host Shell is disabled because SHELL_REQUIRE_OS_ISOLATION=1.',
+    }
+  }
+  if (isMultiUserAuthMode(env) && String(env.SHELL_ALLOW_HOST_IN_MULTI_USER || '').trim() !== '1') {
+    return {
+      code: 'SHELL_HOST_MULTI_USER_DISABLED',
+      message: 'Host Shell is disabled in multi-user mode. '
+        + 'Set SHELL_SANDBOX_MODE=docker, or SHELL_ALLOW_HOST_IN_MULTI_USER=1 to accept host execution.',
+    }
+  }
+  return null
+}
+
+/** Isolation a Shell command actually gets: docker, host, or unavailable (host refused). */
+export function effectiveShellIsolation(env = process.env) {
+  const mode = String(env.SHELL_SANDBOX_MODE || 'host').trim().toLowerCase()
+  if (mode === 'docker') return 'docker'
+  if (mode !== 'host') return 'unavailable'
+  return hostShellRefusal(env) ? 'unavailable' : 'host'
+}
+
 /**
  * 当 WORKSPACE_SHELL_ENABLED=1 时返回一条信任声明 warn 文案,否则返回 null。
  * 黑名单不是安全边界,开 shell = 完全信任用户(见文件头注释)。
  */
 export function shellTrustWarning(env = process.env) {
   if (env.WORKSPACE_SHELL_ENABLED !== '1') return null
-  if (String(env.SHELL_SANDBOX_MODE || 'host').toLowerCase() === 'docker') {
+  const isolation = effectiveShellIsolation(env)
+  if (isolation === 'docker') {
     return (
       'WORKSPACE_SHELL_ENABLED=1: bash_exec 已开启 Docker 隔离模式。' +
       '每次命令禁网、禁 pull、使用只读 rootfs、降权和资源限制；' +
       '安全仍依赖受审计镜像、Docker daemon 与宿主内核。'
+    )
+  }
+  if (isolation === 'unavailable') {
+    return (
+      'WORKSPACE_SHELL_ENABLED=1: bash_exec 的 host 模式已被拒绝' +
+      `(${hostShellRefusal(env)?.code || 'SHELL_SANDBOX_MODE_INVALID'}),命令不会执行。` +
+      '请配置 SHELL_SANDBOX_MODE=docker;多用户模式下确需 host 执行时设置 SHELL_ALLOW_HOST_IN_MULTI_USER=1。'
     )
   }
   return (

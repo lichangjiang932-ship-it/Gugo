@@ -357,13 +357,21 @@ function normalizeCommand(value) {
   return String(value || '').trim().replace(/\s+/gu, ' ')
 }
 
+/**
+ * Each package manager runs its own scripts against its own lockfile resolution,
+ * so a passing `pnpm test` says nothing about a failing `npm test`: the verifier
+ * family names the manager. `run_project_check` runs `npm run <check>`.
+ */
+export function packageScriptFamily(manager, kind) {
+  return `package-script:${String(manager || 'npm').toLowerCase()}:${kind}`
+}
+
 function verifierFamilyForCommand(segment, kind) {
   const environment = stripInlineEnvironmentPrefix(segment)
   if (!environment.trusted) return ''
   const value = stripToolRunnerPrefix(environment.value).value.toLowerCase()
-  if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b/u.test(value)) {
-    return `package-script:${kind}`
-  }
+  const packageScript = value.match(/^(npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b/u)
+  if (packageScript) return packageScriptFamily(packageScript[1], kind)
   if (/^(?:pytest|python(?:3)?\s+-m\s+pytest|py(?:\.exe)?\s+-m\s+pytest)\b/u.test(value)) return 'pytest'
   if (/^(?:python(?:3)?|py)(?:\.exe)?\s+-m\s+unittest\b/u.test(value)) return 'python-unittest'
   if (/^jest\b/u.test(value)) return 'jest'
@@ -541,7 +549,7 @@ export function taskVerificationScopes(call, result) {
     if (kind) descriptors = [{
       kind,
       commandScope: `package-script:${kind}`,
-      verifierFamily: `package-script:${kind}`,
+      verifierFamily: packageScriptFamily('npm', kind),
       coverage: 'cwd',
     }]
   } else if (name === 'run_test') {

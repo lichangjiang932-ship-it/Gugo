@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { hostShellRefusal } from '../utils/bashGuard.js'
+
 const DOCKER_IMAGE_RE = /^[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?(?::[A-Za-z0-9][A-Za-z0-9._-]{0,127}|@sha256:[a-f0-9]{64})$/u
 const DOCKER_CONTAINER_NAME_RE = /^gugo-shell-[a-z0-9-]{1,48}$/u
 const DOCKER_CLEANUP_TIMEOUT_MS = 10_000
@@ -109,12 +111,8 @@ export function resolveDockerShellSandbox({
     throw isolationError('SHELL_SANDBOX_MODE must be host or docker.', 'SHELL_SANDBOX_MODE_INVALID')
   }
   if (mode === 'host') {
-    if (isolationRequired) {
-      throw isolationError(
-        'Host Shell is disabled because SHELL_REQUIRE_OS_ISOLATION=1.',
-        'SHELL_OS_ISOLATION_REQUIRED',
-      )
-    }
+    const refusal = hostShellRefusal(env)
+    if (refusal) throw isolationError(refusal.message, refusal.code)
     return null
   }
 

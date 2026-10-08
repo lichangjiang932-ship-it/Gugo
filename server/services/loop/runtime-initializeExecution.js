@@ -341,6 +341,8 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       pendingMutationTargets: [...s.pendingMutationTargets],
       pendingDeletionTargets: [...s.pendingDeletionTargets],
       auxiliaryMutationTargets: [...s.auxiliaryMutationTargets],
+      mutatingProbeScripts: [...s.mutatingProbeScripts],
+      mutationContentDigests: s.mutationContentBinding.serialize(),
       mutationVerificationRetries: s.mutationVerificationRetries,
       mutationVerificationRecovery: structuredClone(s.mutationVerificationRecovery),
       taskVerificationRepair: serializeTaskVerificationRepair(s.taskVerificationRepair),

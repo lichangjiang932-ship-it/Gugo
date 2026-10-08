@@ -28,10 +28,12 @@ export default function CurrentFileChange({ file, counts, t, wrap = false, class
   }, [binary, path])
 
   if (binary) return <p data-testid="current-file-binary" className="text-xs leading-5 text-ink-fade">{t('chat.changes.binaryFile')}</p>
+  // No path, nothing to read: the initial state's empty key would otherwise
+  // "match" and be drawn as content that was never loaded.
+  if (!path || current?.error) return <p data-testid="current-file-unavailable" className="text-xs leading-5 text-ink-fade">{t('chat.changes.currentUnavailable')}</p>
   if (!current) {
     return <p className="flex items-center gap-1.5 text-xs text-ink-fade"><LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />{t('chat.changes.readingCurrent')}</p>
   }
-  if (current.error) return <p data-testid="current-file-unavailable" className="text-xs leading-5 text-ink-fade">{t('chat.changes.currentUnavailable')}</p>
   const created = Number(counts?.deletions) === 0 && Number(counts?.additions) > 0
   const sign = created ? '+' : ' '
   const edit = { kind: 'current', lines: current.lines.map((line) => ({ sign, line })) }

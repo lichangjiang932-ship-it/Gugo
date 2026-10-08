@@ -62,34 +62,90 @@ export async function* readModelSseLines(reader, { onFirstByte, onChunk } = {}) 
   }
 }
 
-export function decodeModelStreamLine(line) {
-  const trimmed = String(line || '').trim()
-  if (!trimmed || trimmed.startsWith(':')) return null
+function malformedModelStreamFrame() {
+  const error = new Error('模型流包含无法解析的 JSON 数据帧。')
+  error.code = 'MODEL_STREAM_MALFORMED_FRAME'
+  error.type = 'provider_error'
+  error.fromUpstream = true
+  error.retryable = false
+  // Malformed bytes are not a verifiable upstream outcome. A tracked request
+  // remains unknown; untracked callers still receive this protocol error.
+  return error
+}
 
-  const dataField = /^data(?::(.*))?$/is.exec(trimmed)
-  if (!dataField && (
-    /^(?:event|id|retry)(?::|$)/i.test(trimmed)
-    || /^[a-z][a-z0-9_-]*:/i.test(trimmed)
-  )) return null
-  const payload = dataField ? String(dataField[1] || '').trimStart() : trimmed
-  if (!payload) return null
-  if (payload === '[DONE]') return { done: true, data: null }
-  try {
-    const data = JSON.parse(payload)
-    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) {
-      throw new TypeError('model stream frame must be a non-empty object')
-    }
-    return { done: false, data }
-  } catch {
-    const error = new Error('模型流包含无法解析的 JSON 数据帧。')
-    error.code = 'MODEL_STREAM_MALFORMED_FRAME'
-    error.type = 'provider_error'
-    error.fromUpstream = true
-    error.retryable = false
-    // Malformed bytes are not a verifiable upstream outcome. A tracked request
-    // remains unknown; untracked callers still receive this protocol error.
-    throw error
+function modelStreamFrame(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) {
+    throw malformedModelStreamFrame()
   }
+  return { done: false, data }
+}
+
+function parseModelStreamPayload(payload) {
+  if (payload === '[DONE]') return { done: true, data: null }
+  let data
+  try { data = JSON.parse(payload) } catch { throw malformedModelStreamFrame() }
+  return modelStreamFrame(data)
+}
+
+const SSE_IGNORED_BARE_FIELDS = new Set(['event', 'id', 'retry'])
+
+/**
+ * Stateful SSE/NDJSON frame decoder. Field lines follow the event-stream
+ * rules: `:` starts a comment, a field without a colon has an empty value,
+ * one space after the colon is stripped, `data` lines accumulate joined with
+ * "\n", a blank line dispatches and unknown fields are ignored. A data buffer
+ * that already holds one complete JSON value (or [DONE]) dispatches without
+ * waiting for the blank line, so gateways that omit it keep working. A bare
+ * line that is not an SSE field is an NDJSON frame.
+ *
+ * `push(line)` and `end()` return the frames completed by that input.
+ */
+export function createModelStreamDecoder() {
+  let dataLines = null
+  const flush = () => {
+    if (dataLines === null) return []
+    const payload = dataLines.join('\n').trim()
+    dataLines = null
+    return payload ? [parseModelStreamPayload(payload)] : []
+  }
+  const appendData = (value) => {
+    dataLines = dataLines === null ? [value] : [...dataLines, value]
+    const payload = dataLines.join('\n').trim()
+    if (payload === '[DONE]') return flush()
+    let data
+    try { data = JSON.parse(payload) } catch { return [] }
+    dataLines = null
+    return [modelStreamFrame(data)]
+  }
+  return {
+    push(line) {
+      const trimmed = String(line ?? '').trim()
+      if (!trimmed) return flush()
+      if (trimmed.startsWith(':')) return []
+      const colon = trimmed.indexOf(':')
+      const name = (colon === -1 ? trimmed : trimmed.slice(0, colon)).toLowerCase()
+      if (name === 'data') {
+        const value = colon === -1 ? '' : trimmed.slice(colon + 1)
+        return appendData(value.startsWith(' ') ? value.slice(1) : value)
+      }
+      if (colon === -1 ? SSE_IGNORED_BARE_FIELDS.has(name) : /^[a-z][a-z0-9_-]*$/.test(name)) return []
+      return [...flush(), parseModelStreamPayload(trimmed)]
+    },
+    end: flush,
+  }
+}
+
+/** Decode a stream of SSE/NDJSON lines into frames, flushing a final event at EOF. */
+export async function* readModelStreamFrames(lines) {
+  const decoder = createModelStreamDecoder()
+  for await (const line of lines) yield* decoder.push(line)
+  yield* decoder.end()
+}
+
+/** Decode one self-contained line; multi-line SSE events need createModelStreamDecoder. */
+export function decodeModelStreamLine(line) {
+  const decoder = createModelStreamDecoder()
+  return [...decoder.push(line), ...decoder.end()][0] || null
 }
 
 export function createCompatibleModelStreamState() {

@@ -89,6 +89,8 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
     path: resolved.displayPath,
     scope: resolved.source,
     size: stat.size,
+    // The bytes on disk, so a read-back can be matched to the write it checks.
+    sha256: createHash('sha256').update(buffer).digest('hex'),
     ...((isPdf || isOffice) ? {
       mimeType: extracted.mimeType,
       extractionStatus: extracted.extractionStatus,

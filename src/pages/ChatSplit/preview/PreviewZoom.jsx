@@ -2,9 +2,11 @@ import { useRef } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { CHIP_CLASS } from './previewChipStyles.js'
 import { ZOOM_LEVELS } from './previewZoomState.js'
+import useDetailsDismiss from './useDetailsDismiss.js'
 
 export function ZoomControl({ state, t }) {
   const menuRef = useRef(null)
+  useDetailsDismiss(menuRef)
   const { zoom, setZoom, fitPercent } = state
   const shown = zoom === 'fit' ? (fitPercent ? `${fitPercent}%` : t('chatPreview.zoomFit')) : `${zoom}%`
   const choose = (value) => {

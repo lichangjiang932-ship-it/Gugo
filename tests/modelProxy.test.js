@@ -32,6 +32,7 @@ import {
   streamOpenAICompatible,
 } from '../server/adapters/modelProxy.js'
 import { bindSseClientDisconnect } from '../server/adapters/sseLifecycle.js'
+import * as responseCoordinator from '../server/adapters/modelProxyResponseCoordinator.js'
 
 function createJsonResponseRecorder() {
   return {
@@ -1484,6 +1485,61 @@ test('model usage diagnostics are isolated by owner and never expose the interna
   assert.equal(getUsageStats({ ownerId: 'alice' }).requests, 0)
   assert.equal(getUsageStats({ ownerId: 'bob' }).requests, 1)
   resetUsageStats()
+})
+
+test('streaming proxy records cumulative chunk usage once with the final totals', async () => {
+  const ownerId = 'cumulative-usage-owner'
+  resetUsageStats({ ownerId })
+  const chunk = (content, completionTokens) => `data: ${JSON.stringify({
+    choices: [{ delta: { content } }],
+    usage: { prompt_tokens: 40, completion_tokens: completionTokens, total_tokens: 40 + completionTokens },
+  })}\n\n`
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => streamedResponse([
+    chunk('one ', 1),
+    chunk('two ', 2),
+    chunk('three', 3),
+    `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ])
+  const req = new EventEmitter()
+  const res = Object.assign(new EventEmitter(), {
+    writableEnded: false,
+    destroyed: false,
+    body: '',
+    writeHead() {},
+    write(payload) { this.body += payload; return true },
+    end() { this.writableEnded = true },
+  })
+  try {
+    await responseCoordinator.handleStreamingModelProxyResponse({
+      req,
+      res,
+      body: {},
+      requestUserId: ownerId,
+      runtimeEnv: {},
+      selectedModel: 'usage-model',
+      requestCandidates: [{ baseUrl: 'http://127.0.0.1:11434/v1', modelName: 'usage-model' }],
+      messages: [{ role: 'user', content: 'count' }],
+      session: null,
+      hookRequestId: 'usage-hook',
+      injectedMemoryIds: [],
+      injectedAgentId: null,
+      autoMemorySourceMessages: [],
+      createBackgroundModelCaller: () => async () => null,
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  const done = res.body.split('\n\n').map((frame) => frame.replace(/^data: /, ''))
+    .filter(Boolean).map((frame) => JSON.parse(frame)).find((frame) => frame.done)
+  assert.deepEqual(done.usage, { promptTokens: 40, completionTokens: 3, totalTokens: 43 })
+  const stats = getUsageStats({ ownerId })
+  assert.equal(stats.requests, 1)
+  assert.equal(stats.promptTokens, 40)
+  assert.equal(stats.completionTokens, 3)
+  resetUsageStats({ ownerId })
 })
 
 // ───────────────────── 工具轮数上限 ─────────────────────

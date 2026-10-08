@@ -29,21 +29,41 @@ export function previewScale(zoom, pageWidth, frameWidth, gutter = 32) {
 }
 
 /**
- * Width of an element, kept current as the pane is resized. Returns a callback
+ * Scale for an image drawn whole in its frame: fitting is bounded by height as
+ * well as width, so a tall image reports the size it is actually drawn at.
+ */
+export function imageFitScale(zoom, natural, frame, gutter = 40) {
+  const widthScale = previewScale(zoom, natural?.width, frame?.width, gutter)
+  if (zoom !== 'fit' || !(natural?.height > 0) || !(frame?.height > 0)) return widthScale
+  return Math.min(widthScale, Math.max(0.01, (frame.height - gutter) / natural.height))
+}
+
+/**
+ * Size of an element, kept current as the pane is resized. Returns a callback
  * ref: a renderer's frame often mounts only after its content loads, and a ref
  * object read once on mount would never see it.
  */
-export function useElementWidth() {
+export function useElementSize() {
   const [element, setElement] = useState(null)
-  const [width, setWidth] = useState(0)
+  const [size, setSize] = useState({ width: 0, height: 0 })
   useEffect(() => {
     if (!element) return undefined
-    const update = () => setWidth(element.clientWidth || 0)
+    const update = () => {
+      const width = element.clientWidth || 0
+      const height = element.clientHeight || 0
+      setSize((current) => (current.width === width && current.height === height ? current : { width, height }))
+    }
     update()
     if (typeof ResizeObserver !== 'function') return undefined
     const observer = new ResizeObserver(update)
     observer.observe(element)
     return () => observer.disconnect()
   }, [element])
-  return [setElement, width]
+  return [setElement, size]
+}
+
+/** Width only, for renderers that fit a page to the pane's width. */
+export function useElementWidth() {
+  const [ref, size] = useElementSize()
+  return [ref, size.width]
 }

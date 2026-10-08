@@ -1,3 +1,4 @@
+import { createMutationContentBinding } from './mutationContentBinding.js'
 import { ARTIFACT_DELIVERY_INCOMPLETE_REASON } from '../turnTerminalProjection.js'
 import { restoreCompletionPolicyState } from './completionPolicy.js'
 import { restoreMutationVerificationRecovery } from './mutationVerificationRecovery.js'
@@ -175,6 +176,14 @@ function initializeMutationVerification(s) {
   s.auxiliaryMutationTargets = new Set(
     (Array.isArray(s.restoredState?.completionGuards?.auxiliaryMutationTargets)
       ? s.restoredState.completionGuards.auxiliaryMutationTargets
+      : []).map(normalizeMutationTarget).filter(Boolean),
+  )
+  // The bytes each write reported; a read-back clears its debt only on a match.
+  s.mutationContentBinding = createMutationContentBinding(s.restoredState?.completionGuards?.mutationContentDigests)
+  // Probe-named scripts this turn wrote with file-writing code: running one is not exempt from debt.
+  s.mutatingProbeScripts = new Set(
+    (Array.isArray(s.restoredState?.completionGuards?.mutatingProbeScripts)
+      ? s.restoredState.completionGuards.mutatingProbeScripts
       : []).map(normalizeMutationTarget).filter(Boolean),
   )
   s.recoveredMutationVerificationPending = false

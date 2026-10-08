@@ -4,6 +4,7 @@ import FileTypeGlyph from '../../../components/FileTypeGlyph.jsx'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { desktopFileCapabilities, desktopFileErrorKey, openDesktopFile } from '../../../lib/desktopFileClient.js'
 import { CHIP_CLASS } from './previewChipStyles.js'
+import useDetailsDismiss from './useDetailsDismiss.js'
 
 const ITEM_CLASS = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-ink hover:bg-ink/[0.05] disabled:opacity-50'
 const PANEL_CLASS = 'rounded-xl border border-ink/10 bg-paper p-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.22)]'
@@ -34,6 +35,7 @@ function stem(filename) {
 export default function FileActions({ file, submenuFlipped = false, t }) {
   const menuRef = useRef(null)
   const submenuRef = useRef(null)
+  useDetailsDismiss(menuRef)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const capabilities = desktopFileCapabilities(file)

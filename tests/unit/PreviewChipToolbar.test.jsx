@@ -77,6 +77,43 @@ test('fit scales a page down to the pane but never up, and a chosen level is exa
   assert.equal(previewScale('fit', 0, 519), 1, 'an unknown page size is drawn as is')
 })
 
+test('an image fit is bounded by the frame height too, so a tall image reports its drawn size', async () => {
+  const { imageFitScale } = await import('../../src/pages/ChatSplit/preview/previewZoomState.js')
+  const frame = { width: 800, height: 600 }
+  // 400x3000 fits the width at 100% but is drawn at (600-40)/3000 of its height.
+  assert.equal(Math.round(imageFitScale('fit', { width: 400, height: 3000 }, frame, 40) * 100), 19)
+  assert.equal(Math.round(imageFitScale('fit', { width: 3000, height: 400 }, frame, 40) * 100), 25, 'a wide image is still width-bound')
+  assert.equal(imageFitScale('fit', { width: 200, height: 100 }, frame, 40), 1, 'never upscaled')
+  assert.equal(imageFitScale(150, { width: 400, height: 3000 }, frame, 40), 1.5, 'a chosen level is exact')
+  assert.equal(Math.round(imageFitScale('fit', { width: 1520, height: 0 }, frame, 40) * 100), 50, 'no height known: width only')
+})
+
+test('the file and zoom menus close on a press outside them', async () => {
+  const dom = setupDom()
+  const { DirectFileToolbar } = await import('../../src/pages/ChatSplit/preview/PreviewChrome.jsx')
+  const file = { filename: 'deck.pptx', type: 'pptx', path: 'D:\\docs\\deck.pptx', url: '/api/artifacts/deck.pptx' }
+  const zoom = { zoom: 'fit', setZoom: () => {}, fitPercent: 70, setFitPercent: () => {} }
+  const h = await mount(<div><p data-testid="outside">chat</p><DirectFileToolbar file={file} filename={file.filename} type="pptx" zoom={zoom} t={t} /></div>)
+  const press = (target) => act(async () => target.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true })))
+  try {
+    const fileMenu = h.container.querySelector('[data-testid="preview-open-menu"]').closest('details')
+    const zoomMenu = h.container.querySelector('[data-testid="preview-zoom"]').closest('details')
+    for (const menu of [fileMenu, zoomMenu]) {
+      menu.open = true
+      await press(menu.querySelector('summary'))
+      assert.equal(menu.open, true, 'a press inside leaves the menu to its own summary')
+      await press(h.container.querySelector('[data-testid="outside"]'))
+      assert.equal(menu.open, false, 'a press outside closes it')
+    }
+    zoomMenu.open = true
+    await press(fileMenu.querySelector('summary'))
+    assert.equal(zoomMenu.open, false, 'opening the other menu closes this one')
+  } finally {
+    await h.unmount()
+    dom.window.close()
+  }
+})
+
 test('a format the pane cannot draw offers its own app and folder in the desktop app', async () => {
   const dom = setupDom()
   const actions = []

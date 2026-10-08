@@ -61,10 +61,6 @@ export function docxPageWidthPx(container) {
 
 const BASE_CSS = [
   'html,body{margin:0;padding:0}',
-  // The desk the pages sit on, like a word processor's reading view; pages are
-  // white because a document's own colours assume paper.
-  'html{background:#eceef1}',
-  '@media (prefers-color-scheme: dark){html{background:#26282c}}',
   'body{padding:16px 0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}',
   'section.docx{margin:0 auto 16px;box-sizing:border-box;background:#fff;color:#111;box-shadow:0 1px 3px rgba(0,0,0,.12),0 6px 18px -6px rgba(0,0,0,.18)}',
   'section.docx:last-child{margin-bottom:0}',
@@ -72,19 +68,29 @@ const BASE_CSS = [
 ].join('')
 
 /**
+ * The desk the pages sit on, like a word processor's reading view; pages stay
+ * white because a document's own colours assume paper. The desk follows the
+ * app theme it is given, not the OS colour scheme: the sandboxed frame cannot
+ * see the parent's html[data-theme].
+ */
+const DESK_BACKGROUND = Object.freeze({ light: '#eceef1', dark: '#26282c' })
+
+/**
  * Serialize a rendered DOCX body and its stylesheet into one self-contained
  * document. Styles and body share a single `<style>` because the document's own
  * rules must precede the markup they style. `scale` zooms the pages as a whole
- * (layout included, so the frame scrolls the scaled height).
+ * (layout included, so the frame scrolls the scaled height); `theme` is the
+ * app theme, 'light' or 'dark'.
  */
-export function buildDocxSrcdoc({ bodyHtml = '', styleText = '', title = '', scale = 1 } = {}) {
+export function buildDocxSrcdoc({ bodyHtml = '', styleText = '', title = '', scale = 1, theme = 'light' } = {}) {
   const safeTitle = String(title || '').replace(/[<>&]/gu, '')
+  const desk = theme === 'dark' ? DESK_BACKGROUND.dark : DESK_BACKGROUND.light
   const zoom = Number.isFinite(scale) && scale > 0 ? Math.round(scale * 1000) / 1000 : 1
   return [
     '<!doctype html><html><head><meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${DOCX_PREVIEW_CSP}">`,
     `<title>${safeTitle}</title>`,
-    `<style>${BASE_CSS}${zoom === 1 ? '' : `body{zoom:${zoom}}`}${String(styleText || '')}</style>`,
+    `<style>${BASE_CSS}html{background:${desk}}${zoom === 1 ? '' : `body{zoom:${zoom}}`}${String(styleText || '')}</style>`,
     '</head><body>',
     String(bodyHtml || ''),
     '</body></html>',

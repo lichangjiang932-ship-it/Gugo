@@ -1,3 +1,5 @@
+import { effectiveShellIsolation } from '../utils/bashGuard.js'
+
 export const RUNTIME_CAPABILITIES_MARKER = '[RUNTIME CAPABILITIES]'
 
 function toolNames(specs) {
@@ -23,7 +25,7 @@ export function buildRuntimeCapabilityBlock({
   approvalMode = null,
   defaultOutputDirectory = '',
   projectDirectory = '',
-  shellIsolation = process.env.SHELL_SANDBOX_MODE || 'host',
+  shellIsolation = effectiveShellIsolation(process.env),
 } = {}) {
   const names = toolNames(toolSpecs)
   const isPlanMode = approvalMode === 'plan'
@@ -54,7 +56,9 @@ export function buildRuntimeCapabilityBlock({
       ? '- Code and automation: unavailable while plan mode is active.'
       : String(shellIsolation).toLowerCase() === 'docker'
         ? '- Code and automation: commands run in a fresh no-network Docker sandbox with a read-only rootfs and only the authorized root mounted at /workspace. Use workspace-relative paths, declare expected outputs, and do not request persistent session reuse.'
-        : '- Code and automation: run shell commands for builds, tests, scripts, and specialized local tooling; declare expected output files. Host mode is not an OS sandbox.')
+        : String(shellIsolation).toLowerCase() === 'unavailable'
+          ? '- Code and automation: shell commands are refused on this server because host Shell is disabled and no Docker sandbox is configured. Report that blocker instead of retrying the command.'
+          : '- Code and automation: run shell commands for builds, tests, scripts, and specialized local tooling; declare expected output files. Host mode is not an OS sandbox.')
   add(lines, hasAny(names, ['git_status', 'git_diff', 'git_commit', 'git_push', 'git_rollback', 'git_write']),
     '- Git: inspect repository state and use only the exact Git mutation tools that are exposed.')
   add(lines, names.has('media_probe') || names.has('media_transform'),

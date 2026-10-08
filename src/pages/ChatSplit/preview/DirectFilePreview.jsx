@@ -134,12 +134,16 @@ function DocxFileRenderer({ preview, file, url, t }) {
   useEffect(() => {
     if (zoom === 'fit' && current?.status === 'ready' && frameWidth > 0) setFitPercent(percent)
   }, [current?.status, frameWidth, percent, setFitPercent, zoom])
+  // The frame is sandboxed and cannot see html[data-theme], so the desk colour
+  // is passed in, read when the frame is built.
+  const theme = typeof document !== 'undefined' && document.documentElement?.dataset?.theme === 'dark' ? 'dark' : 'light'
   const srcdoc = useMemo(() => (current?.status === 'ready' ? buildDocxSrcdoc({
     bodyHtml: current.body,
     styleText: current.styles,
     title: file?.filename || preview?.title || '',
     scale: percent / 100,
-  }) : ''), [current, file?.filename, percent, preview?.title])
+    theme,
+  }) : ''), [current, file?.filename, percent, preview?.title, theme])
 
   if (!requestKey) {
     return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} />
@@ -151,9 +155,9 @@ function DocxFileRenderer({ preview, file, url, t }) {
     return (
       <div ref={frameRef} className="h-full w-full">
         <iframe
-          // A fresh frame per scale: swapping srcdoc in place on an existing
-          // frame left the new document unlaid (0×0) in Chromium.
-          key={percent}
+          // A fresh frame per scale and theme: swapping srcdoc in place on an
+          // existing frame left the new document unlaid (0×0) in Chromium.
+          key={`${percent}:${theme}`}
           data-testid="docx-layout-frame"
           data-scale={percent}
           // Empty sandbox: no scripts, no same-origin, no forms, no downloads.

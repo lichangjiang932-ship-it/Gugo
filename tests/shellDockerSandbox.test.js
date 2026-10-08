@@ -27,7 +27,9 @@ createUser({ id: userId, email: 'shell-docker@example.test' })
 grantLocalPath({ userId, rootPath: root, accessMode: 'read_write' })
 
 const ENV_KEYS = [
+  'AUTH_MODE',
   'LOCAL_CODE_EXECUTION_ENABLED',
+  'SHELL_ALLOW_HOST_IN_MULTI_USER',
   'SHELL_REQUIRE_OS_ISOLATION',
   'SHELL_SANDBOX_DOCKER_BIN',
   'SHELL_SANDBOX_DOCKER_IMAGE',
@@ -165,6 +167,45 @@ test('Docker isolation fails closed for host mode, floating images, invalid bina
     command: `node "${path.join(root, 'host-script.mjs')}"`, cwd, rootPath: root,
     env: { ...base, SHELL_SANDBOX_DOCKER_IMAGE: dockerImage },
   }), { code: 'SHELL_SANDBOX_HOST_PATH_FORBIDDEN' })
+})
+
+test('multi-user mode refuses host Shell by default unless explicitly opted in', () => {
+  const resolve = (env) => resolveDockerShellSandbox({ command: 'node -v', cwd, rootPath: root, env })
+  for (const AUTH_MODE of ['multi_user', 'multi-user', 'MultiUser', ' multiuser ']) {
+    for (const mode of [{}, { SHELL_SANDBOX_MODE: 'host' }]) {
+      assert.throws(() => resolve({ AUTH_MODE, ...mode }), {
+        code: 'SHELL_HOST_MULTI_USER_DISABLED',
+        statusCode: 403,
+        retryable: false,
+        message: /multi-user mode.*SHELL_SANDBOX_MODE=docker.*SHELL_ALLOW_HOST_IN_MULTI_USER=1/u,
+      }, AUTH_MODE)
+    }
+  }
+  assert.equal(resolve({ AUTH_MODE: 'multi_user', SHELL_ALLOW_HOST_IN_MULTI_USER: '1' }), null)
+  // The opt-in cannot override an explicit OS-isolation requirement.
+  assert.throws(() => resolve({
+    AUTH_MODE: 'multi_user', SHELL_ALLOW_HOST_IN_MULTI_USER: '1', SHELL_REQUIRE_OS_ISOLATION: '1',
+  }), { code: 'SHELL_OS_ISOLATION_REQUIRED' })
+  // Single-user installs keep the host default.
+  assert.equal(resolve({}), null)
+  assert.equal(resolve({ AUTH_MODE: 'local' }), null)
+  // Docker mode proceeds exactly as before in multi-user mode.
+  const sandbox = resolve({
+    AUTH_MODE: 'multi_user',
+    SHELL_SANDBOX_MODE: 'docker',
+    SHELL_SANDBOX_DOCKER_BIN: dockerBin,
+    SHELL_SANDBOX_DOCKER_IMAGE: dockerImage,
+  })
+  assert.equal(sandbox.isolation, 'docker')
+})
+
+test('bash_exec in multi-user host mode is refused before any process starts', async () => {
+  process.env.LOCAL_CODE_EXECUTION_ENABLED = '1'
+  process.env.AUTH_MODE = 'multi_user'
+  delete process.env.SHELL_SANDBOX_MODE
+  await assert.rejects(bashExecTool({ command: 'node -v', cwd, userId }, {
+    runProcessWithGroupFn: async () => assert.fail('host shell must not run in multi-user mode'),
+  }), { code: 'SHELL_HOST_MULTI_USER_DISABLED' })
 })
 
 test('bash_exec uses the Docker sandbox invocation and reports isolation without running a host shell', async () => {

@@ -7,10 +7,13 @@ import test from 'node:test'
 import { importLegacyProviders, legacyProviderId } from '../server/llm/importLegacyProviders.js'
 import { listProviders } from '../server/llm/llmProviderService.js'
 
+// Synthetic keys, assembled at runtime so no literal key-shaped string is committed.
+const fakeKey = (name) => ['sk', name, '123456'].join('-')
+
 const ROWS = [
-  { key: 'DeepSeek', label: 'DeepSeek 账号', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'sk-deep-123456', models: ['deepseek-chat'], enabled: true, isDefault: true, defaultModel: 'deepseek-chat' },
+  { key: 'DeepSeek', label: 'DeepSeek 账号', baseUrl: 'https://api.deepseek.com/v1', apiKey: fakeKey('deep'), models: ['deepseek-chat'], enabled: true, isDefault: true, defaultModel: 'deepseek-chat' },
   { key: 'magpie gateway', label: 'Magpie', baseUrl: 'https://magpie.example/v1', apiKey: '', models: ['m-1', 'm-2'], enabled: true, isDefault: false },
-  { key: 'off', label: 'Disabled', baseUrl: 'https://off.example/v1', apiKey: 'sk-off-123456', models: [], enabled: false },
+  { key: 'off', label: 'Disabled', baseUrl: 'https://off.example/v1', apiKey: fakeKey('off'), models: [], enabled: false },
 ]
 
 async function withHome(run) {

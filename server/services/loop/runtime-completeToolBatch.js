@@ -1,5 +1,12 @@
 import { assertRuntimeStage } from './runtimeContract.js'
 
+/** A call that will not run still gets its completed row, like every other call. */
+async function reportUnrunCall(s, call, result) {
+  if (typeof s.onToolCompleted !== 'function') return
+  await s.onToolCompleted({ call, executionArgs: call.args, result,
+    artifactId: null, artifactIds: [], artifacts: [] })
+}
+
 async function initializeToolBatch(s, i) {
   const {
     buildToolResultMessage,
@@ -34,8 +41,12 @@ async function initializeToolBatch(s, i) {
     const metadata = getToolMetadata(call.name, { args: call.args, userId: s.job?.userId || null })
     return isCommandExecutionTool(call) || metadata.isReadOnly !== true
   }
+  // A model budget exhausted by the response that proposed this batch does not
+  // cut the batch short: those calls were already decided, and the turn reports
+  // that the last batch ran. Exhausting the tool budget mid-batch still stops it.
   i.shouldStopBatch = () => Boolean(
-    i.noProgressReason || i.budgetExceeded || i.pausedByClarification || i.goalPlanBlocked || i.toolStop,
+    i.noProgressReason || i.pausedByClarification || i.goalPlanBlocked || i.toolStop
+    || (i.budgetExceeded && i.budgetExceeded !== i.budgetExceededByCompletedModelResponse),
   )
   i.skipRemainingCalls = async (startIndex) => {
     for (const skipped of i.toolCalls.slice(startIndex)) {
@@ -56,15 +67,13 @@ async function initializeToolBatch(s, i) {
       s.convo.push(buildToolResultMessage(skipped, skippedResult))
       Object.assign(skipped, { checkpointStatus: 'completed', checkpointResult: skippedResult })
       recordToolProgress(s.progressState, { call: skipped, succeeded: false })
-      await s.persistTurn()
-      if (typeof s.onToolCompleted === 'function') {
-        await s.onToolCompleted({ call: skipped, executionArgs: skipped.args, result: skippedResult,
-          artifactId: null, artifactIds: [], artifacts: [] })
-      }
+      await reportUnrunCall(s, skipped, skippedResult)
     }
+    // One write for the whole run of skipped calls: each is already in the
+    // transcript, and nothing between them can observe a partial batch.
     await s.persistTurn()
   }
-  i.supersedeRemainingCalls = (startIndex) => {
+  i.supersedeRemainingCalls = async (startIndex) => {
     for (const superseded of i.toolCalls.slice(startIndex)) {
       if (superseded.checkpointStatus === 'completed') continue
       const result = {
@@ -80,13 +89,14 @@ async function initializeToolBatch(s, i) {
         checkpointStatus: 'completed', checkpointResult: result, checkpointArtifactId: null,
       })
       recordToolProgress(s.progressState, { call: superseded, succeeded: false })
+      await reportUnrunCall(s, superseded, result)
     }
   }
   i.claimSteeringAtToolBoundary = async (startIndex) => {
     if (startIndex >= i.toolCalls.length) return false
     const claimed = await s.steeringController.claimFresh(s.appliedSteeringIds)
     if (claimed.messages.length === 0) return false
-    i.supersedeRemainingCalls(startIndex)
+    await i.supersedeRemainingCalls(startIndex)
     s.convo.push(...i.deferredPostBatchMessages)
     i.deferredPostBatchMessages.length = 0
     s.pendingEphemeralToolMessages.push(...i.deferredEphemeralToolMessages)

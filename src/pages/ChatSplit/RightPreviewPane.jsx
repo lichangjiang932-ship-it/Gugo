@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FileText } from 'lucide-react'
+import { AlertCircle, FileText } from 'lucide-react'
+import ErrorBoundary from '../../components/ErrorBoundary.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withArtifactPreviewMode } from '../../lib/directFilePreview.js'
 import { withDownloadToken } from '../../lib/jobClient.js'
 import PreviewBody from './preview/PreviewBody.jsx'
 import DirectFilePreview from './preview/DirectFilePreview.jsx'
+import { PreviewStatus, RetryPreviewButton } from './preview/PreviewPrimitives.jsx'
 import { DirectFileToolbar, PreviewHeader, PreviewToolbar } from './preview/PreviewChrome.jsx'
 import useArtifactExports from './preview/useArtifactExports.js'
 import { PreviewZoomProvider, usePreviewZoomState } from './preview/previewZoomState.js'
@@ -175,7 +177,7 @@ export default function RightPreviewPane({
       {activeArtifact.directFile ? (
         <DirectFileContent key={activeTab.id} file={activeArtifact.directFile} pane={pane} onRequestChange={onInsertText ? requestChange : null} t={t} />
       ) : activeArtifact.preview ? (
-        <PreviewContent preview={activeArtifact.preview} content={activeArtifact.content} pane={pane} onMessage={onMessage} t={t} />
+        <PreviewContent tabId={activeTab.id} preview={activeArtifact.preview} content={activeArtifact.content} pane={pane} onMessage={onMessage} t={t} />
       ) : (
         <UnsupportedPreview t={t} />
       )}
@@ -195,7 +197,11 @@ function DirectFileContent({ file, pane, onRequestChange, t }) {
     <PreviewZoomProvider value={zoom}>
       <DirectFileToolbar filename={filename} type={type} file={file} url={downloadUrl} view={pane.view} setView={pane.setView} submenuFlipped={pane.overlay} onRequestChange={onRequestChange} zoom={zoom} t={t} />
       <div className="chat-direct-file-content min-h-0 flex-1 overflow-hidden" data-testid="direct-file-content">
-        {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} view={pane.view} t={t} /> : (
+        {previewUrl ? (
+          <PreviewRendererBoundary key={previewUrl} filename={filename} t={t}>
+            <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} view={pane.view} t={t} />
+          </PreviewRendererBoundary>
+        ) : (
           <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">
             <FileText className="h-10 w-10 text-ink-fade" />
             <p className="max-w-xs text-sm font-medium text-ink-soft">{filename}</p>
@@ -206,13 +212,40 @@ function DirectFileContent({ file, pane, onRequestChange, t }) {
   )
 }
 
-function PreviewContent({ preview, content, pane, onMessage, t }) {
+function PreviewContent({ tabId, preview, content, pane, onMessage, t }) {
   const exports = useArtifactExports({ preview, content, onMessage, t })
   return (
     <>
       <PreviewToolbar preview={preview} content={content} view={pane.view} setView={pane.setView} exports={exports} t={t} />
-      <div data-testid="preview-scroll-region" className="chat-preview-scroll-region min-h-0 flex-1 overflow-hidden overscroll-contain"><PreviewBody preview={preview} content={content} view={pane.view} t={t} /></div>
+      <div data-testid="preview-scroll-region" className="chat-preview-scroll-region min-h-0 flex-1 overflow-hidden overscroll-contain">
+        <PreviewRendererBoundary key={tabId} filename={preview?.filename || preview?.title || ''} t={t}>
+          <PreviewBody preview={preview} content={content} view={pane.view} t={t} />
+        </PreviewRendererBoundary>
+      </div>
     </>
+  )
+}
+
+/**
+ * Renderers parse untrusted files (docx/xlsx/pptx packages); one that throws
+ * while rendering fails inside the pane instead of unmounting the chat route.
+ * The header, tabs and toolbar sit outside it and stay usable. Keyed by tab by
+ * the caller, so another tab starts with a fresh boundary; retry remounts.
+ */
+function PreviewRendererBoundary({ children, filename, t }) {
+  return (
+    <ErrorBoundary renderFallback={({ reset }) => (
+      <div data-testid="preview-renderer-crashed" className="h-full">
+        <PreviewStatus
+          icon={<AlertCircle className="h-6 w-6" />}
+          text={filename || t('chatPreview.previewFailed')}
+          detail={t('chatPreview.rendererCrashed')}
+          action={<RetryPreviewButton onClick={reset} t={t} />}
+        />
+      </div>
+    )}>
+      {children}
+    </ErrorBoundary>
   )
 }
 

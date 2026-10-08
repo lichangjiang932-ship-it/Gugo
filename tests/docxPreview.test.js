@@ -57,6 +57,20 @@ test('pages keep their own width and the frame scales them to the pane', () => {
   assert.match(buildDocxSrcdoc({ scale: 0.7 }), /section\.docx\{[^}]*background:#fff/u, 'pages are paper on a desk')
 })
 
+test('the desk follows the app theme it is given, not the OS colour scheme', () => {
+  const light = buildDocxSrcdoc({ bodyHtml: '<section class="docx"></section>' })
+  const dark = buildDocxSrcdoc({ bodyHtml: '<section class="docx"></section>', theme: 'dark' })
+  assert.match(light, /html\{background:#eceef1\}/u, 'light is the default')
+  assert.match(buildDocxSrcdoc({ theme: 'light' }), /html\{background:#eceef1\}/u)
+  assert.match(dark, /html\{background:#26282c\}/u)
+  assert.doesNotMatch(dark, /#eceef1/u)
+  assert.doesNotMatch(light, /#26282c/u)
+  // The sandboxed frame cannot see the parent's data-theme, so an OS query
+  // would disagree with the app whenever the two differ.
+  assert.doesNotMatch(dark, /prefers-color-scheme/u)
+  assert.doesNotMatch(light, /prefers-color-scheme/u)
+})
+
 test('the page width comes from the widest rendered section, in CSS pixels', () => {
   const sections = (...widths) => ({ querySelectorAll: () => widths.map((width) => ({ style: { width } })) })
   assert.equal(docxPageWidthPx(sections('595.3pt')), 794, 'A4 in points')

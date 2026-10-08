@@ -111,6 +111,9 @@ export async function finalizeRuntime(s) {
     && Boolean(String(s.finalText || '').trim())
   const iterationLimitReached = s.iter >= s.maxIters && !acceptedFinalPersisted
   let emptyModelResponse = false
+  // Whitespace is not an answer: it reaches the same wrap-up and, failing that,
+  // the same incomplete result as no text at all.
+  if (!String(s.finalText || '').trim()) s.finalText = ''
   if (!s.finalText) {
     try {
       const wrapUpRequest = await s.callTrackedModel({
@@ -140,7 +143,7 @@ export async function finalizeRuntime(s) {
       })
       s.finalText = ''
     }
-    if (!s.finalText) {
+    if (!String(s.finalText || '').trim()) {
       emptyModelResponse = !iterationLimitReached
       s.finalText = iterationLimitReached
         ? s.d.formatIncompleteTerminalText('iteration_limit_reached', {

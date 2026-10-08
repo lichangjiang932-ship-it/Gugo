@@ -2,8 +2,18 @@ import { getAuthToken } from './accountClient.js'
 
 /** Files whose bytes are not lines a diff can show. */
 const BINARY_EXTENSIONS = new Set([
-  'pptx', 'ppt', 'docx', 'doc', 'xlsx', 'xls', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico',
-  'zip', 'gz', 'tar', '7z', 'exe', 'dll', 'mp3', 'mp4', 'wav', 'webm', 'mov', 'woff', 'woff2', 'ttf', 'otf',
+  // Office and documents
+  'pptx', 'ppt', 'docx', 'doc', 'xlsx', 'xls', 'pdf', 'odt', 'ods', 'odp', 'key', 'keynote', 'numbers', 'pages',
+  // Images and design files
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'heic', 'tif', 'tiff', 'avif', 'psd', 'ai', 'sketch', 'fig',
+  // Archives and disk images
+  'zip', 'gz', 'tar', '7z', 'rar', 'xz', 'bz2', 'zst', 'tgz', 'iso', 'dmg', 'msi', 'apk', 'jar',
+  // Executables, libraries and compiled objects
+  'exe', 'dll', 'so', 'dylib', 'o', 'a', 'lib', 'class', 'pyc', 'wasm', 'node', 'pdb', 'bin', 'dat', 'pak',
+  // Databases
+  'sqlite', 'sqlite3', 'db',
+  // Audio, video and fonts
+  'mp3', 'mp4', 'wav', 'webm', 'mov', 'mkv', 'avi', 'flac', 'ogg', 'm4a', 'woff', 'woff2', 'ttf', 'otf', 'eot',
 ])
 
 /** Lines read for the fallback view; a longer file says it was cut. */

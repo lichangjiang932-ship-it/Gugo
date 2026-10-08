@@ -3,7 +3,7 @@ import { AlertCircle, LoaderCircle } from 'lucide-react'
 import { XlsxPreview } from './ArtifactRenderers.jsx'
 import { PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
 import { withPreviewRetry } from './previewUrl.js'
-import { previewScale, useElementWidth, usePreviewZoom } from './previewZoomState.js'
+import { imageFitScale, useElementSize, usePreviewZoom } from './previewZoomState.js'
 
 export function NativePreviewRenderer({ file, preview, t, url }) {
   return <NativeFilePreview key={`${preview.kind}:${url}`} kind={preview.kind} file={file} url={url} t={t} />
@@ -12,18 +12,21 @@ export function NativePreviewRenderer({ file, preview, t, url }) {
 function NativeFilePreview({ file, kind, t, url }) {
   const [status, setStatus] = useState('loading')
   const [attempt, setAttempt] = useState(0)
-  const [naturalWidth, setNaturalWidth] = useState(0)
-  const [frameRef, frameWidth] = useElementWidth()
+  const [natural, setNatural] = useState({ width: 0, height: 0 })
+  const naturalWidth = natural.width
+  const [frameRef, frame] = useElementSize()
+  const frameWidth = frame.width
   const { zoom, setFitPercent } = usePreviewZoom()
   // An image is drawn whole in the pane (never upscaled) until the reader picks
-  // a zoom; the control shows the scale the fit produced.
-  const scale = previewScale(zoom, naturalWidth, frameWidth, 40)
+  // a zoom; the control shows the scale the fit produced, bounded by the
+  // frame's height too, so a tall image never claims 100% while drawn smaller.
+  const scale = imageFitScale(zoom, natural, frame, 40)
   useEffect(() => {
     if (kind === 'image' && zoom === 'fit' && naturalWidth > 0 && frameWidth > 0) setFitPercent(Math.round(scale * 100))
   }, [frameWidth, kind, naturalWidth, scale, setFitPercent, zoom])
   const requestUrl = withPreviewRetry(url, attempt)
   const ready = (event) => {
-    if (kind === 'image') setNaturalWidth(event?.currentTarget?.naturalWidth || 0)
+    if (kind === 'image') setNatural({ width: event?.currentTarget?.naturalWidth || 0, height: event?.currentTarget?.naturalHeight || 0 })
     setStatus('ready')
   }
   const failed = () => setStatus('failed')

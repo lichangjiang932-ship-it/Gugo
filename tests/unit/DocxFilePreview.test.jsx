@@ -67,3 +67,16 @@ test('DOCX layout preserves tables, merged cells, borders, embedded images, styl
     assert.match(frame.getAttribute('srcdoc'), /default-src 'none'/u)
   })
 })
+
+test('the DOCX desk follows the app theme on the parent document', async () => {
+  const bytes = await createDocxPreviewFixture()
+  await withDocxPreview(async ({ dom, root, element }) => {
+    globalThis.fetch = async () => new Response(bytes)
+    dom.window.document.documentElement.dataset.theme = 'dark'
+    await act(async () => root.render(<DirectFilePreview file={{ filename: 'layout-fixture.docx' }} url="/api/artifacts/layout-fixture.docx" t={(key) => key} />))
+    await settlePreview(element)
+    const srcdoc = element.querySelector('[data-testid="docx-layout-frame"]')?.getAttribute('srcdoc') || ''
+    assert.match(srcdoc, /html\{background:#26282c\}/u, 'dark app theme, dark desk')
+    assert.doesNotMatch(srcdoc, /prefers-color-scheme/u)
+  })
+})

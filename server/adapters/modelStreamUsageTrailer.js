@@ -1,4 +1,4 @@
-import { decodeModelStreamLine } from './modelResponseStream.js'
+import { createModelStreamDecoder } from './modelResponseStream.js'
 import { extractUsage } from './modelProviderResponse.js'
 
 const TRAILER_TIMEOUT_MS = 1000
@@ -36,20 +36,21 @@ export function createUsageTrailerReader(reader, signal) {
       signal?.addEventListener('abort', onAbort, { once: true })
       if (signal?.aborted) onAbort()
       let characters = 0
+      const decoder = createModelStreamDecoder()
       try {
         for (let count = 0; count < TRAILER_MAX_LINES; count += 1) {
           const next = await Promise.race([lines.next(), stopped])
           if (next.done) return null
           characters += next.value.length
           if (characters > TRAILER_MAX_BYTES) return null
-          const decoded = decodeModelStreamLine(next.value)
-          if (!decoded) continue
-          if (decoded.done) return null
-          // No text, reasoning, error or tool delta can re-open generation.
-          // Unexpected data terminates this optional read, not the response.
-          if (!Array.isArray(decoded.data?.choices) || decoded.data.choices.length !== 0) return null
-          const usage = extractUsage(decoded.data)
-          if (usage) return usage
+          for (const decoded of decoder.push(next.value)) {
+            if (decoded.done) return null
+            // No text, reasoning, error or tool delta can re-open generation.
+            // Unexpected data terminates this optional read, not the response.
+            if (!Array.isArray(decoded.data?.choices) || decoded.data.choices.length !== 0) return null
+            const usage = extractUsage(decoded.data)
+            if (usage) return usage
+          }
         }
       } catch { /* missing telemetry is not an unknown model outcome */ }
       finally {

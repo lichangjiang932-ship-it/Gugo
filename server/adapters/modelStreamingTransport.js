@@ -17,10 +17,10 @@ import { markContextOverflowGeneration } from './modelContextOverflow.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
 import {
   createCompatibleModelStreamState,
-  decodeModelStreamLine,
   normalizeCompatibleModelStreamPayload,
   readJsonModelResponseEvents,
   readModelSseLines,
+  readModelStreamFrames,
 } from './modelResponseStream.js'
 import {
   fetchModelOutbound,
@@ -36,6 +36,7 @@ import { fetchWithEnvProxy } from './proxyFetch.js'
 import { createToolArgumentProgressTracker, hasModelContentProgress } from './modelStreamProgress.js'
 import { modelToolArgumentsIdleMs } from './modelStreamTiming.js'
 import { createUsageTrailerReader, requestsCompatibleUsageTrailer } from './modelStreamUsageTrailer.js'
+import { mergeCumulativeUsage } from './modelUsage.js'
 
 function reasoningLimitFor({ env, tools, toolChoice }) {
   const executionWithTools = Array.isArray(tools)
@@ -136,9 +137,7 @@ async function* consumeStreamingResponse({
     ? modelToolArgumentsIdleMs(profile.timeouts.idleMs) : profile.timeouts.idleMs)
   const usageTrailer = createUsageTrailerReader(reader, controller.signal)
   const lines = readModelSseLines(reader, { onFirstByte, onChunk: usageTrailer.onChunk })
-  for await (const line of lines) {
-    const decoded = decodeModelStreamLine(line)
-    if (!decoded) continue
+  for await (const decoded of readModelStreamFrames(lines)) {
     sawProviderEvent = true
     if (decoded.done) {
       if (nativeStreamState) {
@@ -180,8 +179,10 @@ async function* consumeStreamingResponse({
     const frame = normalizeCompatibleModelStreamPayload(chunk, compatibleStreamState)
     if (frame.text?.length || frame.reasoning?.length || frame.toolCallDeltas.length) generationObserved = true
     if (hasModelContentProgress(frame.text) || hasModelContentProgress(frame.reasoning)) recordProgress()
-    const chunkUsage = extractUsage(chunk)
-    if (chunkUsage) {
+    // Gateways may repeat the cumulative usage on many chunks; a usage event
+    // is a snapshot of the whole response, emitted only when it grows.
+    const chunkUsage = mergeCumulativeUsage(lastUsage, extractUsage(chunk))
+    if (chunkUsage && chunkUsage !== lastUsage) {
       lastUsage = chunkUsage
       yield { type: 'usage', usage: chunkUsage }
     }

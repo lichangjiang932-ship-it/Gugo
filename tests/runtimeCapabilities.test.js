@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { effectiveShellIsolation } from '../server/utils/bashGuard.js'
 import {
   RUNTIME_CAPABILITIES_MARKER,
   buildRuntimeCapabilityBlock,
@@ -52,6 +53,20 @@ test('capability block identifies Docker isolation and its workspace-relative co
   assert.match(docker, /do not request persistent session reuse/i)
   assert.match(host, /Host mode is not an OS sandbox/i)
   assert.doesNotMatch(host, /fresh no-network Docker sandbox/i)
+})
+
+test('reported shell isolation follows the multi-user host refusal', () => {
+  assert.equal(effectiveShellIsolation({}), 'host')
+  assert.equal(effectiveShellIsolation({ AUTH_MODE: 'multi_user' }), 'unavailable')
+  assert.equal(effectiveShellIsolation({ AUTH_MODE: 'multiuser', SHELL_SANDBOX_MODE: 'host' }), 'unavailable')
+  assert.equal(effectiveShellIsolation({ AUTH_MODE: 'multi-user', SHELL_ALLOW_HOST_IN_MULTI_USER: '1' }), 'host')
+  assert.equal(effectiveShellIsolation({ AUTH_MODE: 'multi_user', SHELL_SANDBOX_MODE: 'docker' }), 'docker')
+  assert.equal(effectiveShellIsolation({ SHELL_REQUIRE_OS_ISOLATION: '1' }), 'unavailable')
+
+  const refused = buildRuntimeCapabilityBlock({ toolSpecs: [spec('bash_exec')], shellIsolation: 'unavailable' })
+  assert.match(refused, /shell commands are refused on this server/i)
+  assert.doesNotMatch(refused, /Host mode is not an OS sandbox/i)
+  assert.doesNotMatch(refused, /fresh no-network Docker sandbox/i)
 })
 
 test('bypass capability block forbids redundant directory authorization prompts', () => {

@@ -20,6 +20,19 @@ test('shellTrustWarning distinguishes host execution from Docker isolation', () 
   assert.doesNotMatch(docker, /完全信任/)
 })
 
+test('shellTrustWarning reports refused host Shell in multi-user mode instead of claiming host execution', () => {
+  const refused = shellTrustWarning({ WORKSPACE_SHELL_ENABLED: '1', AUTH_MODE: 'multi-user' })
+  assert.match(refused, /SHELL_HOST_MULTI_USER_DISABLED/)
+  assert.match(refused, /SHELL_ALLOW_HOST_IN_MULTI_USER=1/)
+  assert.doesNotMatch(refused, /已开启 host 模式/)
+  const optedIn = shellTrustWarning({
+    WORKSPACE_SHELL_ENABLED: '1', AUTH_MODE: 'multi_user', SHELL_ALLOW_HOST_IN_MULTI_USER: '1',
+  })
+  assert.match(optedIn, /host.*完全信任/iu)
+  const docker = shellTrustWarning({ WORKSPACE_SHELL_ENABLED: '1', AUTH_MODE: 'multi_user', SHELL_SANDBOX_MODE: 'docker' })
+  assert.match(docker, /Docker.*禁网/iu)
+})
+
 test('shellTrustWarning returns null when shell disabled', () => {
   assert.equal(shellTrustWarning({}), null)
   assert.equal(shellTrustWarning({ WORKSPACE_SHELL_ENABLED: '0' }), null)

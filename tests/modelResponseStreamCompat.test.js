@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   createCompatibleModelStreamState,
+  createModelStreamDecoder,
   decodeModelStreamLine,
   normalizeCompatibleModelStreamPayload,
 } from '../server/adapters/modelResponseStream.js'
@@ -216,4 +217,77 @@ test('compatible safety and unknown finish reasons fail even after tool input', 
       finishReason,
     )
   }
+})
+
+function decodeSseText(text) {
+  const decoder = createModelStreamDecoder()
+  return [...text.split('\n').flatMap((line) => decoder.push(line)), ...decoder.end()]
+}
+
+test('SSE decoder follows event-stream field rules', () => {
+  // A bare `data` field is a data line with an empty value, not a JSON payload.
+  assert.deepEqual(decodeSseText('data\n\ndata: {"content":"a"}\n\n'), [{ done: false, data: { content: 'a' } }])
+  // Multi-line data joins with "\n" and dispatches on the blank line.
+  assert.deepEqual(decodeSseText([
+    'event: message',
+    'id: 3',
+    'data: {"choices":[{"delta":',
+    'data:{"content":"multi"}}]}',
+    '',
+  ].join('\n')), [{ done: false, data: { choices: [{ delta: { content: 'multi' } }] } }])
+  // Comments, unknown fields and a single leading space are handled per spec.
+  assert.deepEqual(decodeSseText([
+    ': keepalive',
+    ':{"not":"data"}',
+    'vendor-field: {"ignored":true}',
+    'data:  {"content":"spaced"}',
+    '',
+    'data: [DONE]',
+    '',
+  ].join('\n')), [{ done: false, data: { content: 'spaced' } }, { done: true, data: null }])
+  // A data field split across lines that never completes still fails closed.
+  assert.throws(() => decodeSseText('data: {"choices":\ndata: [\n\n'), { code: 'MODEL_STREAM_MALFORMED_FRAME' })
+})
+
+test('a multi-line SSE data event streams its content and [DONE] still terminates', async () => {
+  const events = []
+  for await (const event of streamOpenAICompatible({
+    config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'compatible-model' },
+    messages: [{ role: 'user', content: 'hi' }],
+    fetchImpl: async () => new Response([
+      ': keepalive',
+      'data',
+      '',
+      'data: {"choices":[{"delta":',
+      'data: {"content":"hello"}}]}',
+      '',
+      'data: [DONE]',
+      '',
+      'data: {"choices":[{"delta":{"content":"after done"}}]}',
+      '',
+    ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    env: {},
+  })) events.push(event)
+
+  assert.deepEqual(events.filter((event) => event.type === 'text').map((event) => event.delta), ['hello'])
+  assert.equal(events.at(-1).type, 'finish')
+})
+
+test('cumulative usage repeated on many chunks is emitted once per change', async () => {
+  const chunk = (content, usage) => `data: ${JSON.stringify({ choices: [{ delta: { content } }], usage })}\n\n`
+  const events = []
+  for await (const event of streamOpenAICompatible({
+    config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'compatible-model' },
+    messages: [{ role: 'user', content: 'hi' }],
+    fetchImpl: async () => new Response([
+      chunk('a', { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 }),
+      chunk('b', { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 }),
+      chunk('c', { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 }),
+      'data: [DONE]\n\n',
+    ].join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    env: {},
+  })) events.push(event)
+
+  assert.deepEqual(events.filter((event) => event.type === 'usage').map((event) => event.usage.totalTokens), [11, 13])
+  assert.deepEqual(events.at(-1).usage, { promptTokens: 10, completionTokens: 3, totalTokens: 13 })
 })

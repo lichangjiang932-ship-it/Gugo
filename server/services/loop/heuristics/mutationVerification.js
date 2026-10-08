@@ -149,28 +149,40 @@ export function clearExplicitTargetsMatchingEvidence(pendingTargets, evidenceTar
   return cleared
 }
 
-export function clearTargetsMatchingEvidence(pendingTargets, evidenceTargets, scope = {}) {
-  if (!evidenceTargets.size) return false
-  let cleared = false
-  if (pendingTargets.delete(PROJECT_SCOPE_TARGET)) cleared = true
-  for (const pending of [...pendingTargets]) {
-    if ([...evidenceTargets].some((evidence) => targetsMatch(pending, evidence, scope))) {
-      pendingTargets.delete(pending)
-      cleared = true
-    }
-  }
-  return cleared
-}
-
+/**
+ * A diff verifies the files it shows. It never clears the workspace sentinel —
+ * the debt a command leaves when nobody can say which files it touched: any
+ * non-empty diff would otherwise clear it, including a diff of the agent's own
+ * earlier, already verified edit, while the command's real output may be an
+ * untracked file a diff cannot show. `git_status` resolves the sentinel.
+ */
 function clearGitDiffTargets(pendingTargets, call, result, projectDirectory) {
   const root = result?.repositoryRoot ?? result?.executionCwd ?? result?.cwd
     ?? call?.args?.cwd ?? projectDirectory
   if (root && (typeof root !== 'string' || !path.isAbsolute(root))) return false
-  if (projectDirectory && pendingTargets.has(PROJECT_SCOPE_TARGET)
-    && root && !targetsMatch(root, projectDirectory)) return false
-  return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, result), {
+  return clearExplicitTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, result), {
     projectDirectory: root || projectDirectory,
   })
+}
+
+/**
+ * `git status` with untracked files lists everything that differs from the
+ * last commit, so it can say what the unattributed command changed: the
+ * sentinel becomes those files, each still to be read back or diffed. A clean
+ * status, with the command's files committed or ignored, leaves nothing open.
+ */
+function resolveWorkspaceSentinelFromStatus(pendingTargets, result, projectDirectory) {
+  if (!pendingTargets.has(PROJECT_SCOPE_TARGET) || result?.ok !== true || !Array.isArray(result?.files)) return false
+  const root = typeof result.root === 'string' && path.isAbsolute(result.root) ? result.root : ''
+  if (!root || (projectDirectory && !targetsMatch(root, projectDirectory))) return false
+  pendingTargets.delete(PROJECT_SCOPE_TARGET)
+  for (const file of result.files) {
+    const relative = String(file?.path || '').trim()
+    if (!relative) continue
+    const target = normalizeMutationTarget(path.join(root, relative))
+    if (target) pendingTargets.add(target)
+  }
+  return true
 }
 
 const STRUCTURAL_ARTIFACT_FORMATS = new Set([
@@ -228,7 +240,7 @@ export function clearVerifiedMutationTargets(
   pendingTargets,
   call,
   result,
-  { projectDirectory = '', projectDirectories = [] } = {},
+  { projectDirectory = '', projectDirectories = [], contentBinding = null } = {},
 ) {
   if (!pendingTargets.size) return false
   if (call?.name === 'list_directory') {
@@ -243,6 +255,9 @@ export function clearVerifiedMutationTargets(
   }
   if (call?.name === 'git_diff') {
     return clearGitDiffTargets(pendingTargets, call, result, projectDirectory)
+  }
+  if (call?.name === 'git_status') {
+    return resolveWorkspaceSentinelFromStatus(pendingTargets, result, projectDirectory)
   }
   const projectVerdict = projectVerificationFields(result)
   const deterministicProjectPass = result?.ok === true
@@ -282,6 +297,9 @@ export function clearVerifiedMutationTargets(
     const evidence = new Set()
     addVerificationTarget(evidence, result?.path)
     addVerificationTarget(evidence, call?.args?.path)
+    // A read-back verifies the write it checks only when it finds the bytes that
+    // write reported; a file left truncated, empty or replaced stays open.
+    if (contentBinding && [...evidence].some((target) => !contentBinding.readMatches(target, result))) return false
     return clearExplicitTargetsMatchingEvidence(pendingTargets, evidence, { projectDirectory })
   }
   const evidence = new Set()

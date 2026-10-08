@@ -197,9 +197,13 @@ export function recordMutationVerificationRecoveryOutcome(s, call, result) {
   // A conclusive format/permission rejection is feedback for repair, not a
   // reason to repeat the same unchanged read. A later target mutation gets a
   // new fingerprint; an explicit manual retry gets a fresh bounded allowance.
-  const blockedRead = result?.formatValidated === false || result?.denied === true
+  // The host's own scope fence (a changed automatic read) says nothing about the
+  // file; counting it as a blocked read would disable automatic verification of
+  // that target for the rest of the turn.
+  const hostFence = result?.code === 'automatic_verification_scope_changed'
+  const blockedRead = !hostFence && (result?.formatValidated === false || result?.denied === true
     || result?.policyDenied === true || result?.requiresUserVerification === true
-    || (result?.extractionStatus && result.extractionStatus !== 'text')
+    || (result?.extractionStatus && result.extractionStatus !== 'text'))
   if (call?.name === 'read_file' && blockedRead) {
     for (const target of s.pendingMutationTargets || []) {
       if (!s.d.targetsMatch(target, call.args?.path)) continue

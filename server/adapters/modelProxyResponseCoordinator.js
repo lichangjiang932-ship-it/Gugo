@@ -8,7 +8,7 @@ import { formatProxyError, withRedactedModelErrors } from './modelProxyErrors.js
 import { buildModelProviderRequest } from './modelRequestBuilder.js'
 import { fetchWithTimeout } from './modelRequestTransport.js'
 import { streamModelProviderEvents } from './modelStreamingTransport.js'
-import { recordUsage } from './modelUsage.js'
+import { mergeCumulativeUsage, recordUsage } from './modelUsage.js'
 import { fetchWithEnvProxy } from './proxyFetch.js'
 import { bindSseClientDisconnect, createEmptyModelResponseError } from './sseLifecycle.js'
 
@@ -184,22 +184,15 @@ export async function handleStreamingModelProxyResponse({
         safeWrite(`data: ${JSON.stringify({ ok: true, reasoning: event.delta, latency: Date.now() - started })}\n\n`)
       } else if (event.type === 'tool_calls') {
         streamHadToolCalls = true
-        if (event.usage && !streamUsage) {
-          streamUsage = event.usage
-          recordUsage(activeStreamModel, event.usage, { ownerId: requestUserId })
-        }
+        streamUsage = mergeCumulativeUsage(streamUsage, event.usage)
         safeWrite(`data: ${JSON.stringify({ ok: true, toolCalls: event.toolCalls, finishReason: event.finishReason, latency: Date.now() - started })}\n\n`)
       } else if (event.type === 'tool_call_ready') {
         safeWrite(`data: ${JSON.stringify({ ok: true, toolCallReady: event.toolCall, toolCallIndex: event.index, latency: Date.now() - started })}\n\n`)
       } else if (event.type === 'finish') {
         streamFinishReason = event.finishReason || null
-        if (event.usage && !streamUsage) {
-          streamUsage = event.usage
-          recordUsage(activeStreamModel, event.usage, { ownerId: requestUserId })
-        }
+        streamUsage = mergeCumulativeUsage(streamUsage, event.usage)
       } else if (event.type === 'usage') {
-        streamUsage = event.usage
-        recordUsage(activeStreamModel, event.usage, { ownerId: requestUserId })
+        streamUsage = mergeCumulativeUsage(streamUsage, event.usage)
       }
     }
     if (!sse.clientGone() && !assistantText.trim() && !streamHadToolCalls) {
@@ -229,6 +222,9 @@ export async function handleStreamingModelProxyResponse({
     }
   } finally {
     sse.close()
+    // Streamed usage is a cumulative snapshot; account for the response once,
+    // including a failed or abandoned stream that already reported usage.
+    recordUsage(activeStreamModel, streamUsage, { ownerId: requestUserId })
   }
   if (!res.writableEnded) res.end()
 

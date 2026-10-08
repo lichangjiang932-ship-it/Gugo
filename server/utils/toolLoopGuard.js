@@ -35,6 +35,10 @@ export function isSubstantiveToolCall(call) {
   return Boolean(name) && !NON_SUBSTANTIVE_TOOL_NAMES.has(name)
 }
 
+
+/** Distinct call digests kept per guard; beyond this only a count grows. */
+const MAX_TRACKED_SIGNATURES = 2048
+
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue)
   if (isPlainObject(value)) {
@@ -125,7 +129,12 @@ function resetToolLoopRepetition(state) {
 
 function beforeToolCall(state, call) {
   const signature = callSignature(call)
-  state.seenSignatures.add(signature)
+  // Only the count of distinct calls is reported; a long turn must not keep a
+  // digest of every call it ever made, so the set is capped and the overflow counted.
+  if (!state.seenSignatures.has(signature)) {
+    if (state.seenSignatures.size < MAX_TRACKED_SIGNATURES) state.seenSignatures.add(signature)
+    else state.untrackedUniqueCalls += 1
+  }
   state.recentSignatures.push(signature)
   if (state.recentSignatures.length > state.safeWindowSize) state.recentSignatures.shift()
   const windowOccurrences = state.recentSignatures.reduce(
@@ -317,7 +326,7 @@ function snapshotToolLoopGuard(state) {
   return {
     consecutiveErrors: state.consecutiveErrors,
     consecutiveAuthoringErrors: state.consecutiveAuthoringErrors,
-    uniqueCalls: state.seenSignatures.size,
+    uniqueCalls: state.seenSignatures.size + state.untrackedUniqueCalls,
     repeatedCallStreak: state.repeatedCallStreak,
     lastSignature: state.lastSignature,
     recentSignatures: [...state.recentSignatures],
@@ -381,6 +390,7 @@ export function createToolLoopGuard({
     safeObservationWindowSize: Math.max(2, Math.floor(Number(observationWindowSize) || 24)),
     safeObservationRepeatLimit: Math.max(2, Math.floor(Number(maxRepeatedObservations) || 6)),
     seenSignatures: new Set(),
+    untrackedUniqueCalls: 0,
     failedToolCounts: new Map(
       Object.entries(restored.failedTools && typeof restored.failedTools === 'object'
         ? restored.failedTools

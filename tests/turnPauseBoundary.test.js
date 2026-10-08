@@ -18,6 +18,9 @@ function pauseState(reason) {
     artifactIds: ['artifact-1'],
     recovery: { archiveId: null },
     artifactRecoveryActive: () => false,
+    appliedSteeringIds: [],
+    steeringController: { claimFresh: async () => ({ leaseId: null, messages: [] }), persistAndAcknowledge: async () => {} },
+    appendSteeringMessages: () => {},
     finishTerminalResult: async (result, options) => {
       finishes.push({ result, options })
       return { ...result, terminal: true }
@@ -62,4 +65,51 @@ test('a user pause reads as "paused", not as a clarification question or a cance
   assert.notEqual(getVisibleTurnClarification({ reason_code: 'clarification_required' }, zh), '已暂停')
   // An explicit question still wins over the reason code.
   assert.equal(getVisibleTurnClarification({ reason_code: 'user_paused', question: 'Which file?' }, zh), 'Which file?')
+})
+
+function steeringStub({ queued = [], closesAfterClaim = true } = {}) {
+  const inbox = [...queued]
+  const acknowledged = []
+  return {
+    acknowledged,
+    claimFresh: async () => (inbox.length ? { leaseId: 'lease-1', messages: inbox.splice(0) } : { leaseId: null, messages: [] }),
+    persistAndAcknowledge: async (leaseId) => { acknowledged.push(leaseId) },
+    gateClosed: () => closesAfterClaim && inbox.length === 0,
+  }
+}
+
+test('steering queued before a pause is saved with the paused checkpoint instead of holding the turn open', async () => {
+  const { s, finishes } = pauseState(Object.assign(new Error('Paused by user'), { code: 'TURN_PAUSE_REQUESTED' }))
+  const steering = steeringStub({ queued: [{ id: 'steer-1', content: 'Use CSV instead.' }] })
+  const appended = []
+  Object.assign(s, {
+    appliedSteeringIds: [],
+    steeringController: steering,
+    appendSteeringMessages: (messages) => appended.push(...messages),
+  })
+  const outcome = await prepareIteration(s)
+  assert.equal(outcome.kind, 'return')
+  assert.deepEqual(appended.map((message) => message.content), ['Use CSV instead.'], 'the note is in the transcript the checkpoint saves')
+  assert.deepEqual(steering.acknowledged, ['lease-1'])
+  assert.equal(finishes.length, 1)
+})
+
+test('a pause whose steering inbox never closes stops after a bounded number of passes', async () => {
+  const { s } = pauseState(Object.assign(new Error('Paused by user'), { code: 'TURN_PAUSE_REQUESTED' }))
+  Object.assign(s, {
+    appliedSteeringIds: [],
+    steeringController: steeringStub(),
+    appendSteeringMessages: () => {},
+    // The completion gate keeps deferring, as it did while a message stayed unclaimed.
+    finishTerminalResult: async () => null,
+  })
+  let passes = 0
+  await assert.rejects(async () => {
+    for (; passes < 50; passes += 1) {
+      s.iteration = { steeringLeaseId: null }
+      const outcome = await prepareIteration(s)
+      assert.equal(outcome.kind, 'continue')
+    }
+  }, (error) => error.name === 'AbortError' && error.code === 'TURN_PAUSE_REQUESTED')
+  assert.ok(passes <= 4, `stopped after ${passes} deferred passes`)
 })

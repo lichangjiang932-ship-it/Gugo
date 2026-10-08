@@ -61,6 +61,30 @@ function accumulateUsage(totals, usage) {
   }
 }
 
+function usageMagnitude(usage) {
+  return usage.totalTokens ?? usage.promptTokens + (usage.completionTokens || 0)
+}
+
+function sameUsage(a, b) {
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key])
+}
+
+/**
+ * Streamed usage is cumulative per response: gateways may repeat it on many
+ * chunks. Keep one whole snapshot (the largest, so a trailing zeroed frame
+ * cannot shrink it; on a tie the later one, which may add cache detail) and
+ * return `previous` itself for a repeat, so a caller can tell nothing changed.
+ */
+export function mergeCumulativeUsage(previous, next) {
+  const current = normalizeModelUsage(next)
+  if (!current) return previous || null
+  if (!previous) return current
+  const grown = usageMagnitude(current) - usageMagnitude(previous)
+  if (grown > 0 || (grown === 0 && !sameUsage(current, previous))) return current
+  return previous
+}
+
 export function recordUsage(modelName, usage, { ownerId } = {}) {
   const normalized = normalizeModelUsage(usage)
   if (!normalized) return

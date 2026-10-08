@@ -1,3 +1,6 @@
+/** Passes a paused turn may defer to steering that arrived after its claim. */
+const MAX_PAUSE_DEFERRALS = 3
+
 export async function prepareIteration(s) {
   const i = s.iteration
   const { DIRECTORY_REVIEW_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, buildAssistantToolCallsMessage, buildJobToolIdempotencyKey, normalizeToolCalls, observeToolCalls, runPreStep } = s.d
@@ -14,6 +17,16 @@ export async function prepareIteration(s) {
           // resumable: `paused` is non-terminal, so "continue" picks up from the
           // persisted checkpoint instead of redoing the task. Cancellation still
           // throws, because a cancelled turn must not be resumed.
+          //
+          // Steering queued before the pause is taken into the transcript now,
+          // so it is saved with the paused checkpoint and read on resume. Left in
+          // the inbox, it keeps the completion gate open, and the pause would
+          // defer to it forever without a model request ever claiming it.
+          const claimed = await s.steeringController.claimFresh(s.appliedSteeringIds)
+          if (claimed.messages.length > 0) {
+            s.appendSteeringMessages(claimed.messages)
+            await s.steeringController.persistAndAcknowledge(claimed.leaseId)
+          }
           const clarification = { reason_code: 'user_paused' }
           const terminal = await s.finishTerminalResult({
             text: s.locale === 'en' ? 'Paused.' : '已暂停。',
@@ -23,7 +36,17 @@ export async function prepareIteration(s) {
             clarification,
             recovery: s.recovery,
           }, { steeringLeaseId: i.steeringLeaseId, finalMetadata: { paused: true, clarification } })
-          return terminal ? { kind: 'return', value: terminal } : { kind: 'continue' }
+          if (terminal) return { kind: 'return', value: terminal }
+          // Steering that arrived after the claim above: claim it on the next
+          // pass, but a pause never extends the turn without bound.
+          s.pauseDeferrals = (Number(s.pauseDeferrals) || 0) + 1
+          if (s.pauseDeferrals > MAX_PAUSE_DEFERRALS) {
+            const error = new Error('Turn paused while steering kept arriving')
+            error.name = 'AbortError'
+            error.code = 'TURN_PAUSE_REQUESTED'
+            throw error
+          }
+          return { kind: 'continue' }
         }
         const error = new Error('Turn cancelled')
         error.name = 'AbortError'

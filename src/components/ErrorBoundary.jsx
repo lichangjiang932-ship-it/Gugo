@@ -33,6 +33,11 @@ class ErrorBoundaryImpl extends Component {
 
   render() {
     if (!this.state.error) return this.props.children
+    // A contained subtree (e.g. one preview renderer) draws its own failure
+    // state in place; `reset` remounts the children.
+    if (typeof this.props.renderFallback === 'function') {
+      return this.props.renderFallback({ error: this.state.error, reset: this.handleReset })
+    }
 
     const message = this.state.error?.message || String(this.state.error)
     const stack = this.state.errorInfo?.componentStack || ''

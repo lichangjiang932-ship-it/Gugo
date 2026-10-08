@@ -314,6 +314,7 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
         }
       }
     } else {
+      s.mutationContentBinding.observe([...currentTargets].filter((target) => target !== PROJECT_SCOPE_TARGET), outcome.result)
       for (const target of currentTargets) {
         s.pendingMutationTargets.add(target)
         if (s.isLocalHtmlTarget(target)) s.localHtmlDeliveryTargets.add(target)
@@ -366,6 +367,7 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
         projectDirectory: s.verificationProjectDirectory
           || s.outputDirectoryContext?.projectDirectory || '',
         projectDirectories: s.verificationProjectDirectories,
+        contentBinding: s.mutationContentBinding,
       },
     )
     const clearedDeletion = clearVerifiedDeletionTargets(

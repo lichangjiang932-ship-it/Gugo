@@ -91,6 +91,7 @@ const translations = {
     "docxRenderingFallback": "文档版式渲染失败，以下为提取到的正文内容。",
     "previewFailed": "文件预览失败",
     "retryPreview": "重试预览",
+    "rendererCrashed": "预览出错：此文件的预览渲染失败，其他内容不受影响。",
     "openOriginal": "打开原文件",
     "localHtmlServiceUnavailable": "本地预览服务尚未就绪。请稍后重试；正式文件不会被复制或更改。",
     "previewRetryHint": "预览连接未能建立，请重试。正式文件仍保留在原位置。"
@@ -187,6 +188,7 @@ const translations = {
     "docxRenderingFallback": "The document layout could not be rendered; the extracted text is shown below.",
     "previewFailed": "File preview failed",
     "retryPreview": "Retry preview",
+    "rendererCrashed": "This preview failed: the file could not be rendered. The rest of the app is unaffected.",
     "openOriginal": "Open original",
     "localHtmlServiceUnavailable": "The local preview service is not ready yet. Retry shortly; the original file will not be copied or changed.",
     "previewRetryHint": "The preview connection could not be established. Retry to keep using the original file."

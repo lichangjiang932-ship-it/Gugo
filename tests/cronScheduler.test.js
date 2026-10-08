@@ -61,6 +61,58 @@ test('parseSchedule throws for invalid schedules', () => {
   assert.throws(() => parseSchedule('cron', 'TZ=Not/A_Real_Zone 0 9 * * *'), /invalid cron time zone/)
 })
 
+test('an impossible but field-valid cron date is rejected without scanning a year of seconds', () => {
+  for (const expr of ['0 0 0 30 2 *', 'CRON_TZ=America/New_York 0 0 0 30 2 *', '0 0 31 4,6,9,11 *']) {
+    const started = performance.now()
+    assert.throws(() => parseSchedule('cron', expr, { after: Date.UTC(2026, 0, 1) }), /never matches/, expr)
+    assert.ok(performance.now() - started < 2000, `${expr} took ${performance.now() - started}ms`)
+  }
+  // Day-of-month OR day-of-week keeps the schedule reachable through the weekday.
+  assert.equal(
+    parseSchedule('cron', 'CRON_TZ=UTC 0 0 30 2 1', { after: Date.UTC(2026, 0, 1) }),
+    Date.UTC(2026, 1, 2),
+  )
+})
+
+test('rare cron schedules are found field-wise instead of by per-second brute force', () => {
+  const started = performance.now()
+  assert.equal(
+    parseSchedule('cron', 'CRON_TZ=UTC 0 0 0 29 2 *', { after: Date.UTC(2027, 2, 1) }),
+    Date.UTC(2028, 1, 29),
+  )
+  assert.throws(
+    () => parseSchedule('cron', 'CRON_TZ=UTC 0 0 0 29 2 *', { after: Date.UTC(2025, 2, 1) }),
+    /no run within 366 days/,
+  )
+  assert.ok(performance.now() - started < 2000, `took ${performance.now() - started}ms`)
+})
+
+test('ordinary cron schedules keep their local and CRON_TZ results, including DST edges', () => {
+  const local = (...parts) => new Date(...parts).getTime()
+  assert.equal(parseSchedule('cron', '* * * * *', { after: local(2026, 0, 1, 12, 0, 30) }), local(2026, 0, 1, 12, 1, 0))
+  assert.equal(parseSchedule('cron', '30 9 * * *', { after: local(2026, 0, 1, 10, 0) }), local(2026, 0, 2, 9, 30))
+  assert.equal(parseSchedule('cron', '30 9 * * 1-5', { after: local(2026, 0, 2, 10, 0) }), local(2026, 0, 5, 9, 30))
+  assert.equal(parseSchedule('cron', '*/7 * * * * *', { after: local(2026, 0, 1, 12, 0, 5) }), local(2026, 0, 1, 12, 0, 7))
+  assert.equal(
+    parseSchedule('cron', 'CRON_TZ=Asia/Shanghai 30 9 * * 1-5', { after: Date.UTC(2026, 0, 2, 2, 0) }),
+    Date.UTC(2026, 0, 5, 1, 30),
+  )
+  // 02:30 does not exist on the spring-forward day; the next run is the following day.
+  assert.equal(
+    parseSchedule('cron', 'CRON_TZ=America/New_York 30 2 * * *', { after: Date.UTC(2026, 2, 8, 6, 0) }),
+    Date.UTC(2026, 2, 9, 6, 30),
+  )
+  // 01:30 occurs twice on the fall-back day; both occurrences match, in order.
+  assert.equal(
+    parseSchedule('cron', 'CRON_TZ=America/New_York 30 1 * * *', { after: Date.UTC(2026, 10, 1, 5, 0) }),
+    Date.UTC(2026, 10, 1, 5, 30),
+  )
+  assert.equal(
+    parseSchedule('cron', 'CRON_TZ=America/New_York 30 1 * * *', { after: Date.UTC(2026, 10, 1, 5, 30) }),
+    Date.UTC(2026, 10, 1, 6, 30),
+  )
+})
+
 test('a clamped long-timeout wake-up only rearms a job that is still in the future', async () => {
   const { userId } = issueTestSession()
   const now = Date.now()
