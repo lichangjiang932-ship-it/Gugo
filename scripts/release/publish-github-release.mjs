@@ -15,6 +15,11 @@ const RELEASES_PER_PAGE = 100
 const MAX_ASSET_PAGES = 20
 const ASSETS_PER_PAGE = 100
 const MAX_TAG_INDIRECTIONS = 8
+// The release listing is eventually consistent: a draft just created by ID can
+// be missing from it for a few seconds. Absence is waited out; a different
+// release in its place still fails at once.
+const LISTING_SETTLE_ATTEMPTS = 6
+const LISTING_SETTLE_DELAY_MS = 2_000
 
 function assertRepository(repository) {
   if (typeof repository !== 'string'
@@ -159,9 +164,14 @@ async function assertDraftReleaseCurrent(options, expectedReleaseId) {
   if (!release.draft || release.immutable === true) {
     throw new Error(`Published GitHub Release ${options.tag} already exists and is immutable`)
   }
-  const discovered = await findReleaseForPublication(options)
-  if (!discovered || discovered.id !== expectedReleaseId) {
-    throw new Error(`GitHub Release ${tag} identity changed during publication`)
+  const settleDelay = options.listingSettleDelayMs ?? LISTING_SETTLE_DELAY_MS
+  for (let attempt = 1; ; attempt += 1) {
+    const discovered = await findReleaseForPublication(options)
+    if (discovered?.id === expectedReleaseId) break
+    if (discovered || attempt >= LISTING_SETTLE_ATTEMPTS) {
+      throw new Error(`GitHub Release ${tag} identity changed during publication`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, settleDelay))
   }
   return release
 }
@@ -403,6 +413,7 @@ export async function publishGitHubRelease({
   fetchImpl = globalThis.fetch,
   apiBaseUrl = DEFAULT_API_BASE_URL,
   uploadsBaseUrl = DEFAULT_UPLOADS_BASE_URL,
+  listingSettleDelayMs = LISTING_SETTLE_DELAY_MS,
 } = {}) {
   assertRepository(repository)
   assertReleaseTag(tag)
@@ -418,7 +429,7 @@ export async function publishGitHubRelease({
   const assets = await prepareReleaseAssets(files, { cwd })
   const headers = githubHeaders(token)
   const tagOptions = { fetchImpl, apiBaseUrl, repository, tag, headers }
-  const releaseOptions = { fetchImpl, apiBaseUrl, repository, tag, headers }
+  const releaseOptions = { fetchImpl, apiBaseUrl, repository, tag, headers, listingSettleDelayMs }
   await assertRemoteTagCommit(tagOptions, commit)
   let release = await findReleaseForPublication(releaseOptions)
   release ||= await createDraftRelease({

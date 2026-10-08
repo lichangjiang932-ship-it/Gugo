@@ -197,3 +197,23 @@ test('remote Git tag commit remains authoritative instead of the advisory draft 
   assert.equal(patches(changed.state).length, 0)
   assert.notEqual(changed.state.tagCommit, COMMIT)
 })
+
+test('a draft the listing has not caught up with yet is waited out, then published', async (t) => {
+  // GitHub's release listing is eventually consistent: a draft just created by ID
+  // can be missing from it for a few seconds. v0.11.72's first run stopped there.
+  let lagReads = 2
+  const api = createGitHubApi({ release: draft(), releaseListResponse: ({ state }) => (
+    jsonResponse(200, state.releaseReads && lagReads-- > 0 ? [] : [state.release])
+  ) })
+  const result = await publishGitHubRelease({ ...publishOptions(t, api), listingSettleDelayMs: 1 })
+  assert.equal(result.releaseId, 42)
+  assert.equal(api.state.release.draft, false)
+})
+
+test('a listing that never shows the draft still stops before any write', async (t) => {
+  const api = createGitHubApi({ release: draft(), releaseListResponse: ({ state }) => (
+    jsonResponse(200, state.releaseReads ? [] : [state.release])
+  ) })
+  await assert.rejects(publishGitHubRelease({ ...publishOptions(t, api), listingSettleDelayMs: 1 }), /identity changed/iu)
+  assert.deepEqual(assetMutations(api.state), [])
+})
