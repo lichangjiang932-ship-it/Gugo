@@ -15,6 +15,7 @@ import RailDisclosureIcon from './leftRail/RailDisclosureIcon.jsx'
 import { pinnedTimestampOf } from './leftRail/sessionListUtils.js'
 import useLeftRailController from './leftRail/useLeftRailController.js'
 import useLeftRailDisclosure from './leftRail/useLeftRailDisclosure.js'
+import useLeftRailWidth, { MAX_RAIL_WIDTH, MIN_RAIL_WIDTH } from './leftRail/useLeftRailWidth.js'
 import './leftRail/LeftRail.css'
 
 const NARROW_RAIL_QUERY = '(max-width: 959px)'
@@ -38,11 +39,17 @@ export default function LeftRail() {
     onCollapse: closeRailMenus,
     hasOpenMenu: controller.openMenuId !== null || controller.accountMenuOpen,
   })
+  const rail = useLeftRailWidth()
+  // Collapsed and the narrow-viewport overlay keep their own widths — one is a
+  // 60px strip, the other is a dialog over the conversation. Only the ordinary
+  // rail answers to the edge, and it drops its width transition while a drag is
+  // in flight so the edge tracks the pointer instead of chasing it.
+  const resizableRail = !collapsed && !narrowViewport
   const railWidthClass = collapsed
     ? 'w-[60px] max-w-full px-2 py-2.5'
     : narrowViewport
       ? 'w-[min(320px,calc(100vw-60px))] min-w-0 max-w-[320px] px-2.5 py-2.5'
-      : 'w-[clamp(280px,20vw,320px)] min-w-[280px] max-w-[320px] px-2.5 py-2.5'
+      : `min-w-[220px] max-w-[480px] px-2.5 py-2.5 ${rail.resizing ? 'transition-none' : 'transition-[width] duration-200'}`
   const sessions = state.sessions.filter((session) => !session.archivedAt)
 
   const handleNewChat = () => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'START_NEW_DRAFT' }); navigate('/chat') }
@@ -113,7 +120,28 @@ export default function LeftRail() {
 
   return <>
     {narrowViewport && mobileExpanded && <button type="button" data-left-rail-backdrop aria-hidden="true" tabIndex={-1} aria-label={t('chatMessages.hideSidebar')} onClick={() => closeMobileRail({ restoreFocus: true })} className="fixed inset-0 z-40 cursor-default bg-ink/20" />}
-    <aside ref={railRef} role={narrowViewport && mobileExpanded ? 'dialog' : 'navigation'} aria-modal={narrowViewport && mobileExpanded ? true : undefined} aria-label={`Gugo · ${t('nav.chat')}`} tabIndex={-1} data-collapsed={collapsed ? 'true' : 'false'} className={`left-rail flex h-full shrink-0 flex-col border-r border-ink/[0.055] bg-sidebar transition-[width] duration-200 ${railWidthClass} ${narrowViewport && mobileExpanded ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : ''}`}>
+    <aside ref={railRef} role={narrowViewport && mobileExpanded ? 'dialog' : 'navigation'} aria-modal={narrowViewport && mobileExpanded ? true : undefined} aria-label={`Gugo · ${t('nav.chat')}`} tabIndex={-1} data-collapsed={collapsed ? 'true' : 'false'} style={resizableRail ? { width: `${rail.width}px` } : undefined} className={`left-rail relative flex h-full shrink-0 flex-col border-r border-ink/[0.055] bg-sidebar ${railWidthClass} ${narrowViewport && mobileExpanded ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : ''}`}>
+      {/* Inside the rail, not straddling its edge: a handle hung on the outside is
+          at the mercy of whatever clips the parent, and the sliver left behind is
+          not something a reader can grab. Double-click restores the width the
+          rail would have chosen for itself. */}
+      {resizableRail && (
+        <button
+          type="button"
+          data-testid="left-rail-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('workbench.resize')}
+          aria-valuemin={MIN_RAIL_WIDTH}
+          aria-valuemax={MAX_RAIL_WIDTH}
+          aria-valuenow={Math.round(rail.width)}
+          title={t('workbench.resize')}
+          onPointerDown={rail.beginResize}
+          onKeyDown={rail.resizeWithKeyboard}
+          onDoubleClick={rail.clearWidth}
+          className="absolute inset-y-0 right-0 z-30 w-2 cursor-col-resize touch-none bg-transparent outline-none after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-transparent hover:after:bg-accent/50 focus-visible:after:bg-focus"
+        />
+      )}
       <header className={`flex h-10 items-center ${collapsed ? 'justify-center' : 'gap-2 px-1'}`}>
         {!collapsed && <button type="button" onClick={() => { controller.closeSessionMenu(); closeMobileRail(); navigate('/chat') }} aria-label="Gugo" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"><BrandMark className="h-7 w-7 shrink-0 text-accent-ink" /><span className="truncate text-[14px] font-semibold leading-5 text-ink">Gugo</span></button>}
         <button ref={toggleRef} type="button" onClick={() => setRailCollapsed(!collapsed)} title={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-label={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-expanded={!collapsed} aria-controls="left-rail-history" className="left-rail-toggle flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-ink-soft transition-colors hover:bg-ink/[0.05] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"><RailDisclosureIcon collapsed={collapsed} /></button>
