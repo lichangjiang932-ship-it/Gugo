@@ -2623,6 +2623,31 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   }
 }
 
+/* Press feedback and a keyboard ring for every control.
+   Hover was the only feedback most places, and `outline-none` removed the ring
+   without replacing it — a pressed button looked identical to a resting one and
+   a keyboard user lost their place (WCAG 2.4.7). Both rules are geometry-free
+   (no scale, no shift), so nothing reflows when a button is pressed.
+
+   They sit here, above the pet window's block, because that block runs to the
+   end of this file and is read as a standalone sheet for the pet's own
+   transparent window — where a `filter` repaints the whole layer and makes the
+   sprite flicker. Anything appended after it lands inside that slice. */
+button:not(:disabled):active,
+[role='button']:not([aria-disabled='true']):active {
+  filter: brightness(0.94);
+}
+
+button:focus-visible,
+[role='button']:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid rgb(var(--color-focus-rgb) / 0.6);
+  outline-offset: 2px;
+}
+
 html:has(.pet-window-root),
 html:has(.pet-window-root) body,
 html:has(.pet-window-root) #root {
@@ -2805,23 +2830,3 @@ html:has(.pet-window-root) #root {
 .diff-row-changed { background: rgba(var(--color-warning-rgb), 0.10); }
 .diff-row-filler { background: transparent; }
 .diff-word { background: rgba(var(--color-accent-rgb), 0.22); border-radius: 2px; }
-
-/* Press feedback and a keyboard ring for every control.
-   Hover was the only feedback most places, and `outline-none` removed the ring
-   without replacing it — a pressed button looked identical to a resting one and
-   a keyboard user lost their place (WCAG 2.4.7). Both rules are geometry-free
-   (no scale, no shift), so nothing reflows when a button is pressed. */
-button:not(:disabled):active,
-[role='button']:not([aria-disabled='true']):active {
-  filter: brightness(0.94);
-}
-
-button:focus-visible,
-[role='button']:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
-summary:focus-visible {
-  outline: 2px solid rgb(var(--color-focus-rgb) / 0.6);
-  outline-offset: 2px;
-}
