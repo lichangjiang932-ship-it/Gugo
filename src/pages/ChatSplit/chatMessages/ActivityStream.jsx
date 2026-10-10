@@ -77,6 +77,12 @@ function activityLabel(meta, toolCalls, t) {
   if (activity?.kind === 'model' && activity.phase === 'compaction_fallback') return t('chatMessages.activityCompactionFallback')
   if (activity?.kind === 'model' && activity.phase === 'started') return t('chatMessages.activityModelConnecting')
   if (activity?.kind === 'model' && activity.phase === 'waiting_first_token') return t('chatMessages.activityWaitingFirstOutput')
+  // A pause in the middle of a tool's arguments: name the call the model is in
+  // the middle of writing (a whole slide deck, say) without claiming it is
+  // producing anything right now — the detail line says how long it has paused.
+  if (activity?.kind === 'model' && activity.phase === 'idle' && activity.toolName) {
+    return t('toolActivity.argumentsPaused', { name: toolCallLabel(activity.toolName, t) })
+  }
   if (activity?.kind === 'model' && activity.phase === 'idle') return t('chatMessages.activityModelPaused')
   if (activity?.kind === 'model' && activity.phase === 'retrying') return t('chatMessages.activityModelRetrying')
   if (activity?.kind === 'model') return t('chatMessages.activityModelWorking')

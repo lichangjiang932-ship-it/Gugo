@@ -6,7 +6,6 @@ import {
   Download,
   Eye,
   Maximize2,
-  MessageSquarePlus,
   Minimize2,
   Presentation,
   Sparkles,
@@ -17,7 +16,6 @@ import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { canViewDirectFileSource } from '../../../lib/directFileSource.js'
 import FileIdentity from './FileIdentity.jsx'
 import FileActions from './FileActions.jsx'
-import { CHIP_CLASS } from './previewChipStyles.js'
 import FileTypeGlyph from '../../../components/FileTypeGlyph.jsx'
 import { classifyDirectFile } from '../../../lib/directFilePreview.js'
 import { ZoomControl } from './PreviewZoom.jsx'
@@ -138,23 +136,16 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
 
 /**
  * The head of a previewed file, laid out like the reference desktop apps: the
- * file chip (its menu holds what can be done with the file), "Request changes"
- * to hand the file to the composer, and on the right the view switch for files
- * with a readable source or the zoom for a laid-out page.
+ * file chip (its menu holds what can be done with the file), and on the right
+ * the view switch for files with a readable source or the zoom for a laid-out
+ * page.
  */
-export function DirectFileToolbar({ filename, type, file = {}, view = 'preview', setView, submenuFlipped = false, onRequestChange = null, zoom = null, t }) {
+export function DirectFileToolbar({ filename, type, file = {}, view = 'preview', setView, zoom = null, t }) {
   const preview = { ...file, filename, type, label: type.toUpperCase() }
   const kind = classifyDirectFile(preview)
   return (
     <div data-testid="preview-command-bar" className="chat-preview-toolbar chat-direct-file-toolbar flex min-h-12 shrink-0 items-center gap-2 border-b border-ink/10 bg-paper px-3 py-2">
-      <FileActions key={`${file.url || ''}:${file.path || ''}:${file.previewRevision || ''}`} file={preview} submenuFlipped={submenuFlipped} t={t} />
-      {onRequestChange && (
-        <button type="button" data-testid="preview-request-change" onClick={() => onRequestChange(preview)}
-          title={t('chatPreview.requestChangeHint')} className={`${CHIP_CLASS} chat-preview-request-change shrink-0`}>
-          <MessageSquarePlus className="h-3.5 w-3.5 text-ink-soft" aria-hidden="true" />
-          <span className="chat-preview-request-label">{t('chatPreview.requestChange')}</span>
-        </button>
-      )}
+      <FileActions key={`${file.url || ''}:${file.path || ''}:${file.previewRevision || ''}`} file={preview} t={t} />
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {setView && canViewDirectFileSource(preview) && <div className="inline-flex h-8 shrink-0 overflow-hidden rounded-full border border-ink/10 bg-paper-2 p-0.5 text-xs">
           <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />

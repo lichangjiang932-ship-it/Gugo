@@ -200,8 +200,9 @@ export default function PtyTerminalPanel({
       data-testid="workbench-pty-panel"
       data-phase={status.phase}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-paper/10 px-2 py-1.5">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-paper/65" title={status.shell}>
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-paper/10 px-2.5">
+        <span className="shrink-0 text-xs font-medium text-paper">{t('workbench.terminal')}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-paper/55" title={status.shell}>
           {status.shell ? basename(status.shell) : t('workbench.terminalDesktop')}
         </span>
         <button
@@ -209,7 +210,7 @@ export default function PtyTerminalPanel({
           onClick={restart}
           aria-label={t('workbench.terminalRestart')}
           title={t('workbench.terminalRestart')}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-paper/65 hover:bg-paper/10 hover:text-paper"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-paper/65 hover:bg-paper/10 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40"
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>

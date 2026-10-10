@@ -179,11 +179,11 @@ export default function ComposerActions({
           disabled={primaryActionPausesTurn ? false : sendDisabled}
           title={primaryActionLabel}
           aria-label={primaryActionLabel}
-          className="chat-composer-primary-action flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-35"
+          className="chat-composer-primary-action flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ink/10 bg-paper-2 text-ink transition-colors hover:bg-ink/[0.07] disabled:cursor-not-allowed disabled:opacity-35"
         >
           {primaryActionPausesTurn
-            ? <Pause className="h-3.5 w-3.5 text-paper" />
-            : <Send className="h-3.5 w-3.5 text-paper" />}
+            ? <Pause className="h-3.5 w-3.5" />
+            : <Send className="h-3.5 w-3.5" />}
         </button>
       </div>
     </div>

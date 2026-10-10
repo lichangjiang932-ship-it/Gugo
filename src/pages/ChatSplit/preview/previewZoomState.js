@@ -39,6 +39,22 @@ export function imageFitScale(zoom, natural, frame, gutter = 40) {
 }
 
 /**
+ * The largest scale at which a fixed-size page fits whole in its frame — bounded
+ * by height and width together, so nothing is cropped. Unlike `imageFitScale`
+ * this may pass 1×: a slide is drawn from vectors and is safe to enlarge to fill
+ * a pane taller or wider than its own aspect, which is what keeps a wide slide
+ * from sitting small in a tall sidebar.
+ */
+export function containScale(page, frame, gutter = 32) {
+  const width = Number(page?.width) || 0
+  const height = Number(page?.height) || 0
+  const frameWidth = Number(frame?.width) || 0
+  const frameHeight = Number(frame?.height) || 0
+  if (!(width > 0) || !(height > 0) || !(frameWidth > gutter) || !(frameHeight > gutter)) return 1
+  return Math.max(0.05, Math.min((frameWidth - gutter) / width, (frameHeight - gutter) / height))
+}
+
+/**
  * Size of an element, kept current as the pane is resized. Returns a callback
  * ref: a renderer's frame often mounts only after its content loads, and a ref
  * object read once on mount would never see it.

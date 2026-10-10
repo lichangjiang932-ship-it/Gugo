@@ -111,6 +111,12 @@ export const PPTX_TABLE_SCHEMA = Object.freeze({
       items: EXTENT,
       description: 'Optional relative widths within the table, one per column, adding up to 1.',
     },
+    // Models reliably put a table's colours on the table they describe. Accepting
+    // them here costs nothing, while rejecting them threw away a whole generated
+    // deck to move three colour fields one level up. The element's own values win.
+    header_fill: COLOR,
+    header_color: COLOR,
+    line_color: COLOR,
   },
   required: ['rows'],
 })

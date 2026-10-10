@@ -1,4 +1,5 @@
-import { captureDesktopPreview } from './desktopBrowserClient.js'
+import { captureDesktopPreview, isDesktopPageFactsAvailable } from './desktopBrowserClient.js'
+import { captureInAppPreview, isInAppPreviewAvailable } from './previewInAppFacts.js'
 
 /** A filename that says what it is and when it was taken. */
 export function previewScreenshotName(now = Date.now()) {
@@ -27,10 +28,13 @@ function downloadDataUrl(dataUrl, filename) {
  *
  * The capture comes from the docked view — the same pixels the reader is looking
  * at — so a browser build without that host reports why it cannot rather than
- * saving something else.
+ * saving something else. A preview drawn into this app's own tree is the one
+ * thing a browser build can still picture, so that is captured directly.
  */
-export async function savePreviewScreenshot({ filename, capture = captureDesktopPreview, now = Date.now() } = {}) {
-  const result = await capture()
+export async function savePreviewScreenshot({ filename, capture = null, now = Date.now() } = {}) {
+  const runCapture = capture
+    || (!isDesktopPageFactsAvailable() && isInAppPreviewAvailable() ? captureInAppPreview : captureDesktopPreview)
+  const result = await runCapture()
   if (!result?.ok || typeof result.dataUrl !== 'string') {
     return { ok: false, reason: result?.reason || 'capture-failed' }
   }

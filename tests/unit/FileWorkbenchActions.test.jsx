@@ -39,15 +39,15 @@ function findButton(element, key) {
   return [...element.querySelectorAll('button')].find((button) => button.textContent.includes(key))
 }
 
-// "Open with" is a nested list: its entries only exist while it is open, which is
-// also what keeps them out of the menu until a reader asks for them.
+// The file menu lists its actions directly: default app, containing folder,
+// copy path. There is no "Open with" step in between.
 function openFileMenu(element) {
   element.querySelector('[data-testid="preview-open-menu"]').closest('details').open = true
 }
 
 function openOpenMethodSubmenu(element) {
   openFileMenu(element)
-  element.querySelector('[data-testid="preview-open-method"]').closest('details').open = true
+  assert.equal(element.querySelector('[data-testid="preview-open-method"]'), null, 'no nested Open with list')
 }
 
 test('direct files open in reading view with a path, a source toggle and an "Open with" list only when it can work', async () => {
@@ -154,7 +154,7 @@ test('desktop menu sends only a server reference, preserves denied state and hid
     assert.doesNotMatch(element.textContent, /VS Code|Cursor|Terminal/)
     const other = { ...file, url: 'https://outside.invalid/report.pdf' }
     await act(async () => root.render(<DirectFileToolbar file={other} filename={other.filename} type="pdf" url={other.url} t={t} />))
-    assert.equal(element.querySelector('[data-testid="preview-open-method"]'), null, 'an unreferenced file gets no "Open with" list')
+    assert.equal(element.querySelector('[data-testid="preview-open-default-app"]'), null, 'an unreferenced file gets no local actions')
     assert.equal(findButton(element, 'chatPreview.openDefaultApp'), undefined)
     assert.equal(element.querySelector('[role="alert"]'), null)
   } finally {

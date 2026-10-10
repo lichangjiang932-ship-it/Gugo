@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  findFilesTool,
   findSymbolTool,
   grepCodeTool,
   listImportsTool,
@@ -234,4 +235,62 @@ test('listImportsTool: 文件不存在抛错', async () => {
 
 test('listImportsTool: 路径越界', async () => {
   await assert.rejects(() => listImportsTool({ file: '/etc/passwd' }), /路径越界/)
+})
+
+test('findFilesTool: glob 按文件名/路径找文件', async () => {
+  const all = await findFilesTool({ glob: '*.ts' })
+  assert.equal(all.ok, true)
+  assert.ok(all.files.includes('src/auth.ts'), `expect auth.ts, got ${all.files}`)
+  assert.ok(all.files.every((f) => f.endsWith('.ts')), `only .ts, got ${all.files}`)
+
+  const nested = await findFilesTool({ glob: 'src/**/*.py' })
+  assert.ok(nested.files.includes('src/pay.py'), `expect pay.py, got ${nested.files}`)
+})
+
+test('findFilesTool: 无 glob 列出所有文件并排除 node_modules/.git', async () => {
+  const r = await findFilesTool({})
+  assert.equal(r.ok, true)
+  assert.ok(r.files.length >= 3)
+  for (const f of r.files) {
+    assert.ok(!f.includes('node_modules'), `skip node_modules, got ${f}`)
+    assert.ok(!f.startsWith('.git/'), `skip .git, got ${f}`)
+  }
+  assert.ok(r.files.includes('src/auth.ts'))
+  assert.ok(r.files.includes('src/main.rs'))
+})
+
+test('findFilesTool: file_type 过滤', async () => {
+  const r = await findFilesTool({ file_type: 'py' })
+  assert.equal(r.ok, true)
+  assert.ok(r.files.length >= 1)
+  for (const f of r.files) assert.ok(f.endsWith('.py'), `only .py, got ${f}`)
+})
+
+test('findFilesTool: path 限定搜索范围', async () => {
+  const r = await findFilesTool({ path: 'src', glob: '*.rs' })
+  assert.equal(r.ok, true)
+  assert.ok(r.files.includes('src/main.rs'), `expect src/main.rs, got ${r.files}`)
+})
+
+test('findFilesTool: 大小写敏感与不敏感', async () => {
+  const sensitive = await findFilesTool({ glob: '*.TS', case_sensitive: true })
+  assert.ok(!sensitive.files.includes('src/auth.ts'), 'case_sensitive must not match .ts')
+  const insensitive = await findFilesTool({ glob: '*.TS', case_sensitive: false })
+  assert.ok(insensitive.files.includes('src/auth.ts'), 'case-insensitive matches .ts')
+})
+
+test('findFilesTool: 路径越界拒绝', async () => {
+  await assert.rejects(() => findFilesTool({ path: '/etc' }), /路径越界/)
+})
+
+test('findFilesTool: glob 非法拒绝', async () => {
+  await assert.rejects(() => findFilesTool({ glob: '' }), /glob 非法/)
+  await assert.rejects(() => findFilesTool({ glob: 'x'.repeat(300) }), /glob 非法/)
+})
+
+test('findFilesTool: max_results 截断', async () => {
+  const r = await findFilesTool({ max_results: 1 })
+  assert.equal(r.ok, true)
+  assert.equal(r.files.length, 1)
+  assert.equal(r.truncated, true)
 })

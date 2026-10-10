@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPT-6-Sol 介绍（信息待核实）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; line-height: 1.8; color: #e8eaf6; background: #0f1226; }
+  .hero { text-align: center; padding: 72px 24px 48px; background: linear-gradient(160deg, #0f1226 0%, #1e2450 55%, #302b63 100%); }
+  .badge { display: inline-block; background: rgba(255, 212, 121, .15); color: #ffd479; border: 1px solid #ffd479; border-radius: 999px; padding: 4px 16px; font-size: 14px; margin-bottom: 18px; }
+  h1 { font-size: 2.4em; letter-spacing: 1px; margin-bottom: 10px; }
+  .subtitle { color: #aab1e0; font-size: 1.1em; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 24px 64px; }
+  .card { background: #171b3a; border: 1px solid #2a3160; border-radius: 14px; padding: 26px 30px; margin-bottom: 24px; }
+  h2 { color: #8b93c9; font-size: 1.25em; margin-bottom: 14px; }
+  p { color: #c9cde8; margin-bottom: 12px; }
+  p:last-child { margin-bottom: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .grid .card { margin-bottom: 0; }
+  ul { list-style: none; }
+  li { color: #c9cde8; padding-left: 22px; position: relative; margin-bottom: 8px; }
+  li::before { content: "—"; position: absolute; left: 0; color: #8b93c9; }
+  .warn { background: rgba(255, 212, 121, .08); border-left: 4px solid #ffd479; border-radius: 8px; padding: 18px 22px; margin-bottom: 24px; }
+  .warn strong { color: #ffd479; }
+  .timeline { border-left: 3px solid #8b93c9; padding-left: 26px; }
+  .timeline .ev { position: relative; margin-bottom: 20px; }
+  .timeline .ev::before { content: ""; position: absolute; left: -33px; top: 8px; width: 11px; height: 11px; background: #ffd479; border-radius: 50%; }
+  .timeline .ev b { color: #ffd479; }
+  .timeline .ev span { color: #aab1e0; font-size: .95em; }
+  a { color: #8b93c9; }
+  footer { text-align: center; color: #5a6180; font-size: .9em; padding: 28px 0 40px; }
+  @media (max-width: 560px) { h1 { font-size: 1.7em; } }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="badge">信息待核实 · 仅供框架参考</div>
+  <h1>GPT-6-Sol 介绍</h1>
+  <p class="subtitle">基于可验证资料的初步梳理：已知事实、待核实要点与核实渠道</p>
+</div>
+
+<div class="wrap">
+
+  <div class="warn">
+    <strong>说明：</strong>截至本文生成时，可访问的公开资料中没有可核实的 GPT-6-Sol 官方信息（发布时间、参数规模、基准成绩、定价均无法验证）。本文不虚构任何数值，所有未证实内容均已标注。
+  </div>
+
+  <div class="card">
+    <h2>一、GPT 系列背景</h2>
+    <p>GPT（Generative Pre-trained Transformer）是 OpenAI 开发的大型语言模型系列，基于 Transformer 架构，通过下一个 token 预测任务在海量文本上预训练，具备自然语言理解与生成能力。若 GPT-6-Sol 属于该系列，其技术脉络可参考以下演进路线。</p>
+  </div>
+
+  <div class="card">
+    <h2>二、已知事实：GPT 系列演进</h2>
+    <div class="timeline">
+      <div class="ev"><b>GPT-1 · 2018</b><br><span>1.17 亿参数，确立"预训练 + 微调"范式</span></div>
+      <div class="ev"><b>GPT-2 · 2019</b><br><span>15 亿参数，展示零样本学习能力</span></div>
+      <div class="ev"><b>GPT-3 · 2020</b><br><span>1750 亿参数，开创少样本上下文学习</span></div>
+      <div class="ev"><b>GPT-4 / 4o · 2023–24</b><br><span>多模态架构，其后为 o 系列推理模型</span></div>
+    </div>
+    <p>"Sol" 后缀未在可查的官方发布记录中得到证实，其是否为正式名称、内部代号或社区传闻有待核实。</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>三、待核实要点</h2>
+      <ul>
+        <li>产品定位：正式名称 / 内部代号 / 传闻</li>
+        <li>技术规格：参数规模与上下文窗口</li>
+        <li>能力范围：多模态与推理能力</li>
+        <li>基准成绩：MMLU / HumanEval / GPQA</li>
+        <li>发布信息：日期与 API 可用性</li>
+        <li>商业条款：定价与限速策略</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>四、建议核实渠道</h2>
+      <ul>
+        <li>OpenAI 模型文档：platform.openai.com/docs/models</li>
+        <li>官方博客与发布说明：openai.com/blog</li>
+        <li>API Changelog 与开发者社区</li>
+        <li>若为第三方项目，请提供官网或仓库地址</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>五、结论</h2>
+    <p>当前无法基于可验证证据给出 GPT-6-Sol 的技术细节。本文提供了可复用的介绍框架与核实路径；获得官方资料后，可在本框架上扩写为完整产品介绍。</p>
+  </div>
+
+</div>
+
+<footer>本文基于公开资料整理，未经证实的内容均未作断言</footer>
+
+</body>
+</html>

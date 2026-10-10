@@ -84,8 +84,12 @@ export function addNativePptxChart(slide, pptx, rawChart, box, design, style = {
   })
 }
 
-export function addNativePptxTable(slide, rawTable, box, design, style = {}, path = 'table') {
+export function addNativePptxTable(slide, rawTable, box, design, elementStyle = {}, path = 'table') {
   const table = normalizePptxTable(rawTable, path)
+  const style = { ...elementStyle }
+  for (const key of ['header_fill', 'header_color', 'line_color']) {
+    if (style[key] === undefined && rawTable?.[key] !== undefined) style[key] = rawTable[key]
+  }
   const widths = table.columnWidths.map((width) => width * box.w)
   const rowHeight = box.h / table.rows.length
   let fontSize = style.font_size || design.bodySize

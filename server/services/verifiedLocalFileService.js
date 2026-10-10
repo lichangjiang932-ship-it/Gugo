@@ -3,6 +3,8 @@ import path from 'node:path'
 import { getMessage } from './sessionStore.js'
 import { resolveAuthorizedLocalPath } from './localFileAccessService.js'
 import { extractVerifiedLocalFiles, recoverLegacyVerifiedLocalFiles } from './turnMessageContext.js'
+import { getArtifactDir, isSafeArtifactFilename } from './artifactStorage.js'
+import { listTurnArtifacts } from './turnArtifactStore.js'
 
 const MIME_TYPES = Object.freeze({
   '.aac': 'audio/aac',
@@ -97,6 +99,45 @@ function retainedReceiptList(message) {
   return Array.isArray(context.retainedLocalFiles) ? context.retainedLocalFiles : []
 }
 
+/**
+ * The copy this app kept of a receipt's file, for when the file itself has been
+ * moved or deleted. A delivered file is also published to the artifact store
+ * and recorded against the same turn; the receipt names that artifact (or, for
+ * older receipts, shares its name), and the copy must have the very byte size
+ * the receipt recorded, so a different file of the same name never stands in.
+ * The copy is only ever read: opening "in its folder" shows the store's copy.
+ */
+function storedCopyOfReceipt({ userId, sessionId, turnId, receipt }) {
+  const expectedSize = Number(receipt?.size)
+  if (!sessionId || !Number.isSafeInteger(expectedSize) || expectedSize < 0) return null
+  const related = new Set(Array.isArray(receipt.relatedArtifactIds) ? receipt.relatedArtifactIds.map(String) : [])
+  const wantedName = String(receipt.filename || path.basename(String(receipt.path || '')))
+  const stem = wantedName.replace(/.[^.]+$/u, '')
+  const extension = path.extname(wantedName).toLowerCase()
+  const candidates = listTurnArtifacts({ userId, sessionId, turnId }).filter((artifact) => {
+    const filename = String(artifact?.filename || '')
+    if (!filename || path.extname(filename).toLowerCase() !== extension) return false
+    return related.has(String(artifact.id)) || filename === wantedName || filename.startsWith(`${stem}-`)
+  })
+  const root = getArtifactDir()
+  for (const artifact of candidates) {
+    if (!isSafeArtifactFilename(artifact.filename)) continue
+    const fullPath = path.join(root, artifact.filename)
+    let stat
+    try { stat = fs.statSync(fullPath) } catch { continue }
+    if (!stat.isFile() || stat.size !== expectedSize) continue
+    return {
+      fullPath,
+      filename: wantedName,
+      mimeType: localFileMimeType(wantedName),
+      size: stat.size,
+      etag: `"stored-${encodeURIComponent(String(artifact.id))}-${stat.size}-${Math.floor(stat.mtimeMs)}"`,
+      storedCopy: true,
+    }
+  }
+  return null
+}
+
 function getReceiptLocalFile({
   userId,
   sessionId,
@@ -117,17 +158,30 @@ function getReceiptLocalFile({
   if (!path.isAbsolute(receiptPath)) {
     throw serviceError('文件链接无效', 404, `${codePrefix}_PATH_INVALID`)
   }
-  const resolved = resolveAuthorizedLocalPath({
-    userId,
-    rawPath: receiptPath,
-    write: false,
-    allowWorkspace: true,
-  })
+  // Only a file that is gone falls back to the kept copy; a path the user no
+  // longer authorizes is still refused.
+  const missing = () => {
+    const stored = storedCopyOfReceipt({ userId, sessionId: message?.sessionId || sessionId, turnId, receipt })
+    if (stored) return stored
+    throw serviceError('原文件已被移动或删除，也没有保存过它的副本', 404, `${codePrefix}_MISSING`)
+  }
+  let resolved
+  try {
+    resolved = resolveAuthorizedLocalPath({
+      userId,
+      rawPath: receiptPath,
+      write: false,
+      allowWorkspace: true,
+    })
+  } catch (error) {
+    if (error?.code === 'PATH_NOT_FOUND') return missing()
+    throw error
+  }
   let stat
   try {
     stat = fs.statSync(resolved.fullPath)
   } catch {
-    throw serviceError('文件不存在或无法读取', 404, `${codePrefix}_MISSING`)
+    return missing()
   }
   if (!stat.isFile()) throw serviceError('链接目标不是文件', 400, `${codePrefix}_NOT_FILE`)
   const filename = path.basename(resolved.fullPath)

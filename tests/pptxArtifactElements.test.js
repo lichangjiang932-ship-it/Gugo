@@ -273,3 +273,22 @@ test('legacy layouts retain every paragraph, including long text, extra split co
   const { zip: processZip } = await packageFor([{ title: 'Process', layout: 'process', bullets: ['Inspect: http://example.test/a:b - preserve every delimiter'] }])
   assert.match(await processZip.file('ppt/slides/slide1.xml').async('string'), /http:\/\/example.test\/a:b - preserve every delimiter/)
 })
+
+test('table colours written on the table itself are used, not rejected', async () => {
+  // A deck rejected for three colour fields one level too deep was regenerated
+  // whole; now the table's own colours apply, and the element's still win.
+  const { zip } = await packageFor([{
+    title: 'Nested table colours',
+    elements: [
+      { type: 'table', x: 0.05, y: 0.10, w: 0.60, h: 0.50, font_size: 14,
+        table: { header: true, header_fill: '1B3A5C', header_color: 'FFFFFF', line_color: '7B6B9E',
+          rows: [['Model', 'Score'], ['Opus', 89.9]] } },
+      { type: 'table', x: 0.05, y: 0.65, w: 0.60, h: 0.30, font_size: 14, header_fill: 'CC2200',
+        table: { header: true, header_fill: '1B3A5C', rows: [['A', 'B'], ['1', '2']] } },
+    ],
+  }])
+  const slide = await zip.file('ppt/slides/slide1.xml').async('string')
+  assert.match(slide, /1B3A5C/u)
+  assert.match(slide, /7B6B9E/u)
+  assert.match(slide, /CC2200/u, 'the element-level colour wins over the nested one')
+})

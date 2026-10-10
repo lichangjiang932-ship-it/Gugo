@@ -1,8 +1,9 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 
 import useSessionChangesReview from './useSessionChangesReview.js'
 import usePreviewAutoOpen from './usePreviewAutoOpen.js'
 import useWorkbenchShortcuts from './useWorkbenchShortcuts.js'
+import { openDock } from './dock/dockStore.js'
 
 /**
  * What a reader can bring up around the transcript: the change review, the
@@ -18,7 +19,6 @@ export default function useChatOverlays({
   isGenerating = false,
   messages = [],
   sessionId = '',
-  setPlanVisible,
   setWorkbenchOpen,
   setWorkbenchTab,
   workspacePath = '',
@@ -27,6 +27,24 @@ export default function useChatOverlays({
     setWorkbenchTab?.('browser')
     setWorkbenchOpen?.(true)
   }, [setWorkbenchOpen, setWorkbenchTab])
+
+  const openDiffReview = useCallback(() => {
+    // The review opens *beside* what is already up, not in place of it. It used
+    // to close the tool panel on the reasoning that two panels competed for the
+    // same edge; sitting the dock next to the tool panel is what the layout is
+    // for, so a reader comparing a change against the panel they were reading
+    // no longer loses the panel to see the change.
+    openDock()
+  }, [])
+
+  // The chat's change chip asks for the docked review panel through this event,
+  // so the header carries no workbench state of its own and the docked panel and
+  // the header chip can never disagree about which surface is showing.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    window.addEventListener('chat-workbench:open-diff', openDiffReview)
+    return () => window.removeEventListener('chat-workbench:open-diff', openDiffReview)
+  }, [openDiffReview])
 
   useWorkbenchShortcuts({
     onOpenPreview: openPreview,
@@ -42,7 +60,9 @@ export default function useChatOverlays({
 
   const sessionChangesReview = useSessionChangesReview({
     messages,
-    onOpen: () => setPlanVisible?.(false),
+    // No `onOpen` any more: opening the review used to close the task list. The
+    // two answer different questions about the same session, so reading one of
+    // them should not cost the reader the other.
     // The diff opens in the main area's preview pane, not in the sidebar: the
     // review is about this conversation, and the sidebar is a different tool.
     // The pane only exists while the side panel is open, so it is opened first,

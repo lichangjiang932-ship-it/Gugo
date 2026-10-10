@@ -222,6 +222,7 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
           onToolCallProgress: async (progress) => {
             context.assertActive()
             await context.heartbeat.recordToolProgress?.(progress)
+            await context.onToolCallStarted?.(progress)
           },
         })
       },
@@ -370,6 +371,7 @@ async function callTrackedModel(s, options) {
     allowOverBudget = false,
     onTextDelta,
     onReasoningDelta,
+    onToolCallStarted = null,
     requestSignal = s.signal,
     assertRequestActive = null,
   } = options
@@ -417,6 +419,7 @@ async function callTrackedModel(s, options) {
     budgetOptions: { allowOverBudget },
     preparedInvocation: null,
     forcedFallbackUsed: false,
+    onToolCallStarted: typeof onToolCallStarted === 'function' ? onToolCallStarted : null,
   }
   try {
     assertActive()

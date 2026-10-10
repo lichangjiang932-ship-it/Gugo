@@ -5,6 +5,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { aggregateLiveEval, liveEvalComparison, renderComparisonTable } from './liveEvalMetrics.mjs'
 
 const MAX_TASKS = 100
 const MAX_CAPTURE_BYTES = 8 * 1024 * 1024
@@ -406,9 +407,13 @@ export async function runLiveEvaluation({
       metrics: runMetrics(results.flatMap((item) => item.runs)),
       results,
     }
+    // Suite-level rates (success, pass@1, pass@k, false-completion) so a change
+    // can be judged by one number instead of inferred from raw counts.
+    report.summary = aggregateLiveEval(report)
     if (baselinePath) {
       const baseline = JSON.parse(await fs.readFile(path.resolve(baselinePath), 'utf8'))
       report.baseline = compareWithBaseline(report, baseline, { allowFingerprintChange })
+      report.comparison = liveEvalComparison(report, baseline, report.baseline)
     }
     if (outputPath) await fs.writeFile(path.resolve(outputPath), `${JSON.stringify(report, null, 2)}\n`)
     return report
@@ -428,6 +433,15 @@ async function main() {
     keep: args.keep,
   })
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+  // Human-readable rates go to stderr so stdout stays parseable JSON.
+  if (report.comparison) {
+    process.stderr.write(`\n${renderComparisonTable(report.comparison)}\n`)
+  } else if (report.summary) {
+    const { summary } = report
+    process.stderr.write(`\n[live-eval] success ${summary.successRate}  pass@1 ${summary.passAt1}  `
+      + `pass@k ${summary.passAtK}  false-completion ${summary.falseCompletionRate}  `
+      + `(tasks ${summary.totalTasks}, strict ${summary.strictPassed})\n`)
+  }
   if (report.failed > 0
     || report.baseline?.status === 'regressed'
     || report.baseline?.status === 'not_comparable') {

@@ -241,7 +241,7 @@ export default function ChatSplit() {
   } = usePlanCardState({ activeSession })
 
   const { openPreview, sessionChangesReview } = useChatOverlays({
-    dispatch, isGenerating, messages, sessionId: activeSessionId || '', setPlanVisible,
+    dispatch, isGenerating, messages, sessionId: activeSessionId || '',
     setWorkbenchOpen, setWorkbenchTab, workspacePath: selectedWorkspacePath || activeSession?.workspacePath || '',
   })
   return <ChatSplitView

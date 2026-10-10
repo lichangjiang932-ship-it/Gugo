@@ -17,6 +17,7 @@ const translations = {
       "readOnly": "只读审查：这里不会提交或推送，提交请用终端或 Git 工作台。",
       "expand": "就地展开这个文件的改动",
       "openDiff": "在主区查看 {path} 的改动",
+      "toggleTree": "显示全部改动文件",
       "close": "关闭改动清单"
     },
     "contextUsage": {
@@ -129,6 +130,7 @@ const translations = {
       "readOnly": "Read-only review: nothing here commits or pushes. Use the terminal or the Git workbench to commit.",
       "expand": "Expand this file's change in place",
       "openDiff": "Read the change to {path} in the main area",
+      "toggleTree": "Show all changed files",
       "close": "Close the change list"
     },
     "contextUsage": {

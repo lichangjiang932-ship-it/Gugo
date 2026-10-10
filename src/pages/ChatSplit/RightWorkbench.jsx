@@ -19,6 +19,7 @@ import {
 } from './rightWorkbench/rightWorkbenchLayout.js'
 
 export default function RightWorkbench({
+  embedded = false,
   sessionId = '',
   todos = [],
   messages = [],
@@ -153,14 +154,15 @@ export default function RightWorkbench({
     <aside
       id="right-workbench"
       data-testid="right-workbench"
-      className="relative flex h-full min-w-0 max-w-[calc(100vw-60px)] shrink flex-row overflow-hidden border-l border-ink/10 bg-paper"
-      style={{ width: `${panelWidth}px` }}
+      className={`relative flex h-full min-w-0 flex-row overflow-hidden bg-paper ${embedded ? 'w-full' : 'max-w-[calc(100vw-60px)] shrink border-l border-ink/10'}`}
+      style={embedded ? undefined : { width: `${panelWidth}px` }}
     >
       {/* One row of content under a header that carries the tool switch — the
           panel no longer hugs the screen edge with a vertical strip of its own. */}
       <div className="right-workbench-surface flex min-w-0 flex-1 flex-col overflow-hidden">
         <RightWorkbenchFrame
           beginResize={beginResize}
+          embedded={embedded}
           isGenerating={isGenerating}
           onResetWidth={resetWidth}
           panelWidth={panelWidth}

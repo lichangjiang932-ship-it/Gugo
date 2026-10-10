@@ -8,6 +8,7 @@ import { dispatchCodingAgentTool } from '../../../adapters/codingAgentTools.js'
 import { dispatchFsShellTool } from '../../../adapters/fsShellTools.js'
 import { dispatchGitTool } from '../../../adapters/gitWorkbench.js'
 import { dispatchGitHistoryTool, isGitHistoryTool } from '../../../adapters/gitHistoryTools.js'
+import { trackTodos } from '../../todoTracker.js'
 import { dispatchImageTool } from '../../../adapters/imageTools.js'
 import { dispatchMediaTool } from '../../../adapters/mediaTools.js'
 import { dispatchMemoryTool } from '../../../utils/memoryTools.js'
@@ -278,7 +279,7 @@ async function executeFileOrMediaTool(context) {
       }
     }
   }
-  if (['grep_code', 'find_symbol', 'list_imports'].includes(name)) {
+  if (['grep_code', 'find_symbol', 'list_imports', 'find_files'].includes(name)) {
     try { return await dispatchCodeSearchTool(name, args || {}, { userId: job?.userId || null }) }
     catch (error) { return { ok: false, error: error?.message || String(error) } }
   }
@@ -385,10 +386,18 @@ async function executeAgentOrExternalTool(context, registeredTool) {
   }
   if (name === 'manage_todos') {
     const todos = normalizedTodos(args)
+    // Track host-side so a finished todo quietly moving back to "in progress"
+    // is surfaced as drift the model must explain, instead of vanishing into
+    // chat history as a bare echo.
+    const { regressions } = trackTodos(job?.sessionId, todos)
     return {
       ok: true,
       todos,
       summary: `共 ${todos.length} 项,已完成 ${todos.filter((todo) => todo.status === 'completed').length} 项`,
+      ...(regressions.length > 0 ? {
+        regressions,
+        note: '有已完成的待办被改回未完成——说明真实进展,或修正状态。',
+      } : {}),
     }
   }
   if (CONNECTOR_TOOL_NAMES.includes(name)) {

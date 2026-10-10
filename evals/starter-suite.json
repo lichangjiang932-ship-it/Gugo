@@ -61,6 +61,38 @@
       "mode": "bypass",
       "timeoutMs": 600000,
       "verify": [{ "script": "./verifiers/project-path-repair.mjs" }]
+    },
+    {
+      "id": "spec-template-format-repair",
+      "prompt": "Repair src/template.js. formatMessage(template, values) must replace {key} with String(values[key]) when present, leave a {key} with no value unchanged instead of throwing, render {{ as a literal { and }} as a literal }, and insert substituted values literally without re-scanning them for placeholders. Do not mutate template or values. Run the project checks.",
+      "workspace": "./fixtures/template-format-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/template-format-repair.mjs" }]
+    },
+    {
+      "id": "spec-dedupe-merge-repair",
+      "prompt": "Repair the shared record merging used by src/records.js and src/summary.js. mergeById(left, right) must return records with unique ids, with a record from right winning when an id appears in both, ordered by first appearance in left then new right ids. summarize(left, right) must report {count, total} over the merged unique records, summing amount (missing or non-numeric counts as 0). Do not mutate the inputs. Run the project checks.",
+      "workspace": "./fixtures/dedupe-merge-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/dedupe-merge-repair.mjs" }]
+    },
+    {
+      "id": "spec-state-machine-repair",
+      "prompt": "Repair src/machine.js. nextStatus(status, event) returns the destination for a valid transition; an invalid event for a live status returns null (not the same status); a terminal status (delivered, cancelled, refunded) returns null for any event; an unknown status returns null. Preserve the exported function name and run the project checks.",
+      "workspace": "./fixtures/state-machine-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/state-machine-repair.mjs" }]
+    },
+    {
+      "id": "spec-interval-overlap-repair",
+      "prompt": "Repair src/interval.js. overlaps(a, b) for closed intervals [start, end] returns true when they share any point, so touching at an endpoint counts as overlap. Overlap and containment are true; disjoint is false. A malformed interval (non-numeric, or start > end) throws. Preserve the exported function name and run the project checks.",
+      "workspace": "./fixtures/interval-overlap-repair",
+      "mode": "bypass",
+      "timeoutMs": 600000,
+      "verify": [{ "script": "./verifiers/interval-overlap-repair.mjs" }]
     }
   ]
 }

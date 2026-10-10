@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gugo UI 改后样式预览</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   改后设计令牌 — 与 src/index.css 目标态一一对应
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  /* 间距：严格 4/8 基线 */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+
+  /* 字号：取消 9/10/11px，最小 12px */
+  --type-page: 28px; --type-section: 20px; --type-body: 15px;
+  --type-ui: 14px;    --type-meta: 12px;
+
+  /* 圆角：3 级（原 5 套） */
+  --r-control: 10px; --r-card: 16px; --r-pill: 999px;
+
+  /* 动效：新增令牌（原 4 处 duration-200 各自为政） */
+  --dur-fast: 120ms; --dur-base: 180ms; --dur-slow: 240ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* 阴影：4 级语义（原 6 种配方） */
+  --sh-card: 0 1px 2px rgba(20,24,31,0.04), 0 1px 3px rgba(20,24,31,0.03);
+  --sh-raised: 0 2px 4px rgba(20,24,31,0.04), 0 4px 12px rgba(20,24,31,0.05);
+  --sh-menu: 0 8px 24px rgba(20,24,31,0.10), 0 2px 6px rgba(20,24,31,0.05);
+  --sh-overlay: 0 24px 60px rgba(20,24,31,0.16), 0 8px 20px rgba(20,24,31,0.08);
+
+  /* 颜色：修正对比度后 */
+  --paper: #F7F8FA; --paper-2: #EEF0F3; --surface: #FFFFFF;
+  --ink: #1F2937; --ink-soft: #4B5563;
+  --ink-fade: #5B6472;      /* 原 #6B7280 → 提深，对比度 5.63:1 */
+  --border-subtle: rgba(31,41,55,0.075);   /* 统一三栏分割线（原 0.055 vs 0.10 双轨） */
+  --border-default: rgba(31,41,55,0.13);
+  --border-strong: rgba(31,41,55,0.22);
+  --accent: #16A34A;
+  --accent-hover: #15803D;  /* 原 /90 叠在浅背景上偏淡 */
+  --accent-press: #166534;  /* 新增：按下态 */
+  --accent-ink: #166534;    /* 正文绿，对比度 6.71:1（原 #16A34A 仅 3.10:1） */
+  --accent-ring: rgba(22,163,74,0.16);
+  --danger: #B42318; --focus: #2563EB;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI",
+             "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Noto Sans Mono CJK SC", ui-monospace, Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-ui);
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  padding: 40px 32px 80px;
+}
+
+/* 仅对拉丁字母加字距 —— 原全局 0.004em 破坏汉字骨架 */
+.latin { letter-spacing: 0.01em; }
+
+.page-head { max-width: 1180px; margin: 0 auto 40px; }
+.page-head h1 { font-size: var(--type-page); font-weight: 600; margin-bottom: 8px; }
+.page-head p { font-size: var(--type-body); color: var(--ink-soft); max-width: 68ch; }
+.page-head code {
+  font-family: var(--font-mono); font-size: 13px;
+  background: var(--paper-2); padding: 2px 6px; border-radius: 5px;
+}
+
+.section {
+  max-width: 1180px; margin: 0 auto 48px;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-card);
+  box-shadow: var(--sh-card);
+  overflow: hidden;
+}
+.section > header {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap;
+}
+.section > header h2 { font-size: var(--type-section); font-weight: 600; }
+.section > header .tag {
+  font-family: var(--font-mono); font-size: 11px;
+  padding: 3px 8px; border-radius: var(--r-pill);
+  background: var(--accent-ring); color: var(--accent-ink); font-weight: 500;
+}
+.section > header .tag.warn { background: rgba(180,35,24,0.10); color: var(--danger); }
+.section > header p { font-size: var(--type-meta); color: var(--ink-fade); flex: 1; min-width: 240px; }
+.section > .body { padding: var(--sp-5); }
+
+/* ═══ 组件 1：Button ═══ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px; border-radius: var(--r-control);
+  font-weight: 500; white-space: nowrap;
+  border: 1px solid transparent;
+  cursor: pointer; user-select: none;
+  transition: background-color var(--dur-base) var(--ease),
+              border-color var(--dur-base) var(--ease),
+              color var(--dur-base) var(--ease),
+              transform var(--dur-fast) var(--ease),
+              box-shadow var(--dur-base) var(--ease);
+}
+.btn:focus-visible {
+  outline: 2px solid rgba(37,99,235,0.45);
+  outline-offset: 2px;
+}
+.btn:disabled { cursor: not-allowed; opacity: 0.5; }
+
+/* ← 新增：按下态。此前 547 个按钮里 546 个没有 */
+.btn:active:not(:disabled) { transform: scale(0.975); }
+
+.btn.sm { height: 32px; padding: 0 10px; font-size: var(--type-meta); gap: 6px; }
+.btn.md { height: 36px; padding: 0 12px; font-size: var(--type-ui); }
+.btn.lg { height: 40px; padding: 0 16px; font-size: var(--type-ui); }
+.btn svg { flex-shrink: 0; }
+.btn.sm svg { width: 14px; height: 14px; }
+.btn.md svg, .btn.lg svg { width: 16px; height: 16px; }
+
+.btn.primary { background: var(--accent); color: #000; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn.primary:active:not(:disabled) { background: var(--accent-press); transform: scale(0.975); }
+
+.btn.secondary { background: var(--surface); border-color: var(--border-default); color: var(--ink-soft); }
+.btn.secondary:hover:not(:disabled) { background: var(--paper-2); color: var(--ink); border-color: var(--border-strong); }
+
+.btn.ghost { background: transparent; color: var(--ink-soft); }
+.btn.ghost:hover:not(:disabled) { background: var(--paper-2); color: var(--ink); }
+
+.btn.danger { background: var(--danger); color: #fff; }
+.btn.danger:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* 深色主按钮：中文界面下纯绿底黑字刺眼，改为墨色 */
+.btn.ink { background: var(--ink); color: var(--paper); }
+.btn.ink:hover:not(:disabled) { background: var(--ink-soft); }
+
+.btn-row { display: flex; gap: var(--sp-3); flex-wrap: wrap; align-items: center; }
+.variant-demo { display: grid; grid-template-columns: 150px 1fr; gap: var(--sp-3) var(--sp-4); align-items: center; }
+.variant-demo dt { font-size: var(--type-meta); color: var(--ink-fade); font-family: var(--font-mono); }
+.variant-demo dd { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+
+.size-demo { display: flex; gap: var(--sp-4); align-items: center; flex-wrap: wrap; }
+.size-demo figure { text-align: center; }
+.size-demo figcaption { font-size: 11px; color: var(--ink-fade); margin-top: 6px; font-family: var(--font-mono); }
+
+.state-hint {
+  margin-top: var(--sp-4); padding: var(--sp-3) var(--sp-4);
+  background: var(--paper-2); border-radius: var(--r-control);
+  font-size: var(--type-meta); color: var(--ink-soft);
+  border-left: 3px solid var(--accent);
+}
+
+/* ═══ 组件 2：Toggle ═══ */
+.toggle {
+  position: relative; border-radius: var(--r-pill);
+  border: 1px solid transparent; cursor: pointer;
+  transition: background-color var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease);
+  flex-shrink: 0;
+}
+.toggle:focus-visible { outline: 2px solid rgba(37,99,235,0.45); outline-offset: 2px; }
+.toggle:disabled { cursor: not-allowed; opacity: 0.5; }
+.toggle.md { width: 44px; height: 24px; }
+.toggle.sm { width: 36px; height: 20px; }
+.toggle.on { background: var(--accent); }
+.toggle.off { background: var(--ink-fade); opacity: 0.32; border-color: var(--border-default); }
+.toggle .thumb {
+  position: absolute; top: 2px; left: 2px;
+  background: var(--surface); border-radius: var(--r-pill);
+  box-shadow: 0 1px 2px rgba(20,24,31,0.2);
+  transition: transform var(--dur-base) var(--ease);
+}
+.toggle.md .thumb { width: 20px; height: 20px; }
+.toggle.sm .thumb { width: 16px; height: 16px; }
+.toggle.on.md .thumb { transform: translateX(20px); }
+.toggle.on.sm .thumb { transform: translateX(16px); }
+
+/* ═══ 组件 3：Field ═══ */
+.field { display: flex; flex-direction: column; gap: 6px; max-width: 380px; }
+.field > label { font-size: var(--type-meta); font-weight: 500; color: var(--ink-soft); }
+.field .control {
+  width: 100%; min-height: 36px; padding: 8px 12px;
+  border: 1px solid var(--border-default); border-radius: var(--r-control);
+  background: var(--paper); color: var(--ink); font-size: var(--type-ui);
+  font-family: inherit;
+  transition: border-color var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease);
+}
+.field .control::placeholder { color: var(--ink-fade); }
+/* ← 焦点环：原 ProviderEditor 整表无此项 */
+.field .control:focus {
+  outline: none; border-color: var(--focus);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.14);
+}
+.field .hint { font-size: var(--type-meta); color: var(--ink-fade); }
+.field .err { font-size: var(--type-meta); color: var(--danger); }
+.field.error .control { border-color: rgba(180,35,24,0.55); }
+.field.error .control:focus { box-shadow: 0 0 0 3px rgba(180,35,24,0.13); }
+textarea.control { min-height: 76px; resize: vertical; line-height: 1.6; }
+
+/* ═══ 组件 4：Card / EmptyState ═══ */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-4); }
+.card {
+  background: var(--surface); border: 1px solid var(--border-subtle);
+  border-radius: var(--r-card); padding: var(--sp-4);
+  transition: border-color var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease),
+              transform var(--dur-base) var(--ease);
+}
+.card.hover:hover { border-color: var(--border-strong); box-shadow: var(--sh-raised); transform: translateY(-2px); }
+.card h3 { font-size: var(--type-body); font-weight: 600; margin-bottom: 6px; }
+.card p { font-size: var(--type-meta); color: var(--ink-soft); line-height: 1.6; }
+
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-3); padding: var(--sp-7) var(--sp-5); text-align: center;
+  border: 1px dashed var(--border-default); border-radius: var(--r-card);
+  background: var(--paper);
+}
+.empty .glyph {
+  width: 44px; height: 44px; border-radius: var(--r-pill);
+  background: var(--paper-2); color: var(--ink-fade);
+  display: grid; place-items: center;
+}
+.empty .glyph svg { width: 20px; height: 20px; }
+.empty h3 { font-size: var(--type-body); font-weight: 600; }
+.empty p { font-size: var(--type-meta); color: var(--ink-soft); max-width: 38ch; }
+
+/* ═══ 三栏骨架：统一分割线 ═══ */
+.shell {
+  display: grid; grid-template-columns: 280px 1fr 320px;
+  height: 440px; border: 1px solid var(--border-default);
+  border-radius: var(--r-card); overflow: hidden; background: var(--surface);
+}
+.shell > aside, .shell > main, .shell > section { overflow: hidden; }
+/* ← 三栏统一使用同一个 --border-subtle，原左侧 0.055 / 右侧 0.10 */
+.shell > aside { border-right: 1px solid var(--border-subtle); background: #F1F3F5; padding: var(--sp-3); }
+.shell > main { display: flex; flex-direction: column; }
+.shell > section { border-left: 1px solid var(--border-subtle); padding: var(--sp-4); background: #FAFAFB; }
+
+.rail-brand { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-4); }
+.rail-brand .mark {
+  width: 28px; height: 28px; border-radius: 8px; background: var(--ink);
+  color: var(--paper); display: grid; place-items: center;
+  font-size: 13px; font-weight: 600;
+}
+.rail-brand b { font-size: var(--type-ui); font-weight: 600; }
+
+.rail-item {
+  display: flex; align-items: center; gap: var(--sp-2);
+  height: 36px; padding: 0 var(--sp-2); border-radius: var(--r-control);
+  font-size: var(--type-ui); color: var(--ink-soft); margin-bottom: 2px;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.rail-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+.rail-item:hover { background: rgba(31,41,55,0.045); color: var(--ink); }
+.rail-item.on { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: var(--sh-card); }
+
+.composer {
+  margin: var(--sp-3) var(--sp-4) var(--sp-4);
+  border: 1px solid var(--border-subtle); border-radius: 22px;
+  background: var(--surface); padding: var(--sp-3) var(--sp-4);
+  box-shadow: var(--sh-raised);
+  transition: border-color var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease);
+}
+.composer:focus-within { border-color: rgba(37,99,235,0.45); box-shadow: 0 0 0 3px rgba(37,99,235,0.08), var(--sh-raised); }
+.composer .ph { font-size: var(--type-ui); color: var(--ink-fade); padding: 6px 0 14px; }
+.composer .bar { display: flex; align-items: center; gap: var(--sp-2); }
+
+.msgs { flex: 1; padding: var(--sp-5) var(--sp-4); overflow: auto; }
+.msg { margin-bottom: var(--sp-5); }
+.msg.user { display: flex; justify-content: flex-end; }
+.msg.user .bubble {
+  background: var(--paper-2); border-radius: var(--r-card);
+  padding: var(--sp-2) var(--sp-3); font-size: var(--type-ui);
+  max-width: 78%; border: 1px solid var(--border-subtle);
+}
+.msg .who { font-size: var(--type-meta); color: var(--ink-fade); margin-bottom: 6px; }
+.msg .txt { font-size: var(--type-body); line-height: 1.68; }
+
+.round {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; margin-bottom: 4px;
+  font-family: var(--font-mono); font-size: 13px; color: #5B6472;
+  border-top: 1px solid var(--border-subtle); opacity: 0.75;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.round:hover { opacity: 1; }
+
+code.inline {
+  font-family: var(--font-mono); font-size: 12.5px;
+  background: var(--paper-2); padding: 1.5px 5px; border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+}
+
+/* ═══ 字号与对比度对照 ═══ */
+.type-scale { display: flex; flex-direction: column; gap: var(--sp-3); }
+.scale-row { display: grid; grid-template-columns: 120px 1fr; gap: var(--sp-4); align-items: baseline; }
+.scale-row .lbl { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-fade); }
+.scale-row .old { color: #9AA1AC; text-decoration: line-through; text-decoration-color: rgba(180,35,24,0.4); font-size: 9px; }
+.scale-row .new { color: var(--ink); }
+
+.contrast-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-3); }
+.cbox { padding: var(--sp-3); border-radius: var(--r-control); border: 1px solid var(--border-subtle); }
+.cbox .swatch { height: 34px; border-radius: 7px; margin-bottom: 8px; display: flex; align-items: center; padding: 0 10px; font-size: var(--type-meta); }
+.cbox .meta { font-family: var(--font-mono); font-size: 11px; color: var(--ink-fade); display: flex; justify-content: space-between; }
+.pass { color: var(--accent-ink); font-weight: 600; }
+.fail { color: var(--danger); font-weight: 600; }
+
+/* ═══ 动效令牌 ═══ */
+.motion-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--sp-4); }
+.motion-item { text-align: center; }
+.motion-box {
+  width: 100%; height: 56px; border-radius: var(--r-control);
+  background: var(--paper-2); border: 1px solid var(--border-subtle);
+  display: grid; place-items: center; margin-bottom: 8px;
+}
+.motion-dot { width: 22px; height: 22px; border-radius: var(--r-pill); background: var(--accent); }
+.motion-item.fast .motion-dot { animation: slide 120ms var(--ease) infinite alternate; }
+.motion-item.base .motion-dot { animation: slide 180ms var(--ease) infinite alternate; }
+.motion-item.slow .motion-dot { animation: slide 240ms var(--ease) infinite alternate; }
+@keyframes slide { from { transform: translateX(-32px); } to { transform: translateX(32px); } }
+.motion-item figcaption { font-family: var(--font-mono); font-size: 11px; color: var(--ink-fade); }
+
+.note {
+  margin-top: var(--sp-4); padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-control); font-size: var(--type-meta); line-height: 1.65;
+}
+.note.ok { background: var(--accent-ring); border-left: 3px solid var(--accent); color: #14532D; }
+.note.warn { background: rgba(180,35,24,0.07); border-left: 3px solid var(--danger); color: #7F1D1D; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+@media (max-width: 900px) { .shell { grid-template-columns: 1fr; height: auto; } }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>Gugo 改后样式预览</h1>
+  <p>
+    依据 <code>docs/design/UI_VISUAL_POLISH_PLAN.md</code> 的目标态。全部数值对应真实令牌，
+    非示意稿。三个核心变化：<strong>按下态回来了</strong>、<strong>字号不再有 9/10px</strong>、
+    <strong>正文绿从 3.10:1 提到 6.71:1</strong>。
+  </p>
+</div>
+
+<!-- ═══ 1. Button ═══ -->
+<section class="section">
+  <header>
+    <h2>Button</h2>
+    <span class="tag">7 种高度 → 3 种</span>
+    <p>md(36px) 与现有 .btn-primary 一致，迁移零视觉变更</p>
+  </header>
+  <div class="body">
+    <dl class="variant-demo">
+      <dt>primary</dt>
+      <dd>
+        <button class="btn primary sm">保存</button>
+        <button class="btn primary md">发送</button>
+        <button class="btn primary lg">允许一次</button>
+        <button class="btn primary md" disabled>已禁用</button>
+      </dd>
+      <dt>secondary</dt>
+      <dd>
+        <button class="btn secondary sm">取消</button>
+        <button class="btn secondary md">重试</button>
+        <button class="btn secondary lg">安装连接器</button>
+      </dd>
+      <dt>ghost</dt>
+      <dd>
+        <button class="btn ghost sm">详情</button>
+        <button class="btn ghost md">查看日志</button>
+        <button class="btn ghost lg">管理模型</button>
+      </dd>
+      <dt>danger</dt>
+      <dd>
+        <button class="btn danger sm">删除</button>
+        <button class="btn danger md">拒绝并投递</button>
+      </dd>
+      <dt>ink</dt>
+      <dd>
+        <button class="btn ink sm">次要</button>
+        <button class="btn ink md">新增 Provider</button>
+        <button class="btn ink md" disabled>加载中…</button>
+      </dd>
+    </dl>
+
+    <div style="height:24px"></div>
+
+    <div class="size-demo">
+      <figure><button class="btn secondary sm">sm 32px</button><figcaption>sm · 14px icon</figcaption></figure>
+      <figure><button class="btn secondary md">md 36px</button><figcaption>md · 16px icon</figcaption></figure>
+      <figure><button class="btn secondary lg">lg 40px</button><figcaption>lg · 16px icon</figcaption></figure>
+    </div>
+
+    <div class="state-hint">
+      <strong>关键：</strong>每个按钮都有 <code>:active</code> 缩放 0.975 + 背景加深，
+      过渡 120ms。此前 547 个按钮中 546 个按下去纹丝不动。图标尺寸由 size 自动约束，
+      不再出现同一按钮内 h-3 与 h-3.5 并存。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 2. Toggle ═══ -->
+<section class="section">
+  <header>
+    <h2>Toggle</h2>
+    <span class="tag">4 套实现 → 1 套</span>
+    <span class="tag warn">顺带修 bug</span>
+    <p>轨道 40×20 / 44×24 / 38×22 三种 → 统一 44×24（md）</p>
+  </header>
+  <div class="body">
+    <div class="btn-row" style="gap:24px; align-items:center">
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="toggle md on" role="switch" aria-checked="true" aria-label="示例"></button>
+        <span style="font-size:14px">md 开启</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="toggle md off" role="switch" aria-checked="false" aria-label="示例"></button>
+        <span style="font-size:14px">md 关闭</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="toggle sm on" role="switch" aria-checked="true" aria-label="示例"></button>
+        <span style="font-size:14px">sm 开启</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="toggle md on" disabled aria-label="示例"></button>
+        <span style="font-size:14px;color:var(--ink-fade)">禁用</span>
+      </div>
+    </div>
+    <div class="state-hint">
+      <strong>顺带修掉的 bug：</strong><code>PermSwitch</code> 原本缺 <code>type="button"</code>，
+      在 form 内点击会误提交。新组件默认 <code>type="button"</code>。
+      <code>aria-pressed</code> 升级为语义正确的 <code>role="switch"</code> + <code>aria-checked</code>。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 3. Field ═══ -->
+<section class="section">
+  <header>
+    <h2>Field</h2>
+    <span class="tag">焦点环 0 → 3px</span>
+    <p>替换 ProviderEditor.jsx:13 的 [&_input:] 任意变体万能绕过</p>
+  </header>
+  <div class="body">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px">
+      <div class="field">
+        <label for="d1">API Base URL</label>
+        <input class="control" id="d1" placeholder="https://api.example.com/v1" />
+        <span class="hint">留空则使用服务商默认地址</span>
+      </div>
+      <div class="field">
+        <label for="d2">API Key</label>
+        <input class="control" id="d2" type="password" value="sk-abc123456789" />
+        <span class="hint">存储在本地，不上传</span>
+      </div>
+      <div class="field error">
+        <label for="d3">模型名称 <span style="color:var(--danger)">*</span></label>
+        <input class="control" id="d3" value="" placeholder="必填" />
+        <span class="err">模型名称不能为空</span>
+      </div>
+      <div class="field">
+        <label for="d4">补充说明</label>
+        <textarea class="control" id="d4" placeholder="可选"></textarea>
+      </div>
+    </div>
+    <div class="state-hint">
+      原 <code>ProviderEditor</code> 用 <code>[&amp;input]:</code> <code>[&amp;select]:</code> <code>[&amp;textarea]:</code>
+      任意变体绕过组件，副作用是<strong>整张表单没有任何可见焦点环</strong>，违反 WCAG 2.4.7。
+      新增 <code>hint</code> prop —— 此前 12 个文件里的灰色小字都是裸 p 标签。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 4. 三栏骨架 ═══ -->
+<section class="section">
+  <header>
+    <h2>三栏布局</h2>
+    <span class="tag">分割线双轨 → 单一来源</span>
+    <p>左栏 0.055 与右栏 0.10 合并为 --border-subtle</p>
+  </header>
+  <div class="body">
+    <div class="shell">
+      <aside>
+        <div class="rail-brand"><span class="mark">G</span><b>Gugo</b></div>
+        <div class="rail-item on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>对话</div>
+        <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>技能</div>
+        <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2v20M2 12h20"/></svg>任务</div>
+        <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 15 4.6"/></svg>接入</div>
+        <div class="rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>设置</div>
+      </aside>
+
+      <main>
+        <div class="msgs">
+          <div class="msg user">
+            <div class="bubble">帮我看一下 index.css 的层级有没有问题</div>
+          </div>
+          <div class="msg">
+            <div class="who">Gugo</div>
+            <div class="round">› read  src/index.css</div>
+            <div class="round">› grep  z-index</div>
+            <div class="txt">
+              层级确实有问题。规范只定义了 <code class="inline">overlay/modal/toast</code> 三级，
+              但实际散落 11 种，而且 <code class="inline">.chat-session-header</code> 只有 20，
+              反而低于 overlay 的 40。
+            </div>
+          </div>
+        </div>
+        <div class="composer">
+          <div class="ph">描述你的任务…</div>
+          <div class="bar">
+            <button class="btn ghost sm">@ 引用</button>
+            <button class="btn ghost sm">模型</button>
+            <button class="btn ghost sm">权限</button>
+            <div style="flex:1"></div>
+            <button class="btn primary sm">发送</button>
+          </div>
+        </div>
+      </main>
+
+      <section>
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">工作台</h3>
+        <div class="card hover" style="padding:12px">
+          <h3 style="font-size:13px">Plan</h3>
+          <p style="margin-bottom:10px">3 / 5 步已完成</p>
+          <div style="height:5px;background:var(--paper-2);border-radius:999px;overflow:hidden">
+            <div style="width:60%;height:100%;background:var(--accent)"></div>
+          </div>
+        </div>
+        <div class="card" style="padding:12px;margin-top:10px">
+          <h3 style="font-size:13px">Git</h3>
+          <p>3 个文件已修改</p>
+        </div>
+      </section>
+    </div>
+    <div class="state-hint">
+      行高全部落在 36px（rail-item 与 md 按钮同高，可点击区域对齐）；
+      间距只用 4/8 倍数，原 <code>LeftRail.css:40</code> 的离群 <code>gap:18px</code> 已归基线。
+      输入区聚焦时边框转蓝并浮起 3px 焦点环。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 5. 空状态 ═══ -->
+<section class="section">
+  <header>
+    <h2>EmptyState</h2>
+    <span class="tag warn">此前 0 个</span>
+    <p>227 个组件中 empty 关键词仅 1 处</p>
+  </header>
+  <div class="body">
+    <div class="empty">
+      <span class="glyph">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      </span>
+      <h3>还没有接入任何连接器</h3>
+      <p>连接 GitHub、Notion 或 Slack，让 Gugo 能读写你的工作数据。</p>
+      <button class="btn secondary sm">浏览连接器市场</button>
+    </div>
+    <div class="state-hint">
+      首批落点 13 处：SessionList、ProviderList、SkillsMarket、CurrentFileChange 等。
+      文案必须走 <code>t('...')</code>，并新增 <code>src/i18n/domains/emptyState.js</code>，
+      否则 <code>i18nHardcoded</code> 的「新文件必须为 0」基线会直接失败。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 6. 字号 ═══ -->
+<section class="section">
+  <header>
+    <h2>字号归位</h2>
+    <span class="tag">107 处 → 0</span>
+    <p>取消 9px / 10px / 10.5px，最小 12px</p>
+  </header>
+  <div class="body">
+    <div class="type-scale">
+      <div class="scale-row"><span class="lbl">page 28px</span><span class="new" style="font-size:28px;font-weight:600">页面大标题</span></div>
+      <div class="scale-row"><span class="lbl">section 20px</span><span class="new" style="font-size:20px;font-weight:600">区块标题</span></div>
+      <div class="scale-row"><span class="lbl">body 15px</span><span class="new" style="font-size:15px">正文段落，用于消息内容</span></div>
+      <div class="scale-row"><span class="lbl">ui 14px</span><span class="new" style="font-size:14px">界面文字，按钮与表单项</span></div>
+      <div class="scale-row"><span class="lbl">meta 12px</span><span class="new" style="font-size:12px">元信息、辅助说明 <span class="old">原 9/10px</span></span></div>
+    </div>
+    <div class="note warn">
+      <strong>验收联动：</strong><code>tests/codeDebt.test.js:15</code> 的 <code>TINY_TEXT_CEILING = 132</code>
+      当前实测 114。用的是 <code>&lt;=</code> 而非 <code>===</code>，所以递减永远安全，
+      <strong>不需要改这个常量</strong>—— 但要在同一 PR 里把新实测值写回并注明原因，保持棘轮语义。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 7. 对比度 ═══ -->
+<section class="section">
+  <header>
+    <h2>对比度修正</h2>
+    <span class="tag warn">119 处不达标</span>
+    <p>浅色主题专属缺口，暗色主题原本全部达标</p>
+  </header>
+  <div class="body">
+    <div class="contrast-grid">
+      <div class="cbox">
+        <div class="swatch" style="background:#F7F8FA;color:#16A34A">正文绿 改前</div>
+        <div class="meta"><span>#16A34A</span><span class="fail">3.10:1 ✗</span></div>
+      </div>
+      <div class="cbox">
+        <div class="swatch" style="background:#F7F8FA;color:#166534">正文绿 改后</div>
+        <div class="meta"><span>#166534</span><span class="pass">6.71:1 ✓</span></div>
+      </div>
+      <div class="cbox">
+        <div class="swatch" style="background:#F7F8FA;color:#6B7280">弱化文字 改前</div>
+        <div class="meta"><span>#6B7280</span><span class="pass">4.55:1 ✓</span></div>
+      </div>
+      <div class="cbox">
+        <div class="swatch" style="background:#F7F8FA;color:#5B6472">弱化文字 改后</div>
+        <div class="meta"><span>#5B6472</span><span class="pass">5.63:1 ✓</span></div>
+      </div>
+      <div class="cbox">
+        <div class="swatch" style="background:#F7F8FA;color:#2E8FA3">青色 改前</div>
+        <div class="meta"><span>#2E8FA3</span><span class="fail">3.55:1 ✗</span></div>
+      </div>
+      <div class="cbox">
+        <div class="swatch" style="background:#F7F8FA;color:#1D6E80">青色 改后</div>
+        <div class="meta"><span>#1D6E80</span><span class="pass">5.50:1 ✓</span></div>
+      </div>
+    </div>
+    <div class="note ok">
+      <strong>附带修 token 缺陷：</strong><code>--color-ink-fade</code> 与 <code>--color-ink-ghost</code>
+      在浅色主题下<strong>同为 #6B7280</strong>，语义已失效——所以 <code>ink-fade/30</code>
+      叠出来只有 21% 不透明度。必须合并或重新拉开明度。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 8. 动效 ═══ -->
+<section class="section">
+  <header>
+    <h2>动效令牌</h2>
+    <span class="tag">4 处 → 全局统一</span>
+    <p>只动 transform 与 opacity，GPU 加速</p>
+  </header>
+  <div class="body">
+    <div class="motion-grid">
+      <figure class="motion-item fast"><div class="motion-box"><div class="motion-dot"></div></div><figcaption>fast 120ms</figcaption></figure>
+      <figure class="motion-item base"><div class="motion-box"><div class="motion-dot"></div></div><figcaption>base 180ms</figcaption></figure>
+      <figure class="motion-item slow"><div class="motion-box"><div class="motion-dot"></div></div><figcaption>slow 240ms</figcaption></figure>
+    </div>
+    <div class="note ok">
+      全部包在 <code>@media (prefers-reduced-motion: no-preference)</code> 内，
+      沿用项目现有的 <code>html[data-animations="false"]</code> 全局开关（<code>index.css:430</code>）。
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

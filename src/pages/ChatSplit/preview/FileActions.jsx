@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { AppWindow, ChevronDown, ChevronRight, Copy, FolderOpen, SquareArrowOutUpRight } from 'lucide-react'
+import { AppWindow, ChevronDown, Copy, FolderOpen } from 'lucide-react'
 import FileTypeGlyph from '../../../components/FileTypeGlyph.jsx'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { desktopFileCapabilities, desktopFileErrorKey, openDesktopFile } from '../../../lib/desktopFileClient.js'
@@ -8,9 +8,6 @@ import useDetailsDismiss from './useDetailsDismiss.js'
 
 const ITEM_CLASS = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-ink hover:bg-ink/[0.05] disabled:opacity-50'
 const PANEL_CLASS = 'rounded-xl border border-ink/10 bg-paper p-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.22)]'
-// Opens to the right of the parent menu; `preview-pane-open-method` flips it back
-// inside when the pane is too narrow to have room beside it.
-const SUBMENU_CLASS = `preview-pane-open-method-panel absolute left-full top-0 z-50 ml-1.5 w-56 ${PANEL_CLASS}`
 
 function stem(filename) {
   const index = filename.lastIndexOf('.')
@@ -26,15 +23,12 @@ function stem(filename) {
  * on the local machine: they work when the file carries a reference this app issued
  * and the page is running in the desktop shell, which is the only place allowed to
  * ask the operating system to act. A browser tab cannot start a program or open a
- * file manager, so there the submenu is absent and the menu says why rather than
- * offering an action that could never work.
- *
- * The submenu is a plain nested disclosure: Escape closes it before the parent
- * menu sees the key.
+ * file manager, so there those two entries are absent and the menu says why
+ * rather than offering an action that could never work. The actions are listed
+ * directly — no "Open with" step in between: there is one way to open a file.
  */
-export default function FileActions({ file, submenuFlipped = false, t }) {
+export default function FileActions({ file, t }) {
   const menuRef = useRef(null)
-  const submenuRef = useRef(null)
   useDetailsDismiss(menuRef)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -42,7 +36,6 @@ export default function FileActions({ file, submenuFlipped = false, t }) {
   const filename = String(file?.filename || file?.title || '').trim()
   const filePath = String(file?.path || file?.fullPath || '').trim()
   const closeMenu = () => {
-    if (submenuRef.current) submenuRef.current.open = false
     if (menuRef.current) menuRef.current.open = false
   }
   const perform = async (action) => {
@@ -64,15 +57,6 @@ export default function FileActions({ file, submenuFlipped = false, t }) {
     copyTextToClipboard(filePath)
       .then(() => setResult({ key: 'chatPreview.pathCopied' }))
       .catch(() => setResult({ error: true, key: 'chatPreview.pathCopyFailed' }))
-  }
-  // Escape belongs to the innermost open list first, so the whole menu is not
-  // dismissed in one keypress while a reader is only stepping back out of it.
-  const closeSubmenuOnEscape = (event) => {
-    if (event.key !== 'Escape' || !submenuRef.current?.open) return
-    event.preventDefault()
-    event.stopPropagation()
-    submenuRef.current.open = false
-    submenuRef.current.querySelector('summary')?.focus()
   }
   return (
     <div className="relative min-w-0 shrink">
@@ -101,24 +85,15 @@ export default function FileActions({ file, submenuFlipped = false, t }) {
           )}
           <div className="mx-1.5 my-1 border-t border-ink/10" />
           {capabilities.supported ? (
-            <details ref={submenuRef} className="group/sub relative" onKeyDown={closeSubmenuOnEscape}>
-              <summary data-testid="preview-open-method" className={`${ITEM_CLASS} cursor-pointer list-none`}>
-                <SquareArrowOutUpRight className="h-4 w-4 text-ink-soft" aria-hidden="true" />
-                <span className="min-w-0 flex-1 truncate">{t('chatPreview.openMethod')}</span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
-              </summary>
-              <div role="group" aria-label={t('chatPreview.openMethod')}
-                className={`${SUBMENU_CLASS} ${submenuFlipped ? 'preview-pane-open-method-panel-flipped' : ''}`}>
-                <button type="button" data-testid="preview-open-default-app" disabled={busy || !capabilities.canOpen} onClick={() => perform('open')} className={ITEM_CLASS}>
-                  <AppWindow className="h-4 w-4 text-accent-ink" aria-hidden="true" />{t('chatPreview.openDefaultApp')}
-                </button>
-                <div className="mx-1.5 my-1 border-t border-ink/10" />
-                <button type="button" data-testid="preview-open-reveal" disabled={busy} onClick={() => perform('reveal')} className={ITEM_CLASS}>
-                  <FolderOpen className="h-4 w-4 text-ink-soft" aria-hidden="true" />{t('chatPreview.revealFile')}
-                </button>
-                {!capabilities.canOpen && <p className="px-2.5 py-2 text-xs leading-5 text-ink-fade">{t('chatPreview.fileOpenUnsafe')}</p>}
-              </div>
-            </details>
+            <>
+              <button type="button" data-testid="preview-open-default-app" disabled={busy || !capabilities.canOpen} onClick={() => perform('open')} className={ITEM_CLASS}>
+                <AppWindow className="h-4 w-4 text-accent-ink" aria-hidden="true" />{t('chatPreview.openDefaultApp')}
+              </button>
+              <button type="button" data-testid="preview-open-reveal" disabled={busy} onClick={() => perform('reveal')} className={ITEM_CLASS}>
+                <FolderOpen className="h-4 w-4 text-ink-soft" aria-hidden="true" />{t('chatPreview.revealFile')}
+              </button>
+              {!capabilities.canOpen && <p className="px-2.5 py-2 text-xs leading-5 text-ink-fade">{t('chatPreview.fileOpenUnsafe')}</p>}
+            </>
           ) : <p className="px-2.5 py-2 text-xs leading-5 text-ink-fade">{t('chatPreview.nativeOpenHint')}</p>}
           {filePath && (
             <button type="button" data-testid="preview-copy-path" onClick={copyPath} className={ITEM_CLASS}>

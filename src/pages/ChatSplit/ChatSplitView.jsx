@@ -6,7 +6,6 @@ import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
 import ChatDesktopPetHost from './chatSplitView/ChatDesktopPetHost.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
-import PlanCard from './chatSplitView/PlanCard.jsx'
 import { revealTurnInConversation } from '../../lib/chatMessageSignals.js'
 import ChatSessionHeaderBar from './chatSplitView/ChatSessionHeaderBar.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
@@ -83,6 +82,7 @@ export default function ChatSplitView({
   toolApproval,
   workbenchMessage,
   workbenchOpen,
+  planArtifacts = [],
   planVisible,
   onClosePlan, onOpenPlan,
   sessionChangesReview = null,
@@ -245,6 +245,10 @@ export default function ChatSplitView({
 
       <ChatRightPanels
         onInsertText={(text) => setInput((current) => (current ? `${current} ${text}` : text))}
+        planArtifacts={planArtifacts}
+        planVisible={planVisible}
+        onClosePlan={onClosePlan}
+        onRevealTurn={revealTurnInConversation}
         workbenchOpen={workbenchOpen}
         sessionId={activeSessionId}
         todos={activeSession?.todos || []}
@@ -269,15 +273,7 @@ export default function ChatSplitView({
 
       {/* The plan card belongs to the session, not to the tool panel, so it is
           drawn over the main area and stays put whether or not the panel is open. */}
-      {planVisible && (
-        <PlanCard
-          onClose={onClosePlan}
-          onRevealTurn={revealTurnInConversation}
-          sessionId={activeSessionId}
-          t={t}
-          todos={activeSession?.todos || []}
-        />
-      )}
+      
 
       <ChatDesktopPetHost isGenerating={isGenerating} messages={messages} onClose={onCloseDesktopPet}
         tasks={tasks} toolApproval={toolApproval} visible={desktopPetVisible} />

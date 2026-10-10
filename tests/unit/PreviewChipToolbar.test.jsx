@@ -28,9 +28,8 @@ test('the file chip is the file itself, and the menu carries no redundant "previ
   const dom = setupDom()
   const { DirectFileToolbar } = await import('../../src/pages/ChatSplit/preview/PreviewChrome.jsx')
   const file = { filename: '表2_已填写.docx', type: 'docx', path: 'D:\\docs\\表2_已填写.docx', url: '/api/artifacts/a.docx' }
-  const requested = []
   const zoom = { zoom: 'fit', setZoom: () => {}, fitPercent: 70, setFitPercent: () => {} }
-  const h = await mount(<DirectFileToolbar file={file} filename={file.filename} type="docx" zoom={zoom} onRequestChange={(preview) => requested.push(preview.path)} t={t} />)
+  const h = await mount(<DirectFileToolbar file={file} filename={file.filename} type="docx" zoom={zoom} t={t} />)
   try {
     const chip = h.container.querySelector('[data-testid="preview-open-menu"]')
     assert.equal(chip.querySelector('[data-testid="preview-file-path"]').textContent, '表2_已填写')
@@ -38,8 +37,6 @@ test('the file chip is the file itself, and the menu carries no redundant "previ
     assert.doesNotMatch(chip.closest('details').textContent, /openPreview/)
     // The zoom shows the scale fitting produced, like "70%" in the reference app.
     assert.equal(h.container.querySelector('[data-testid="preview-zoom"]').textContent.trim(), '70%')
-    await act(async () => h.container.querySelector('[data-testid="preview-request-change"]').click())
-    assert.deepEqual(requested, [file.path])
   } finally {
     await h.unmount()
     dom.window.close()

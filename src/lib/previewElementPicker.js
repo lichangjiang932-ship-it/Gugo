@@ -1,4 +1,6 @@
 import { evaluateInDesktopPreview } from './desktopBrowserClient.js'
+import { isDesktopPageFactsAvailable } from './desktopBrowserClient.js'
+import { cancelInAppPreviewElementPick, isInAppPreviewAvailable, pickInAppPreviewElement } from './previewInAppFacts.js'
 import { ELEMENT_PICKER_CANCEL_SCRIPT, elementPickerScript } from './previewPageScripts.js'
 
 /**
@@ -67,19 +69,26 @@ function parseResult(result) {
  * take its overlay down either way so the page is left as it was found.
  */
 export async function pickPreviewElement({
-  evaluate = evaluateInDesktopPreview,
+  evaluate = null,
   theme = previewPickerTheme(),
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
+  // Without a docked desktop view, preview content drawn into this app's own tree
+  // is still reachable — so ask there before reporting the feature unavailable.
+  if (!evaluate && !isDesktopPageFactsAvailable()) {
+    if (isInAppPreviewAvailable()) return pickInAppPreviewElement({ theme, timeoutMs })
+    return { ok: false, reason: 'unsupported' }
+  }
+  const runEvaluate = evaluate || evaluateInDesktopPreview
   let timer = null
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), timeoutMs)
   })
   try {
-    const outcome = await Promise.race([startPicker(evaluate, theme).then(parseResult), timeout])
+    const outcome = await Promise.race([startPicker(runEvaluate, theme).then(parseResult), timeout])
     if (outcome?.reason === 'timeout' || outcome?.reason === 'cancelled') {
       // Leaving the overlay behind would keep the page looking picked.
-      await evaluate(ELEMENT_PICKER_CANCEL_SCRIPT).catch(() => null)
+      await runEvaluate(ELEMENT_PICKER_CANCEL_SCRIPT).catch(() => null)
     }
     return outcome
   } finally {
@@ -88,6 +97,9 @@ export async function pickPreviewElement({
 }
 
 /** Take the picker down without picking anything. */
-export function cancelPreviewElementPick({ evaluate = evaluateInDesktopPreview } = {}) {
-  return evaluate(ELEMENT_PICKER_CANCEL_SCRIPT).catch(() => null)
+export function cancelPreviewElementPick({ evaluate = null } = {}) {
+  if (!evaluate && !isDesktopPageFactsAvailable()) {
+    return Promise.resolve(cancelInAppPreviewElementPick())
+  }
+  return (evaluate || evaluateInDesktopPreview)(ELEMENT_PICKER_CANCEL_SCRIPT).catch(() => null)
 }

@@ -59,8 +59,9 @@ test('the diff shows the recorded lines with their signs and their colours', asy
     const lines = [...container.querySelectorAll('[data-sign]')]
     assert.deepEqual(lines.map((line) => line.textContent), ['-const one = 1', '+const one = 2', '+const two = 2', '+fresh'])
     assert.equal(lines[0].getAttribute('data-sign'), '-')
-    assert.match(lines[0].className, /text-danger/)
-    assert.match(lines[1].className, /text-success/)
+    // Rows are tinted by their sign (Claude-style): colour on the row, code dark.
+    assert.match(lines[0].className, /bg-danger/)
+    assert.match(lines[1].className, /bg-success/)
   } finally {
     await act(async () => root.unmount())
   }

@@ -9,6 +9,7 @@ import PreviewBody from './preview/PreviewBody.jsx'
 import DirectFilePreview from './preview/DirectFilePreview.jsx'
 import { PreviewStatus, RetryPreviewButton } from './preview/PreviewPrimitives.jsx'
 import { DirectFileToolbar, PreviewHeader, PreviewToolbar } from './preview/PreviewChrome.jsx'
+import WorkbenchToolbar from './rightWorkbench/WorkbenchToolbar.jsx'
 import useArtifactExports from './preview/useArtifactExports.js'
 import { PreviewZoomProvider, usePreviewZoomState } from './preview/previewZoomState.js'
 import { createPreviewTabState } from './preview/previewTabs.js'
@@ -19,13 +20,14 @@ import usePreviewPaneState, {
 
 export default function RightPreviewPane({
   artifact,
+  embedded = false,
   previewTabs,
   activePreviewId,
   onActivateTab,
   onCloseTab,
   onClose,
   onMessage,
-  onInsertText = null,
+  residentToolbar = null,
 }) {
   const { t } = useT()
   const paneRef = useRef(null)
@@ -113,23 +115,6 @@ export default function RightPreviewPane({
     return restore
   }, [pane.overlay, pane.maximized])
 
-  // "Request changes" names the file in the composer and puts the reader there;
-  // a pane covering the conversation steps aside first so the composer is seen.
-  const requestChange = useCallback((file) => {
-    if (typeof onInsertText !== 'function') return
-    const reference = String(file?.path || file?.filename || '').trim()
-    if (!reference) return
-    if (pane.overlay) closePane()
-    onInsertText(`\`${reference}\` `)
-    requestAnimationFrame(() => {
-      const composer = document.querySelector('[data-testid="chat-composer-surface"] textarea:not(:disabled)')
-      if (!composer) return
-      composer.focus({ preventScroll: true })
-      composer.selectionStart = composer.value.length
-      composer.selectionEnd = composer.value.length
-    })
-  }, [closePane, onInsertText, pane.overlay])
-
   const selectTab = useCallback((tabId) => {
     onActivateTab?.(tabId)
   }, [onActivateTab])
@@ -162,7 +147,8 @@ export default function RightPreviewPane({
   if (!activeTab || !activeArtifact) return null
   const testId = activeArtifact.directFile ? 'direct-file-pane' : 'preview-pane'
   return (
-    <PreviewShell pane={pane} paneRef={paneRef} onClose={closePane} t={t} testId={testId} shellKey="preview-pane">
+    <PreviewShell embedded={embedded} pane={pane} paneRef={paneRef} onClose={closePane} t={t} testId={testId} shellKey="preview-pane">
+      {residentToolbar ? <ResidentToolbar pane={pane} resident={residentToolbar} t={t} /> : null}
       <PreviewHeader
         tabs={tabState.tabs}
         activeId={activeTab.id}
@@ -175,7 +161,7 @@ export default function RightPreviewPane({
         t={t}
       />
       {activeArtifact.directFile ? (
-        <DirectFileContent key={activeTab.id} file={activeArtifact.directFile} pane={pane} onRequestChange={onInsertText ? requestChange : null} t={t} />
+        <DirectFileContent key={activeTab.id} file={activeArtifact.directFile} pane={pane} t={t} />
       ) : activeArtifact.preview ? (
         <PreviewContent tabId={activeTab.id} preview={activeArtifact.preview} content={activeArtifact.content} pane={pane} onMessage={onMessage} t={t} />
       ) : (
@@ -185,7 +171,7 @@ export default function RightPreviewPane({
   )
 }
 
-function DirectFileContent({ file, pane, onRequestChange, t }) {
+function DirectFileContent({ file, pane, t }) {
   const zoom = usePreviewZoomState()
   const filename = String(file?.filename || file?.title || 'artifact')
   const extension = String(filename.split('.').pop() || '').toLowerCase()
@@ -195,7 +181,7 @@ function DirectFileContent({ file, pane, onRequestChange, t }) {
   const previewUrl = withArtifactPreviewMode(downloadUrl)
   return (
     <PreviewZoomProvider value={zoom}>
-      <DirectFileToolbar filename={filename} type={type} file={file} url={downloadUrl} view={pane.view} setView={pane.setView} submenuFlipped={pane.overlay} onRequestChange={onRequestChange} zoom={zoom} t={t} />
+      <DirectFileToolbar filename={filename} type={type} file={file} url={downloadUrl} view={pane.view} setView={pane.setView} zoom={zoom} t={t} />
       <div className="chat-direct-file-content min-h-0 flex-1 overflow-hidden" data-testid="direct-file-content">
         {previewUrl ? (
           <PreviewRendererBoundary key={previewUrl} filename={filename} t={t}>
@@ -249,16 +235,47 @@ function PreviewRendererBoundary({ children, filename, t }) {
   )
 }
 
-function PreviewShell({ children, onClose, pane, paneRef, shellKey, t, testId }) {
+/**
+ * The sidebar's top bar, kept resident while a file is open so the tool switch
+ * and panel controls never vanish behind a preview. It is the same button row
+ * the workbench shows (WorkbenchToolbar); only the width/expando act on this
+ * pane instead of the workbench. Rendered inside the pane's shell so it stays
+ * visible even when the pane is maximized.
+ */
+function ResidentToolbar({ pane, resident, t }) {
+  return (
+    <header className="flex h-12 shrink-0 items-center border-b border-ink/10 px-3">
+      <WorkbenchToolbar
+        activeTab={resident.activeTab}
+        contributedTabs={resident.contributedTabs || []}
+        inAppPreview={resident.inAppPreview === true}
+        onClose={resident.onClose}
+        onPickElement={resident.onPickElement}
+        onResetWidth={() => pane.setPaneWidth(DEFAULT_PREVIEW_PANE_WIDTH)}
+        onScreenshot={resident.onScreenshot}
+        onTabChange={resident.onTabChange}
+        onToggleExpand={() => pane.setMaximized(!pane.maximized)}
+        panelExpanded={pane.maximized}
+        picking={resident.picking}
+        t={t}
+        workspacePath={resident.workspacePath}
+      />
+    </header>
+  )
+}
+
+function PreviewShell({ children, embedded = false, onClose, pane, paneRef, shellKey, t, testId }) {
   return (
     <AnimatePresence>
-      <motion.div key="preview-backdrop" data-testid="preview-backdrop" data-preview-overlay={pane.overlay} aria-hidden="true" onClick={onClose} className="chat-preview-backdrop absolute inset-0 z-30" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }} />
+      {!embedded && (
+        <motion.div key="preview-backdrop" data-testid="preview-backdrop" data-preview-overlay={pane.overlay} aria-hidden="true" onClick={onClose} className="chat-preview-backdrop absolute inset-0 z-30" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }} />
+      )}
       <motion.aside
         ref={paneRef}
         key={shellKey}
         data-testid={testId}
         data-artifact-surface="preview"
-        data-preview-layout={pane.maximized ? 'maximized' : pane.focused ? 'focused' : 'split'}
+        data-preview-layout={pane.maximized ? 'maximized' : embedded ? 'split' : pane.focused ? 'focused' : 'split'}
         aria-label={t('chatPreview.preview')}
         onTouchStart={pane.handleTouchStart}
         onTouchMove={pane.handleTouchMove}
@@ -267,10 +284,10 @@ function PreviewShell({ children, onClose, pane, paneRef, shellKey, t, testId })
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: 32, opacity: 0 }}
         transition={{ duration: 0.2, ease: 'easeOut' }}
-        style={pane.overlay ? undefined : { width: `${pane.paneWidth}px` }}
-        className={`chat-preview-pane ${pane.maximized ? 'chat-preview-pane-maximized fixed inset-0 w-screen' : pane.focused ? 'chat-preview-pane-focused absolute inset-0 w-full' : 'relative shrink-0'} z-40 flex h-full min-w-0 flex-col overflow-hidden border-l border-ink/10 bg-paper`}
+        style={embedded || pane.overlay ? undefined : { width: `${pane.paneWidth}px` }}
+        className={`chat-preview-pane ${pane.maximized ? 'chat-preview-pane-maximized fixed inset-0 w-screen' : embedded ? 'relative w-full' : pane.focused ? 'chat-preview-pane-focused absolute inset-0 w-full' : 'relative shrink-0'} z-40 flex h-full min-w-0 flex-col overflow-hidden bg-paper ${embedded ? '' : 'border-l border-ink/10'}`}
       >
-        {!pane.overlay && (
+        {!pane.overlay && !embedded && (
           <div
             role="separator"
             tabIndex={0}

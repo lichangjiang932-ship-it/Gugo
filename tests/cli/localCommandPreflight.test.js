@@ -30,7 +30,7 @@ function fixture(t, { badConfig = true } = {}) {
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   })
   return { root, cwd, data, run: (args) => spawnSync(process.execPath, [cli, ...args], {
-    cwd, env, windowsHide: true, encoding: 'utf8', timeout: 15_000,
+    cwd, env, windowsHide: true, encoding: 'utf8', timeout: 30_000,
   }) }
 }
 

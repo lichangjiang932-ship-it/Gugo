@@ -5,7 +5,8 @@
       "name": "gugo-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--", "--host", "127.0.0.1", "--port", "5175"],
-      "port": 5175
+      "port": 5175,
+      "autoPort": true
     }
   ]
 }

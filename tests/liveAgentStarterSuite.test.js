@@ -21,6 +21,10 @@ test('starter live-eval suite has isolated immutable verifiers and intentionally
     'desktop-cancellation-repair',
     'desktop-recovery-state-repair',
     'desktop-project-path-repair',
+    'spec-template-format-repair',
+    'spec-dedupe-merge-repair',
+    'spec-state-machine-repair',
+    'spec-interval-overlap-repair',
   ])
   for (const task of dataset.tasks) {
     assert.equal(task.mode, 'bypass')
@@ -81,6 +85,60 @@ export function resolveTarget(projectRoot, target) {
   const relative = api.relative(root, result)
   if (relative === '..' || relative.startsWith('..' + api.sep) || api.isAbsolute(relative)) throw new Error('outside project')
   return result
+}
+`,
+  },
+  'spec-template-format-repair': {
+    'src/template.js': String.raw`export function formatMessage(template, values) {
+  const out = []
+  const text = String(template)
+  for (let i = 0; i < text.length;) {
+    if (text[i] === '{' && text[i + 1] === '{') { out.push('{'); i += 2; continue }
+    if (text[i] === '}' && text[i + 1] === '}') { out.push('}'); i += 2; continue }
+    if (text[i] === '{') {
+      const end = text.indexOf('}', i)
+      const key = end > i ? text.slice(i + 1, end) : ''
+      if (key && /^\w+$/.test(key) && Object.prototype.hasOwnProperty.call(values, key)) {
+        out.push(String(values[key])); i = end + 1; continue
+      }
+    }
+    out.push(text[i]); i += 1
+  }
+  return out.join('')
+}
+`,
+  },
+  'spec-dedupe-merge-repair': {
+    'src/records.js': `export function mergeById(left, right) {
+  const byId = new Map()
+  for (const record of left) byId.set(record.id, { ...record })
+  for (const record of right) byId.set(record.id, { ...record })
+  return [...byId.values()]
+}
+`,
+  },
+  'spec-state-machine-repair': {
+    'src/machine.js': `const TRANSITIONS = {
+  placed: { pay: 'paid', cancel: 'cancelled' },
+  paid: { ship: 'shipped', refund: 'refunded' },
+  shipped: { deliver: 'delivered', refund: 'refunded' },
+}
+
+export function nextStatus(status, event) {
+  const row = TRANSITIONS[status]
+  if (!row) return null
+  return row[event] ?? null
+}
+`,
+  },
+  'spec-interval-overlap-repair': {
+    'src/interval.js': `export function overlaps(a, b) {
+  for (const range of [a, b]) {
+    if (typeof range?.start !== 'number' || typeof range?.end !== 'number' || range.start > range.end) {
+      throw new Error('invalid interval')
+    }
+  }
+  return a.start <= b.end && b.start <= a.end
 }
 `,
   },

@@ -63,6 +63,7 @@ function requireMutationEnabled(env = getRuntimeEnv()) {
 }
 
 import { assertSelectedFilesAreCommittable } from './gitCommitPathGuard.js'
+import { normalizeGitBase, parseNumstat } from './gitWorkbenchBase.js'
 
 export async function runGit(args, opts = {}) {
   return runFile('git', args, opts)
@@ -164,10 +165,28 @@ export function clip(text, max = MAX_OUTPUT) {
   return value.length > max ? value.slice(0, max) + '\n...[truncated]' : value
 }
 
-export async function gitStatusTool({ cwd: rawCwd, userId = null } = {}) {
+export async function gitStatusTool({ cwd: rawCwd, userId = null, base: rawBase = '' } = {}) {
+  const base = normalizeGitBase(rawBase)
   const env = getRuntimeEnv()
   requireGitEnabled(env)
   const root = getRoot({ userId, cwd: rawCwd, env })
+  if (base) {
+    const [branch, numstat, nameStatus] = await Promise.all([
+      currentBranch(root),
+      runGit(['diff', '--numstat', base], { cwd: root, rejectOnError: false }),
+      runGit(['diff', '--name-status', base], { cwd: root, rejectOnError: false }),
+    ])
+    const files = parseNumstat(numstat.stdout, nameStatus.stdout)
+    return {
+      ok: true,
+      branch,
+      root,
+      base,
+      clean: files.length === 0,
+      files,
+      porcelain: files.map((file) => `${file.status} ${file.path}`).join('\n'),
+    }
+  }
   const [branch, filesResult] = await Promise.all([
     currentBranch(root),
     currentStatusFiles(root),
@@ -182,16 +201,18 @@ export async function gitStatusTool({ cwd: rawCwd, userId = null } = {}) {
   }
 }
 
-export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, userId = null } = {}) {
+export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, userId = null, base: rawBase = '' } = {}) {
+  const base = normalizeGitBase(rawBase)
   const env = getRuntimeEnv()
   requireGitEnabled(env)
   const root = getRoot({ userId, cwd: rawCwd, env })
   const repoPath = normalizeRepoPath(rawPath)
   const args = ['diff', '--no-ext-diff', '--no-color']
   if (staged) args.push('--cached')
+  if (base) args.push(base)
   if (repoPath) args.push('--', repoPath)
   const diff = await runGit(args, { cwd: root, rejectOnError: false })
-  const context = { cwd: root, path: repoPath || null, staged: Boolean(staged) }
+  const context = { cwd: root, path: repoPath || null, staged: Boolean(staged), base: base || null }
   if (!diff.ok) {
     // Outside a repository, --cached can produce "unknown option" instead of
     // the usual repository diagnostic. Verify that failure before suggesting
@@ -201,6 +222,7 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
   }
   const statArgs = ['diff', '--stat', '--no-ext-diff', '--no-color']
   if (staged) statArgs.push('--cached')
+  if (base) statArgs.push(base)
   if (repoPath) statArgs.push('--', repoPath)
   const stat = await runGit(statArgs, { cwd: root, rejectOnError: false })
   if (!stat.ok) return { ...context, ...gitDiffFailure(stat) }
@@ -212,6 +234,7 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
     repositoryRoot: repository.stdout.trim(),
     path: repoPath || null,
     staged: Boolean(staged),
+    base: base || null,
     stat: clip(stat.stdout, 80_000),
     diff: clip(diff.stdout),
     exitCode: diff.exitCode,

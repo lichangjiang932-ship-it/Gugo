@@ -235,3 +235,29 @@ test('unavailable bridge is 503 and unknown I/O failures are redacted 500 rather
     revokeLocalPath({ userId: alice.userId, id: grant.id })
   }
 })
+
+test('opening or revealing a delivered file whose original is gone uses the copy the app kept', async () => {
+  // A file the agent wrote to a folder that was later cleaned up still has its
+  // copy in the artifact store; the desktop menu used to fail with a generic
+  // "the system could not open this file" for both actions.
+  grantLocalPath({ userId: alice.userId, rootPath: allowed, accessMode: 'read_only' })
+  const id = 'kept-copy-receipt'
+  const bytes = Buffer.from('kept deck bytes')
+  const original = path.join(allowed, 'kept-copy.pptx')
+  fs.writeFileSync(original, bytes)
+  upsertSession({ id, userId: alice.userId, title: 'kept copy' })
+  appendTurnArtifact({ id: 'kept-copy-artifact', userId: alice.userId, sessionId: id, turnId: id, type: 'pptx',
+    title: 'kept-copy', url: '/api/artifacts/kept-copy.pptx', filename: 'kept-copy.pptx' })
+  fs.writeFileSync(path.join(artifacts, 'kept-copy.pptx'), bytes)
+  upsertMessage({ id: `${id}:assistant`, userId: alice.userId, sessionId: id, role: 'assistant', content: 'fixture',
+    modelContext: { version: 1, turnId: id, verifiedLocalFiles: [{ id, path: original, filename: 'kept-copy.pptx',
+      size: bytes.length, relatedArtifactIds: ['kept-copy-artifact'] }] } })
+  fs.rmSync(original)
+  for (const action of ['open', 'reveal']) {
+    const body = request({ kind: 'verified', fileId: id, turnId: id, sessionId: id }, action)
+    const response = await resolveTarget(body)
+    assert.equal(response.status, 200, `${action}: ${await response.clone().text()}`)
+    const { target } = verifyDesktopFileMessage(await response.json(), secret, { nonce: body.nonce })
+    assert.equal(fs.realpathSync(path.dirname(target.fullPath)), fs.realpathSync(artifacts))
+  }
+})

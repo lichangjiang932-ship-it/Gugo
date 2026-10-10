@@ -23,6 +23,7 @@ import { sanitizeChildEnv } from './sensitiveEnv.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 export { CODE_SEARCH_TOOL_SPECS } from './codeSearchToolSpecs.js'
+import { EXCLUDED_DIRS, walkFiles, matchesGlob, matchesFileType, buildSearchRegex } from './fileMatching.js'
 import { refineSymbolMatches } from './jsSymbolIndex.js'
 import { buildSymbolRegex } from './symbolSearchPatterns.js'
 
@@ -137,67 +138,6 @@ function isRgUnavailable(result) {
   const msg = String(result?.error || '')
   return ['EPERM', 'EACCES', 'ENOENT'].includes(result?.code) ||
     /spawn\s+(EPERM|EACCES|ENOENT)|not recognized|not found/i.test(msg)
-}
-
-const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', '.next', 'build', 'server-data'])
-const TYPE_EXTENSIONS = {
-  js: ['.js', '.jsx', '.mjs', '.cjs'],
-  jsx: ['.jsx'],
-  ts: ['.ts', '.tsx'],
-  tsx: ['.tsx'],
-  py: ['.py'],
-  rs: ['.rs'],
-  md: ['.md', '.mdx'],
-  json: ['.json'],
-  css: ['.css'],
-  html: ['.html', '.htm'],
-}
-
-function walkFiles(root, out = []) {
-  let entries
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true })
-  } catch {
-    return out
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      if (!EXCLUDED_DIRS.has(entry.name)) walkFiles(path.join(root, entry.name), out)
-    } else if (entry.isFile()) {
-      out.push(path.join(root, entry.name))
-    }
-  }
-  return out
-}
-
-function globToRegex(glob) {
-  const escaped = String(glob)
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '\0')
-    .replace(/\*/g, '[^/\\\\]*')
-    .replace(/\?/g, '[^/\\\\]')
-    .replace(/\0/g, '.*')
-  return new RegExp(`^${escaped}$`)
-}
-
-function matchesGlob(rel, glob) {
-  if (!glob) return true
-  const normalized = rel.replace(/\\/g, '/')
-  const base = path.basename(rel)
-  const re = globToRegex(String(glob).replace(/\\/g, '/'))
-  return re.test(normalized) || re.test(base)
-}
-
-function matchesFileType(file, fileType) {
-  if (!fileType) return true
-  const ext = path.extname(file).toLowerCase()
-  const allowed = TYPE_EXTENSIONS[String(fileType).toLowerCase()]
-  return allowed ? allowed.includes(ext) : ext === `.${String(fileType).toLowerCase()}`
-}
-
-function buildSearchRegex(pattern, { caseSensitive = false, word = false } = {}) {
-  const source = word ? `\\b(?:${pattern})\\b` : pattern
-  return new RegExp(source, caseSensitive ? '' : 'i')
 }
 
 function searchFilesFallback({
@@ -559,6 +499,64 @@ export async function listImportsTool({ file, userId = null } = {}) {
   }
 }
 
+/* ─── 工具 4:find_files ─── */
+
+/**
+ * 按名字/glob 找文件(不看内容)。与 grep_code 互补:grep_code 回答"哪个文件里有
+ * 这段代码",find_files 回答"这个文件在哪""有哪些 *.tsx"。用 rg --files + gitignore
+ * 过滤,比 list_directory 逐层翻快,也不会把 node_modules 铺回来。
+ */
+export async function findFilesTool({
+  glob = null,
+  path: rawPath = '.',
+  file_type = null,
+  case_sensitive = false,
+  max_results = DEFAULT_MAX_RESULTS,
+  userId = null,
+} = {}) {
+  if (glob != null && (typeof glob !== 'string' || !glob.trim() || glob.length > 200)) {
+    throw badReq('glob 非法')
+  }
+  const target = resolveInWorkspace(rawPath, { userId })
+  const limit = Math.min(Math.max(Number(max_results) || DEFAULT_MAX_RESULTS, 1), HARD_MAX_RESULTS)
+
+  // rg --files respects .gitignore; explicit excludes keep the usual noise out.
+  // The name matching happens here in JS (not rg --glob) so case handling and the
+  // basename-or-path glob semantics are identical to the no-ripgrep fallback.
+  const args = ['--files', '--hidden']
+  for (const dir of EXCLUDED_DIRS) args.push(`--glob=!${dir}/**`)
+  args.push(toRelative(target) || '.')
+
+  const result = await runRg(args)
+  let listed
+  if (result.ok) {
+    listed = result.stdout.split('\n').map((line) => line.trim()).filter(Boolean)
+  } else if (isRgUnavailable(result)) {
+    listed = walkFiles(target)
+  } else {
+    return { ok: false, error: result.error, files: [] }
+  }
+
+  const nameMatches = (rel) => (case_sensitive
+    ? matchesGlob(rel, glob)
+    : matchesGlob(rel.toLowerCase(), String(glob || '').toLowerCase()))
+  const files = listed
+    .map((file) => (path.isAbsolute(file) ? toRelative(file) : file))
+    // Normalize to forward slashes and drop a leading "./": a model reads these
+    // back into globs and other tools, so one portable form beats platform-native.
+    .map((rel) => rel.replace(/\\/g, '/').replace(/^\.\//, ''))
+    .filter((rel) => nameMatches(rel) && matchesFileType(rel, file_type))
+  const sorted = [...new Set(files)].sort()
+  return {
+    ok: true,
+    glob: glob || null,
+    searched_path: toRelative(target),
+    total: sorted.length,
+    truncated: sorted.length > limit,
+    files: sorted.slice(0, limit),
+  }
+}
+
 /* ─── dispatcher + OpenAI specs ─── */
 
 export async function dispatchCodeSearchTool(name, args, { userId = null } = {}) {
@@ -569,6 +567,7 @@ export async function dispatchCodeSearchTool(name, args, { userId = null } = {})
     case 'grep_code': return grepCodeTool(withUser)
     case 'find_symbol': return findSymbolTool(withUser)
     case 'list_imports': return listImportsTool(withUser)
+    case 'find_files': return findFilesTool(withUser)
     default: throw new Error(`unknown codeSearch tool: ${name}`)
   }
 }

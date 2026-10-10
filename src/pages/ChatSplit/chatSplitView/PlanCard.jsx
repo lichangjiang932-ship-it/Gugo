@@ -20,7 +20,7 @@ import WorkbenchPlan from '../rightWorkbench/WorkbenchPlan.jsx'
  * working content, so the way to get it out of the way has to be findable without
  * hunting for it.
  */
-export default function PlanCard({ onClose, onRevealTurn, sessionId = '', todos = [], t }) {
+export default function PlanCard({ docked = false, onClose, onRevealTurn, sessionId = '', todos = [], t }) {
   return (
     // top-14 clears the 48px chat and workbench headers, whose buttons — including
     // the toggle that closes this card — must stay reachable while it is open.
@@ -32,7 +32,9 @@ export default function PlanCard({ onClose, onRevealTurn, sessionId = '', todos 
         event.preventDefault()
         onClose?.()
       }}
-      className="pointer-events-auto absolute top-14 right-3 z-20 flex max-h-[calc(100%-4.25rem)] w-[min(300px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card overlay-float"
+      className={docked
+        ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+        : 'pointer-events-auto absolute top-14 right-3 z-20 flex max-h-[calc(100%-4.25rem)] w-[min(300px,calc(100vw-3rem))] flex-col overflow-hidden rounded-card overlay-float'}
     >
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-ink/10 pl-2.5 pr-1">
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{t('workbench.planCardTitle')}</h2>

@@ -48,10 +48,12 @@ export function resolveDesktopFileTarget({ userId, request, secret, now = Date.n
     const message = verifyDesktopFileMessage(request, secret, { now })
     if (!['open', 'reveal'].includes(message.action)) throw desktopFileError('DESKTOP_FILE_ACTION_INVALID')
     const reference = normalizeDesktopFileReference(message.reference)
-    const fullPath = reference.kind === 'artifact' ? resolveManagedTarget(reference, userId)
-      : (reference.kind === 'retained' ? getRetainedLocalFile : getVerifiedLocalFile)({ ...reference, userId }).fullPath
+    const receiptFile = reference.kind === 'artifact' ? null
+      : (reference.kind === 'retained' ? getRetainedLocalFile : getVerifiedLocalFile)({ ...reference, userId })
+    const fullPath = receiptFile ? receiptFile.fullPath : resolveManagedTarget(reference, userId)
     const canonicalPath = fs.realpathSync(fullPath)
-    if (reference.kind !== 'artifact') {
+    // The app's own kept copy lives in the artifact store, not an authorized folder.
+    if (receiptFile && !receiptFile.storedCopy) {
       resolveAuthorizedLocalPath({ userId, rawPath: canonicalPath, write: false, allowWorkspace: true })
     }
     const stat = fs.statSync(canonicalPath, { bigint: true })

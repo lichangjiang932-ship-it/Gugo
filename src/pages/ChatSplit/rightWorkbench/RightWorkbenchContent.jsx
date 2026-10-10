@@ -75,6 +75,7 @@ export default function RightWorkbenchContent(props) {
           onSendMessage={onSendMessage}
           panelExpanded={panelExpanded}
           t={t}
+          workspacePath={props.workspacePath || ''}
         />
       )}      {activeTab === 'files' && <WorkbenchFiles artifacts={artifacts} onOpenArtifact={onOpenArtifact} t={t} />}
       {activeTab === 'browser' && (

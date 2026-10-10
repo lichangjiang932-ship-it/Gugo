@@ -208,21 +208,26 @@ function UnsupportedFileRenderer({ file, t, url }) {
 // Built-ins live with the registry. Keep the previous renderer available while
 // HMR asynchronously loads a replacement (or if that load fails); registerOwned
 // atomically replaces this owner's entry when the new module is ready.
+//
+// `drawsInApp` says the content ends up in this app's own tree rather than in a
+// frame. That is what lets the element picker and the screenshot work on it,
+// so it is declared here, beside the renderer that decides it, instead of being
+// guessed later from the DOM.
 const builtInPreviewRenderers = [
-  ['image', { component: NativePreviewRenderer }],
+  ['image', { component: NativePreviewRenderer, drawsInApp: true }],
   ['pdf', { component: NativePreviewRenderer }],
   ['audio', { component: NativePreviewRenderer }],
   ['video', { component: NativePreviewRenderer }],
   ['html', { component: HtmlPreviewRenderer }],
   ['docx', { component: DocxFileRenderer, needsFetch: true }],
-  ['pptx', { component: PptxFileRenderer, needsFetch: true }],
-  ['xlsx', { component: WorkbookFileRenderer, needsFetch: true }],
-  ['csv', { component: CsvFileRenderer, needsFetch: true }],
-  ['markdown', { component: MarkdownFileRenderer, needsFetch: true }],
-  ['json', { component: SourceFileRenderer, needsFetch: true }],
-  ['xml', { component: SourceFileRenderer, needsFetch: true }],
-  ['code', { component: SourceFileRenderer, needsFetch: true }],
-  ['text', { component: SourceFileRenderer, needsFetch: true }],
+  ['pptx', { component: PptxFileRenderer, needsFetch: true, drawsInApp: true }],
+  ['xlsx', { component: WorkbookFileRenderer, needsFetch: true, drawsInApp: true }],
+  ['csv', { component: CsvFileRenderer, needsFetch: true, drawsInApp: true }],
+  ['markdown', { component: MarkdownFileRenderer, needsFetch: true, drawsInApp: true }],
+  ['json', { component: SourceFileRenderer, needsFetch: true, drawsInApp: true }],
+  ['xml', { component: SourceFileRenderer, needsFetch: true, drawsInApp: true }],
+  ['code', { component: SourceFileRenderer, needsFetch: true, drawsInApp: true }],
+  ['text', { component: SourceFileRenderer, needsFetch: true, drawsInApp: true }],
   ['unsupported', { component: UnsupportedFileRenderer }],
 ]
 

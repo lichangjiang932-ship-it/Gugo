@@ -52,10 +52,10 @@ export default {
         },
       },
       fontFamily: {
-        hand: ['"Caveat"', '"Kalam"', 'cursive'],
-        print: ['"Architects Daughter"', '"Kalam"', 'cursive'],
+        hand: ['"Segoe Script"', '"Bradley Hand"', 'cursive'],
+        print: ['"Segoe Print"', '"Comic Sans MS"', 'cursive'],
         mono: ['var(--font-mono)'],
-        display: ['"Cormorant Garamond"', 'Georgia', 'serif'],
+        display: ['ui-serif', 'Georgia', '"Songti SC"', '"Source Han Serif SC"', 'serif'],
         sans: ['var(--font-ui)'],
       },
       fontSize: {

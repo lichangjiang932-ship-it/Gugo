@@ -15,6 +15,7 @@ const COPY = {
   'chat.changes.readOnly': 'Read-only review: nothing here commits or pushes.',
   'chat.changes.expand': "Expand this file's change in place",
   'chat.changes.openDiff': 'Read the change to {path} in the main area',
+  'chat.changes.toggleTree': 'Show all changed files',
   'chat.changes.close': 'Close the change list',
   'chat.changes.toggle': 'Show the files this conversation changed',
   'chat.changes.toggleCount': 'This conversation changed {count} files',
@@ -103,16 +104,17 @@ async function render(props = {}) {
     closedCount: () => closed,
     openedDiffs: () => opened,
     rows: () => [...container.querySelectorAll('[data-testid="session-change-file"]')],
-    toggles: () => [...container.querySelectorAll('[data-testid="session-change-file-toggle"]')],
+    treeToggle: () => container.querySelector('[data-testid="session-changes-tree-toggle"]'),
+    openMain: () => container.querySelector('[data-testid="session-change-open-main"]'),
+    diffLines: () => [...container.querySelectorAll('[data-testid="session-change-edit"] pre')],
   }
 }
 
 test('the review lists each file with the counts that belong to it', async () => {
   setupDom()
-  const { container, rows } = await render()
-  assert.match(container.textContent, /3 file\(s\)/)
-  // Totals are only shown for what an executor actually reported.
-  assert.match(container.textContent, /\+3 -1/)
+  const { container, rows, treeToggle } = await render()
+  // Diff-first: one file's diff sits in front. ⋮ reveals every changed file.
+  await act(async () => { treeToggle().dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
 
   assert.deepEqual(rows().map((row) => row.dataset.path), ['app.js', 'readme.md', 'out.html'])
   const [app, readme, scripted] = rows()
@@ -124,7 +126,7 @@ test('the review lists each file with the counts that belong to it', async () =>
   assert.equal(container.querySelector('[data-testid="session-changes-empty"]'), null)
 })
 
-test('opening a file shows the edit the agent made, and a file with no recorded edit shows its current content', async () => {
+test('the panel opens on one file and ⋮ reveals the rest; each shows its own diff', async () => {
   setupDom()
   const reads = []
   const oldFetch = globalThis.fetch
@@ -132,30 +134,31 @@ test('opening a file shows the edit the agent made, and a file with no recorded 
     reads.push([url, JSON.parse(init.body).path])
     return new Response(JSON.stringify({ ok: true, content: 'line one\r\nline two', totalLines: 2 }), { status: 200 })
   }
-  const { container, toggles } = await render()
-  const [app, readme, scripted] = toggles()
+  const { container, rows, treeToggle } = await render()
 
   try {
-  await act(async () => { app.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
-  assert.equal(app.getAttribute('aria-expanded'), 'true')
-  // No recorded body: the file is read through the authorized read route and
-  // shown as its current content, labelled as that — not as an invented diff.
+  // Diff-first: the first changed file (app.js) opens by default. It has no
+  // recorded body, so its current content is shown — labelled as that, never an
+  // invented diff.
   assert.deepEqual(reads, [['/api/tools/fs/read', 'D:/work/app.js']])
   assert.match(container.textContent, /No line-by-line edit was recorded/)
   const current = [...container.querySelectorAll('[data-testid="current-file-lines"] pre')]
   assert.deepEqual(current.map((line) => line.dataset.sign), [' ', ' '], 'reported +3 -1 is a modification, so nothing is drawn as added')
   assert.equal(container.querySelectorAll('[data-testid="session-change-edit"]').length, 0)
 
-  await act(async () => { readme.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+  // ⋮ opens the tree; picking another file swaps in that file's diff.
+  await act(async () => { treeToggle().dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+  await act(async () => { rows()[1].dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
   const lines = [...container.querySelectorAll('[data-testid="session-change-edit"] pre')]
   assert.deepEqual(lines.map((line) => line.textContent), ['-old line', '-another', '+new line'])
-  assert.match(lines[0].className, /text-danger/)
-  assert.match(lines[2].className, /text-success/)
+  // Rows are tinted by their sign (Claude-style): the change is on the row
+  // background, the code itself stays dark and readable.
+  assert.match(lines[0].className, /bg-danger/)
+  assert.match(lines[2].className, /bg-success/)
 
-  // One file at a time: opening another closes the first.
-  await act(async () => { scripted.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
-  assert.equal(readme.getAttribute('aria-expanded'), 'false')
-  assert.equal(scripted.getAttribute('aria-expanded'), 'true')
+  // One file at a time: the tree closes behind the pick, and the diff is the
+  // newly selected file only.
+  assert.equal(container.querySelectorAll('[data-testid="session-change-edit"]').length, 1)
   } finally {
     globalThis.fetch = oldFetch
   }
@@ -169,29 +172,34 @@ test('a file reported as wholly added is drawn as additions; a binary file says 
     { key: 'd:/work/new.html', path: 'D:/work/new.html', displayPath: 'new.html', reported: { additions: 2, deletions: 0 }, toolNames: ['write_file'], toolCallIds: ['n1'] },
     { key: 'd:/work/deck.pptx', path: 'D:/work/deck.pptx', displayPath: 'deck.pptx', reported: null, toolNames: ['bash_exec'], toolCallIds: ['n2'] },
   ]
-  const { container, toggles } = await render({ changes: { files, totals: { files: 2, reportedFiles: 1, additions: 2, deletions: 0 } }, editIndex: new Map() })
+  const { container, rows, treeToggle } = await render({ changes: { files, totals: { files: 2, reportedFiles: 1, additions: 2, deletions: 0 } }, editIndex: new Map() })
   try {
-    const [html, deck] = toggles()
-    await act(async () => { html.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+    // The wholly-added file opens by default and is drawn as additions.
     assert.match(container.textContent, /New file; current content:/)
     assert.deepEqual([...container.querySelectorAll('[data-testid="current-file-lines"] pre')].map((line) => line.dataset.sign), ['+', '+'])
-    await act(async () => { deck.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+    // ⋮ → tree → the binary file says it has no line diff.
+    await act(async () => { treeToggle().dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+    await act(async () => { rows()[1].dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
     assert.ok(container.querySelector('[data-testid="current-file-binary"]'))
   } finally {
     globalThis.fetch = oldFetch
   }
 })
 
-test('the file row hands its file and its recorded edits to the review', async () => {
+test('the review hands a file and its recorded edits to the main-area diff', async () => {
   setupDom()
-  const { rows, openedDiffs } = await render()
-  const [app, readme] = rows()
+  const { rows, treeToggle, openMain, openedDiffs } = await render()
+  // ⋮ → tree; the row names the file it selects, so a reader with several
+  // previews open knows which one this is.
+  await act(async () => { treeToggle().dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
   assert.equal(rows().length, 3)
-  // The row names the file it will open, so a reader with several previews open
-  // knows which one this is.
-  assert.equal(app.getAttribute('title'), 'Read the change to app.js in the main area')
+  assert.equal(rows()[1].getAttribute('title'), 'Read the change to readme.md in the main area')
 
-  await act(async () => { readme.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+  // Picking a file shows its diff in the panel; "open in the main area" is what
+  // hands the file and its edits to the review.
+  await act(async () => { rows()[1].dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
+  assert.equal(openedDiffs().length, 0, 'selecting shows the diff in the panel first')
+  await act(async () => { openMain().dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
   assert.equal(openedDiffs().length, 1)
   const [{ edits, file }] = openedDiffs()
   assert.equal(file.displayPath, 'readme.md')
@@ -290,7 +298,7 @@ test('the panel opens below the header and Escape closes it from the panel or it
   assert.doesNotMatch(panel.className, /\btop-3\b/)
 
   const escape = () => new globalThis.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
-  await act(async () => { container.querySelector('[data-testid="session-change-file-toggle"]').dispatchEvent(escape()) })
+  await act(async () => { container.querySelector('[data-testid="session-changes-tree-toggle"]').dispatchEvent(escape()) })
   assert.equal(closedCount(), 1, 'Escape inside the panel closes it')
 
   const { createRoot } = await import('react-dom/client')

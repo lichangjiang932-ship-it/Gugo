@@ -18,6 +18,7 @@ import { usePreviewPageStatus } from '../../../lib/previewPageStore.js'
 import { WORKBENCH_TOOLS, shortcutLabelFor } from '../../../lib/workbenchShortcuts.js'
 import ToolIconTile from './ToolIconTile.jsx'
 import { TOOL_GLYPHS } from './workbenchToolGlyphs.js'
+import { openDock } from '../dock/dockStore.js'
 
 const BUTTON = 'flex h-7 w-7 items-center justify-center rounded-full text-ink-fade transition-colors hover:bg-ink/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 disabled:cursor-default disabled:text-skel-2 disabled:hover:bg-transparent disabled:hover:text-skel-2'
 const MENU_ITEM = 'flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs text-ink-soft hover:bg-[var(--color-row-hover)] disabled:opacity-40'
@@ -75,6 +76,7 @@ function previewEvent(name) {
 export default function WorkbenchToolbar({
   activeTab,
   contributedTabs = [],
+  inAppPreview = false,
   onClose,
   onResetWidth,
   onPickElement,
@@ -89,7 +91,12 @@ export default function WorkbenchToolbar({
   const [forwardTo, setForwardTo] = useState(null)
   const menuRef = useRef(null)
   const onPreview = activeTab === 'browser'
-  const pageFactsAvailable = () => isDesktopPageFactsAvailable()
+  // The docked page is not the only thing this bar can point at: a preview this
+  // app drew into its own tree — a slide, an image, rendered Markdown — answers
+  // the same two questions without a host, so those controls are offered there
+  // too rather than sitting disabled over a file the reader is looking at. The
+  // panel decides that (`inAppPreview`), because only it knows the open file.
+  const pageFactsAvailable = () => inAppPreview || (onPreview && isDesktopPageFactsAvailable())
   // On the browser tab the pair walks the page's own history, which is what the
   // reference means by back and forward; on the other tabs there is no page, so
   // they walk between the entry page and the tool, and the tooltips say which.
@@ -137,7 +144,7 @@ export default function WorkbenchToolbar({
         <ChevronRight className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
       </button>
       <button type="button" data-testid="workbench-tool-select"
-        disabled={!onPreview || !pageFactsAvailable()}
+        disabled={!pageFactsAvailable()}
         aria-pressed={picking || undefined}
         onClick={() => onPickElement?.()}
         aria-label={t('workbench.selectElement')} title={t('workbench.selectElement')}
@@ -193,7 +200,7 @@ export default function WorkbenchToolbar({
           {/* The reference puts this one control on its own, as a raised pill
               inside the menu: it is the action people come to this menu for. */}
           <button type="button" role="menuitem" data-testid="preview-menu-screenshot"
-            disabled={!onPreview || !pageFactsAvailable()}
+            disabled={!pageFactsAvailable()}
             title={pageFactsAvailable() ? t('workbench.previewSaveScreenshot') : t('workbench.selectElement')}
             onClick={() => { closeMenu(); onScreenshot?.() }}
             className="preview-menu-pill">
@@ -220,7 +227,7 @@ export default function WorkbenchToolbar({
             <Copy className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 flex-1">{t('workbench.copyWorkspace')}</span>
           </button>
-          <button type="button" role="menuitem" data-testid="preview-menu-changes" onClick={() => { closeMenu(); onTabChange?.('diff') }}
+          <button type="button" role="menuitem" data-testid="preview-menu-changes" onClick={() => { closeMenu(); openDock() }}
             className={MENU_ITEM}>
             {t('diffReview.title')}
           </button>

@@ -19,6 +19,10 @@ import { TOOL_GLYPHS } from './workbenchToolGlyphs.js'
  * workbench) is not reached from here.
  */
 export default function WorkbenchEntry({ contributedTabs = [], onTabChange, t }) {
+  // Every tool is a tab of this panel. The browser and the terminal used to be
+  // handed to the dock instead, which meant the same two surfaces existed twice
+  // — once here and once there — and choosing one moved the reader out of the
+  // panel they had just opened.
   return (
     <section className="flex min-h-0 flex-1 flex-col justify-center gap-1 px-4" data-testid="workbench-entry">
       {WORKBENCH_TOOLS.map((tool) => {

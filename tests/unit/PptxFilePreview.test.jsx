@@ -83,7 +83,7 @@ test('PPTX original-file preview displays parsed drawing, never the Markdown HTM
   try {
     await act(async () => h.root.render(<DirectFilePreview file={file} url={url} t={t} />))
     await h.settle()
-    const canvas = h.container.querySelector('[data-testid="pptx-original-layout"]')
+    const canvas = h.container.querySelector('[data-testid="pptx-original-layout-0"]')
     assert.ok(canvas)
     assert.equal(canvas.getAttribute('viewBox'), '0 0 1280 720')
     assert.equal(canvas.firstElementChild.getAttribute('fill'), 'rgba(17,51,85,1)')
@@ -91,7 +91,6 @@ test('PPTX original-file preview displays parsed drawing, never the Markdown HTM
     assert.equal(canvas.querySelector('foreignObject span').style.fontFamily, 'Georgia')
     assert.match(canvas.textContent, /Same content/)
     assert.equal(h.container.querySelector('iframe'), null)
-    assert.match(h.container.textContent, /chatPreview\.pptxLayoutNotice/)
     assert.deepEqual(requests.map((request) => request.input), [url])
     assert.equal(requests[0].init.cache, 'no-store')
   } finally { await h.close() }
@@ -107,13 +106,15 @@ test('unsupported binary slides are explicitly text-only and carry no download a
       <DirectFilePreview file={file} url={url} t={t} />
     </>))
     await h.settle()
-    assert.equal(h.container.querySelector('[data-testid="pptx-original-layout"]'), null)
-    assert.ok(h.container.querySelector('[data-testid="pptx-text-outline"]'))
+    assert.equal(h.container.querySelector('[data-testid="pptx-original-layout-0"]'), null)
     assert.ok(h.container.querySelector('[data-testid="pptx-layout-unavailable"]'))
-    // The first disclosure is the file menu; the slide outline below it starts closed.
-    assert.equal(h.container.querySelector('details').open, false, 'neither list starts expanded')
+    // The only disclosure left in the pane is the file menu, and it starts closed.
+    assert.equal(h.container.querySelector('details').open, false, 'the file menu starts collapsed')
     assert.match(h.container.textContent, /chatPreview\.pptxOutlineNotice/)
-    assert.match(h.container.textContent, /Same content/)
+    // The text outline was removed on request. A slide that cannot be drawn now
+    // carries no text in the pane at all — only the notice and the way to the
+    // original file — which is the deliberate trade for dropping the clutter.
+    assert.equal(h.container.querySelector('[data-testid="pptx-text-outline"]'), null)
     assert.equal(h.container.querySelector('iframe'), null)
     assert.equal(h.container.querySelector('a[download="deck.pptx"]'), null)
   } finally { await h.close() }
@@ -130,12 +131,12 @@ test('same id and URL with a new preview revision refetches and redraws changed 
   try {
     await act(async () => h.root.render(<DirectFilePreview file={{ ...file, previewRevision: 'v1' }} url={url} t={t} />))
     await h.settle()
-    const first = h.container.querySelector('[data-testid="pptx-original-layout"]')
+    const first = h.container.querySelector('[data-testid="pptx-original-layout-0"]')
     await act(async () => h.root.render(<DirectFilePreview file={{ ...file, previewRevision: 'v1' }} url={url} t={t} />))
     assert.equal(requests.length, 1, 'ordinary React rerenders do not refetch stable revisions')
     await act(async () => h.root.render(<DirectFilePreview file={{ ...file, previewRevision: 'v2' }} url={url} t={t} />))
     await h.settle()
-    const current = h.container.querySelector('[data-testid="pptx-original-layout"]')
+    const current = h.container.querySelector('[data-testid="pptx-original-layout-0"]')
     assert.notEqual(current, first)
     assert.equal(current.firstElementChild.getAttribute('fill'), 'rgba(255,238,221,1)')
     assert.equal(current.querySelector('foreignObject span').style.fontFamily, 'Arial')
@@ -186,7 +187,7 @@ test('successful PPTX previews expose an in-place refresh for same-path local ed
     await act(async () => refresh.click())
     await h.settle()
     assert.deepEqual(requests, [url, `${url}&previewRetry=1`])
-    assert.equal(h.container.querySelector('[data-testid="pptx-original-layout"] rect').getAttribute('fill'), 'rgba(255,238,221,1)')
+    assert.equal(h.container.querySelector('[data-testid="pptx-original-layout-0"] rect').getAttribute('fill'), 'rgba(255,238,221,1)')
   } finally { await h.close() }
 })
 
@@ -216,8 +217,10 @@ test('outline-only PPTX files do not regain a template when page metadata is abs
     await act(async () => h.root.render(<DirectFilePreview file={file} url={url} t={t} />))
     await h.settle()
     assert.match(h.container.textContent, /chatPreview\.pptxOutlineNotice/)
-    assert.match(h.container.textContent, /Outline only/)
-    assert.equal(h.container.querySelector('iframe, [data-testid="pptx-original-layout"]'), null)
+    // The outline used to be where this slide's text surfaced; it was removed on
+    // request, so the pane now states the limitation without repeating the text.
+    assert.equal(h.container.querySelector('[data-testid="pptx-text-outline"]'), null)
+    assert.equal(h.container.querySelector('iframe, [data-testid="pptx-original-layout-0"]'), null)
   } finally { await h.close() }
 })
 
@@ -253,7 +256,7 @@ test('completed style revision flows through the event, same-id stream collectio
         type, payload, sessionId: 'session', messageId: 'message',
       })),
     }))
-    await h.settle(() => h.container.querySelector('[data-testid="pptx-original-layout"] rect')?.getAttribute('fill') === 'rgba(255,238,221,1)')
+    await h.settle(() => h.container.querySelector('[data-testid="pptx-original-layout-0"] rect')?.getAttribute('fill') === 'rgba(255,238,221,1)')
     assert.deepEqual(requests, [url, url])
     assert.equal(h.container.querySelector('foreignObject span').style.fontFamily, 'Arial')
     const tabs = h.container.querySelector('[data-testid="live-preview-tabs"]')

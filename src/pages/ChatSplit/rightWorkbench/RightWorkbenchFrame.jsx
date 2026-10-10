@@ -7,6 +7,7 @@ import { clampWidth, MIN_WIDTH } from './rightWorkbenchLayout.js'
  */
 export default function RightWorkbenchFrame({
   beginResize,
+  embedded = false,
   isGenerating,
   onResetWidth,
   panelWidth,
@@ -17,20 +18,24 @@ export default function RightWorkbenchFrame({
 }) {
   return (
     <>
-      <button
-        type="button"
-        data-testid="workbench-resize-handle"
-        className="absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none bg-transparent outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent hover:after:bg-accent/50 focus-visible:after:bg-focus"
-        aria-label={t('workbench.resize')}
-        aria-valuemin={MIN_WIDTH}
-        aria-valuemax={clampWidth(Number.MAX_SAFE_INTEGER)}
-        aria-valuenow={panelWidth}
-        aria-orientation="vertical"
-        role="separator"
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
-        onDoubleClick={onResetWidth}
-      />
+      {/* Embedded, the region around this pane owns the edge the reader drags —
+          a second handle here would move the same edge from two places. */}
+      {!embedded && (
+        <button
+          type="button"
+          data-testid="workbench-resize-handle"
+          className="absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none bg-transparent outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent hover:after:bg-accent/50 focus-visible:after:bg-focus"
+          aria-label={t('workbench.resize')}
+          aria-valuemin={MIN_WIDTH}
+          aria-valuemax={clampWidth(Number.MAX_SAFE_INTEGER)}
+          aria-valuenow={panelWidth}
+          aria-orientation="vertical"
+          role="separator"
+          onPointerDown={beginResize}
+          onKeyDown={resizeWithKeyboard}
+          onDoubleClick={onResetWidth}
+        />
+      )}
 
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-ink/10 px-3">
         <div className="workbench-header-title min-w-0 flex-1">

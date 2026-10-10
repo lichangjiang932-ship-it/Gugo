@@ -67,12 +67,12 @@ function SlideElement({ element, shadowId }) {
 
 // Only bounded, parsed OOXML values enter this renderer. Text remains React
 // content and raster images remain validated embedded data, never remote HTML.
-export default function PptxSlideCanvas({ slide }) {
+export default function PptxSlideCanvas({ slide, testId = 'pptx-original-layout' }) {
   const id = useId().replace(/[^a-zA-Z0-9_-]/g, '')
   const { width, height, background, elements } = slide.layout
   const shadowId = (index) => `pptx-shadow-${id}-${index}`
   return <svg xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${width} ${height}`}
-    width="100%" role="img" aria-label={slide.title} data-testid="pptx-original-layout"
+    width="100%" role="img" aria-label={slide.title} data-testid={testId}
     className="block w-full overflow-hidden border border-ink/10 shadow-sm" style={{ aspectRatio: `${width} / ${height}` }}>
     <rect width={width} height={height} fill={background} />
     <defs>{elements.map((element, index) => element.shadow && <ShadowFilter key={index} element={element} id={shadowId(index)} />)}</defs>

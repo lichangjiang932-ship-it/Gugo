@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import WorkbenchEntry from '../../src/pages/ChatSplit/rightWorkbench/WorkbenchEntry.jsx'
 import { HashRouter } from '../../src/lib/router.jsx'
+import { readDockState } from '../../src/pages/ChatSplit/dock/dockStore.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -41,7 +42,12 @@ test('the entry page lists every tool with the key that reaches it', async () =>
   await act(async () => {
     rows[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
+  // All three are tabs of this panel. The browser and the terminal used to be
+  // handed to the dock instead, which meant the same two surfaces existed twice —
+  // once here and once there — and choosing one moved the reader out of the panel
+  // they had just opened.
   assert.deepEqual(picked, ['browser'])
+  assert.equal(readDockState().panel, '', 'the dock is not asked for a tool any more')
   // The panel offers the three tools and nothing that leaves the conversation:
   // the Git workbench is not reached from here (it is a page, not a tab).
   assert.equal(document.querySelector('[data-testid="workbench-entry-git"]'), null)

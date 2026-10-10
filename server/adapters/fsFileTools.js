@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { writeLimiter } from '../utils/rateLimiter.js'
 import { checkWorkspaceSize } from '../utils/workspaceSize.js'
+import { codeMatchOffset } from '../utils/jsAstEdit.js'
 import {
   extractManagedAttachmentContent,
   extractOfficeBufferContent,
@@ -381,10 +382,18 @@ export async function editFileTool({
     const idx = orig.indexOf(old_string)
     if (idx === -1) throw badReq('old_string 在文件里未找到')
     const second = orig.indexOf(old_string, idx + old_string.length)
+    let target = idx
     if (second !== -1) {
-      throw badReq('old_string 在文件里出现多次,请加上下文使其唯一,或传 replace_all:true')
+      // Several exact matches: for JavaScript, prefer the one a real parse places
+      // in code (not a comment or string). Only an unambiguous single code hit is
+      // accepted; otherwise fall through to the "not unique" error rather than guess.
+      const codeIdx = codeMatchOffset(full, orig, old_string)
+      if (codeIdx == null) {
+        throw badReq('old_string 在文件里出现多次,请加上下文使其唯一,或传 replace_all:true')
+      }
+      target = codeIdx
     }
-    next = orig.slice(0, idx) + new_string + orig.slice(idx + old_string.length)
+    next = orig.slice(0, target) + new_string + orig.slice(target + old_string.length)
     replacedCount = 1
   }
   try {

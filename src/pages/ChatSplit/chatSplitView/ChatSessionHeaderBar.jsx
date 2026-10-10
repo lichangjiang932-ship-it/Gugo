@@ -64,9 +64,9 @@ export default function ChatSessionHeaderBar({
     ? `${t('workbench.planCardTitle')} · ${t('workbench.planProgress', { done: todosDone, total: todos.length })}`
     : t('workbench.planCardTitle')
   return (
-    <header className="chat-session-header flex h-12 shrink-0 items-center gap-2.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
+    <header className="chat-session-header flex h-12 shrink-0 items-center gap-1.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
       <ChatSessionHeading hasWorkspace={hasWorkspace} workspacePath={workspacePath} title={activeSession?.title || t('nav.newChat')} data-testid="chat-session-title" />
-      <button type="button" data-testid="header-plan-toggle" data-has-progress={todoProgress ? true : undefined} aria-pressed={planVisible || undefined} onClick={() => (planVisible ? onClosePlan?.() : onOpenPlan?.())} onKeyDown={(event) => { if (event.key === 'Escape' && planVisible) { event.preventDefault(); onClosePlan?.() } }} title={planTitle} aria-label={planTitle} className={`chat-chrome-button inline-flex h-8 min-w-8 shrink-0 items-center justify-center gap-1.5 rounded-control px-1.5 text-xs text-ink-fade hover:text-ink ${todoProgress ? 'chat-plan-chip' : ''}`}>
+      <button type="button" data-testid="header-plan-toggle" data-has-progress={todoProgress ? true : undefined} aria-pressed={planVisible || undefined} onClick={() => (planVisible ? onClosePlan?.() : onOpenPlan?.())} onKeyDown={(event) => { if (event.key === 'Escape' && planVisible) { event.preventDefault(); onClosePlan?.() } }} title={planTitle} aria-label={planTitle} className={`chat-chrome-button inline-flex h-8 min-w-8 shrink-0 items-center justify-center gap-1.5 rounded-control px-1.5 text-xs text-ink-soft hover:text-ink ${todoProgress ? 'chat-plan-chip' : ''}`}>
         {todoProgress
           ? <TodoProgressRing done={todosDone} total={todos.length} />
           : <ListChecks className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />}

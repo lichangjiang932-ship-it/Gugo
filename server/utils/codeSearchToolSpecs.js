@@ -51,4 +51,22 @@ export const CODE_SEARCH_TOOL_SPECS = Object.freeze([
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'find_files',
+      description: '按文件名/glob 找文件位置(不看内容).例如"有哪些 *.tsx""src 下的 *.test.js""parser 在哪个文件".比 list_directory 逐层翻快,默认忽略 .git/node_modules/dist.返回排序的相对路径.',
+      parameters: {
+        type: 'object',
+        properties: {
+          glob: { type: 'string', description: 'glob 模式,如 "*.tsx" 或 "src/**/*.js";省略则列出所有文件' },
+          path: { type: 'string', description: '搜索范围,默认 workspace 根' },
+          file_type: { type: 'string', description: 'rg 类型别名,如 "ts"/"py",配合 glob 做交集' },
+          case_sensitive: { type: 'boolean', default: false, description: 'glob 大小写敏感,默认 false' },
+          max_results: { type: 'integer', default: 50, description: '最大返回数,默认 50,上限 500' },
+        },
+        required: [],
+      },
+    },
+  },
 ])

@@ -93,7 +93,13 @@ test('right workbench toggle leaves the navigation rail mounted', () => {
   assert.match(headerBar, /aria-expanded=\{workbenchOpen\}/)
   assert.match(view, /<ChatRightPanels/)
   assert.match(rightPanels, /<RightWorkbench/)
-  assert.match(rightPanels, /if \(!workbenchOpen\) return null[\s\S]*if \(previewArtifact\)/)
+  // The region closes as one thing, and the workbench and an open file are panes
+  // inside it rather than the two branches of one ternary. Opening a file used to
+  // take the panel away from the tool that was on screen; that is the behaviour
+  // this file used to pin, and it is the behaviour the reader asked to change.
+  assert.match(rightPanels, /if \(!workbenchOpen\) return null[\s\S]*<RightPaneGrid/)
+  assert.match(rightPanels, /top=\{\s*<RightWorkbench/)
+  assert.match(rightPanels, /bottomRight=\{previewArtifact \?/)
   assert.match(chat, /onClosePreview=\{\(\) => setWorkbenchOpen\(false\)\}/)
   assert.match(chat, /onOpenArtifact=\{\(artifact\) => \{ setWorkbenchOpen\(true\); dispatch\(\{ type: 'OPEN_PREVIEW_ARTIFACT'/)
   assert.doesNotMatch(shortcuts, /CLOSE_PREVIEW_ARTIFACT/)
@@ -114,9 +120,18 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   for (const [, classes] of notices) assert.match(classes, /w-full min-w-0 max-w-\[780px\]/)
   assert.doesNotMatch(view, /calc\(100vw-320px\)/)
   assert.doesNotMatch(noticesSource, /calc\(100vw-320px\)/)
-  // The panel is a row now (content, then the tool rail on its right edge); the
-  // requirement is unchanged: it must shrink inside the viewport, never push it.
-  assert.match(workbench, /h-full min-w-0 max-w-\[calc\(100vw-60px\)\] shrink flex-row overflow-hidden/)
+  // The requirement is unchanged — the region must shrink inside the viewport,
+  // never push it — but the width is no longer each panel's own business: it
+  // moved up to the region, which is the only thing that can see how many panes
+  // are asking at once. The clamp lives there now.
+  const region = read('../src/pages/ChatSplit/rightPanes/useRightRegionLayout.js')
+  assert.match(region, /MIN_CHAT_WIDTH = 400/)
+  assert.match(region, /return Math\.min\(regionMaxWidth\(viewport\), Math\.max\(MIN_REGION_WIDTH, wanted\)\)/)
+  // And the region will not draw two panes side by side below the width where
+  // either of them stops being readable; it stacks them instead.
+  assert.match(region, /MIN_PANE_WIDTH = 220/)
+  assert.match(read('../src/pages/ChatSplit/rightPanes/RightPaneGrid.jsx'), /const stackBottom = openLeft && openRight && region\.width < MIN_PANE_WIDTH \* 2 \+ GUTTER_PX/)
+  assert.match(workbench, /h-full min-w-0[\s\S]{0,80}flex-row overflow-hidden/)
   assert.doesNotMatch(workbench, /h-full shrink-0 flex-col/)
   assert.match(rail, /NARROW_RAIL_QUERY = '\(max-width: 959px\)'/)
   assert.match(rail, /w-\[min\(320px,calc\(100vw-60px\)\)\] min-w-0 max-w-\[320px\]/)
@@ -234,9 +249,11 @@ test('the tool panel and the plan card are controlled by two independent switche
   // And the reverse: the card's own close only writes the card.
   assert.match(index, /onClosePlan=\{\(\) => \{ setPlanVisible\(false\); setDismissedPlanSignature\(planSignature\) \}\}/)
 
-  // The card is drawn outside the panel, so it stays when the panel is closed.
-  const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
-  // The plan card is rendered by the view itself; presence, not source order.
-  assert.ok(view.includes('<PlanCard'))
-  assert.match(view, /\{planVisible && \(/)
+  // The card is a pane of the region, driven straight from `planVisible`: it no
+  // longer goes through the dock, which knew about one panel at a time and would
+  // have evicted whatever else the reader had open to show it.
+  const panels = read('../src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx')
+  assert.ok(panels.includes('<PlanCard'), 'the plan card is a pane of the region')
+  assert.match(panels, /bottomLeft=\{planVisible \?/)
+  assert.doesNotMatch(read('../src/pages/ChatSplit/dock/dockStore.js'), /'plan'/, 'the dock no longer holds the plan')
 })

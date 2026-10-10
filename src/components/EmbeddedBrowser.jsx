@@ -215,7 +215,6 @@ export default function EmbeddedBrowser({ active = true, t }) {
             </span>
             <div className="max-w-[17rem]">
               <p className="text-sm font-medium text-ink">{t('workbench.browserEmptyTitle')}</p>
-              <p className="mt-1 text-balance text-xs leading-5 text-ink-fade">{t('workbench.browserHint')}</p>
             </div>
             {browser.recent.length > 0 && (
               <div className="w-full max-w-[18rem] text-left" data-testid="embedded-browser-recent">

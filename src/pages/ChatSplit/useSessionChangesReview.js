@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { countRecordedEditLines, sessionFileChanges, sessionFileEditIndex } from '../../lib/sessionChanges.js'
+import { diffTextFromEdits, publishSessionChanges } from '../../lib/sessionChangesFeed.js'
 
 /**
  * The conversation's change review: how many files this session's tool calls
@@ -39,6 +40,25 @@ export default function useSessionChangesReview({ messages, onOpen = null, onOpe
     () => (visible ? sessionFileEditIndex(messages, scope) : null),
     [visible, messages, scope],
   )
+  // Publish what this conversation changed so the review panel can offer it as a
+  // comparison target without the chat and the workbench sharing a prop chain.
+  useEffect(() => {
+    const all = sessionFileChanges(messages, scope)
+    const index = sessionFileEditIndex(messages, scope)
+    const diffs = {}
+    const files = all.files.map((file) => {
+      const edits = index.get(file.key) || []
+      const counts = file.reported || countRecordedEditLines(edits)
+      const text = diffTextFromEdits(edits)
+      const path = String(file.path || file.displayPath || '')
+      if (text) {
+        diffs[path] = text
+        if (file.displayPath && file.displayPath !== path) diffs[file.displayPath] = text
+      }
+      return { path, additions: counts.additions, deletions: counts.deletions }
+    })
+    publishSessionChanges({ files, diffs })
+  }, [messages, scope])
 
   const open = useCallback(() => {
     // Another panel wants the same corner of the screen; opening this one is the

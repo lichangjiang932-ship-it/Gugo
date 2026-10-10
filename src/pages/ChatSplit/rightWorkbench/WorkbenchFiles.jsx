@@ -60,9 +60,8 @@ export default function WorkbenchFiles({ artifacts, onOpenArtifact, t }) {
   ]
   return (
     <section data-testid="workbench-files" data-artifact-surface="workbench-files" className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
-      <p className="mb-3 px-1 text-xs leading-5 text-ink-fade">{t('workbench.filesHint')}</p>
       {artifacts.length === 0 ? (
-        <div className="flex h-44 flex-col items-center justify-center gap-2 text-ink-fade"><Files className="h-7 w-7 opacity-30" /><span className="text-xs">{t('workbench.noFiles')}</span></div>
+        <div className="flex h-44 items-center justify-center text-ink-fade"><Files className="h-7 w-7 opacity-30" aria-hidden="true" /></div>
       ) : groups.filter((group) => group.files.length > 0).map((group) => (
         <section key={group.key} data-testid={`workbench-${group.key}`} className="mb-4">
           <h3 className="mb-1 px-1 text-xs font-semibold text-ink">{t(group.title)}</h3>

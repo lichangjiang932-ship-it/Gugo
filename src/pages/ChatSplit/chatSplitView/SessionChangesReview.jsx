@@ -19,13 +19,22 @@ export default function SessionChangesReview({ review, t }) {
   const additions = review?.summary?.additions || 0
   const deletions = review?.summary?.deletions || 0
   const host = typeof document === 'undefined' ? null : document.querySelector('[data-chat-main-area]')
+  // The review lives beside the conversation now, not over it: the chip asks the
+  // workbench for its diff tab instead of opening the old portal overlay. The
+  // overlay component stays in the tree until the new path has settled.
+  const openReview = () => {
+    if (typeof window === 'undefined') return
+    // The chip is about *this conversation's* changes, so the panel opens on the
+    // conversation target; git targets stay one click away in its breadcrumb.
+    window.dispatchEvent(new CustomEvent('chat-workbench:open-diff', { detail: { mode: 'session' } }))
+  }
   return (
     <>
       <button
         type="button"
         data-open={review?.visible || undefined}
         data-has-changes={count > 0 || undefined}
-        onClick={review?.toggle}
+        onClick={openReview}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && review?.visible) {
             event.preventDefault()
@@ -36,7 +45,7 @@ export default function SessionChangesReview({ review, t }) {
         aria-label={t('chat.changes.toggle')}
         title={count > 0 ? t('chat.changes.toggleCount', { count }) : t('chat.changes.toggle')}
         data-testid="session-changes-toggle"
-        className={`chat-chrome-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-ink-fade hover:text-ink ${count > 0 ? 'chat-changes-chip' : ''}`}
+        className={`chat-chrome-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-ink-soft hover:text-ink ${count > 0 ? 'chat-changes-chip' : ''}`}
       >
         <FileDiff className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
         {/* Codex's diff stat: the size of what changed, in the colours of a diff. */}

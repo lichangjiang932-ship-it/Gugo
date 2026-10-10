@@ -35,7 +35,9 @@ test('an idle stream reports last observed counters and quiet duration without c
     streaming: true,
     modelActivity: { kind: 'model', phase: 'idle', toolName: 'create_pptx', toolArgumentsChars: 9000, idleMs: 37000 },
   })
-  assert.match(markup, /Waiting for the model to continue/)
+  // It names the call it is partway through, and still claims no new work.
+  assert.match(markup, /Partway through the arguments for Create PowerPoint; the model has paused/)
+  assert.doesNotMatch(markup, /Preparing arguments/)
   assert.match(markup, /9,000 characters received/)
   assert.match(markup, /No new content for 37 seconds/)
   assert.doesNotMatch(markup, /still running|Completed/)

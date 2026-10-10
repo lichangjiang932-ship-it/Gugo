@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
-import { isDesktopPageFactsAvailable } from '../../../lib/desktopBrowserClient.js'
 import { cancelPreviewElementPick, describePickedElement, pickPreviewElement } from '../../../lib/previewElementPicker.js'
 
 /**
@@ -13,7 +12,8 @@ import { cancelPreviewElementPick, describePickedElement, pickPreviewElement } f
  * toast, so the reader sees what they picked without opening anything.
  *
  * The panel is the only thing that can see the page, so the control is offered
- * only where that panel is a real browser view.
+ * only where the preview can actually be read — a docked desktop view, or
+ * content this app drew into its own tree.
  */
 export default function usePreviewElementPicker({ insertText, t, toast } = {}) {
   const [picking, setPicking] = useState(false)
@@ -25,7 +25,6 @@ export default function usePreviewElementPicker({ insertText, t, toast } = {}) {
   }, [])
 
   const toggle = useCallback(async () => {
-    if (!isDesktopPageFactsAvailable()) return
     if (pickingRef.current) {
       pickingRef.current = false
       setPicking(false)

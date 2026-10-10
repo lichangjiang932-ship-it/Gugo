@@ -173,7 +173,7 @@ test('canonical edit arguments still enforce the existing directory write grant'
 test('subagent policies reuse canonical catalog objects without expanding their tool names', () => {
   const readonlyNames = [
     'web_search', 'fetch_url', 'list_directory', 'read_file',
-    'grep_code', 'find_symbol', 'list_imports', 'lsp',
+    'grep_code', 'find_symbol', 'list_imports', 'find_files', 'lsp',
     'reflect', 'request_clarification', 'request_directory', 'sleep_until',
     'load_skill',
   ]

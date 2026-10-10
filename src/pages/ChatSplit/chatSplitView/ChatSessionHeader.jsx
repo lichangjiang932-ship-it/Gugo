@@ -6,7 +6,7 @@ export function ChatSessionHeading({ hasWorkspace, title, workspacePath = '', ..
   return <>
     {hasWorkspace && project
       ? <ProjectGlyph name={project} open className="chat-session-project-glyph" title={workspacePath} />
-      : <MessageSquare className="h-4 w-4 shrink-0 text-ink-fade" strokeWidth={1.6} aria-hidden="true" />}
+      : <MessageSquare className="chat-session-face h-5 w-5 shrink-0" strokeWidth={1.8} aria-hidden="true" />}
     {/* project / conversation, as Codex and Claude Code show the thread's place:
         the project is context, the title is what this header is about. */}
     {hasWorkspace && project && (
@@ -30,7 +30,7 @@ export function ChatWorkbenchToggle({ open, ...buttonAttributes }) {
     {...buttonAttributes}
     type="button"
     data-open={open || undefined}
-    className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"
+    className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-soft hover:text-ink"
   >
     <PanelRight className="h-[18px] w-[18px]" strokeWidth={1.5} aria-hidden="true" />
   </button>
@@ -48,7 +48,7 @@ export function ChatPreviewButton({ label, open, shortcut, ...buttonAttributes }
     {...buttonAttributes}
     type="button"
     data-open={open || undefined}
-    className="chat-chrome-button group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"
+    className="chat-chrome-button group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-soft hover:text-ink"
   >
     <Play className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
     <span role="tooltip" data-testid="chat-preview-tip" className="chat-chrome-tip">

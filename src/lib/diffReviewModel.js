@@ -6,10 +6,21 @@
  */
 
 /** The three comparison targets, in the order the reference lists them. */
-export const COMPARE_MODES = Object.freeze(['all', 'uncommitted', 'branch'])
+export const COMPARE_MODES = Object.freeze(['all', 'uncommitted', 'branch', 'session'])
+
+/**
+ * Only `uncommitted` is wired end to end today: the other two need a backend
+ * scope that does not exist yet, so the UI keeps them visible but disabled with
+ * the reason in the tooltip rather than pretending they do something.
+ *
+ * All three are wired now: uncommitted reads the working tree, `all` reads
+ * everything against HEAD, and `branch` reads against a chosen revision.
+ */
+export const WIRED_COMPARE_MODES = Object.freeze(['all', 'session', 'uncommitted', 'branch'])
 
 export function compareLabel(target = {}, t) {
   if (target.mode === 'all') return t('diffReview.allChanges')
+  if (target.mode === 'session') return t('diffReview.sessionChanges')
   if (target.mode === 'branch') return `${t('diffReview.compareAgainst')} ${target.branch || ''}`.trim()
   return `${target.branch || 'main'} ▸ ${t('diffReview.workingTree')}`
 }

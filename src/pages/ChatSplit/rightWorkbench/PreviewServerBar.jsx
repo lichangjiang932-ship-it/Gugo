@@ -62,11 +62,9 @@ export default function PreviewServerBar({ active = true, t, workspacePath = '' 
   }, [server.url, status])
 
   if (!workspacePath) {
-    return (
-      <p data-testid="preview-server-bar" className="shrink-0 border-b border-ink/10 px-3 py-2 text-xs leading-5 text-ink-fade">
-        {t('workbench.previewNeedsWorkspace')}
-      </p>
-    )
+    // No workspace, no server bar: the line that used to explain this was a
+    // standing instruction in a panel whose own controls say it better.
+    return null
   }
 
   return (

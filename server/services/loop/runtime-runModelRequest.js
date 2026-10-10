@@ -118,6 +118,31 @@ async function executeModelRequestRound(s, context) {
     sourceHandoffViolation,
   } = s.d
   let streamedText = false
+  // Text written before a tool call is narration ("checking the sources, then
+  // building the deck"), not an answer, but a response that may still call a
+  // mutating tool is buffered: it might yet be a premature "done". Once the model
+  // starts a tool call, the buffered text is proven to be narration and goes out,
+  // and later text in the same response streams live.
+  let heldNarration = []
+  let narrationLive = false
+  const publishText = async (text, metadata = {}) => {
+    streamedText = true
+    i.responseTextPublished = true
+    if (typeof s.onModelDelta === 'function') {
+      await s.onModelDelta({ text, iteration: s.iter, modelName: metadata.modelName || null })
+    }
+  }
+  const releaseNarration = async () => {
+    if (narrationLive) return
+    // Narration is released only when it carries none of what source-handoff
+    // protection exists to keep off the screen (pasted source, "save this as").
+    const held = heldNarration
+    if (s.requiresSourceHandoffProtection
+      && s.d.sourceHandoffViolation(held.map((entry) => entry.text).join(''))) return
+    narrationLive = true
+    heldNarration = []
+    for (const entry of held) await publishText(entry.text, entry.metadata)
+  }
   // Base tools keep their stable name order; tools activated after turn start
   // are appended so an append does not reorder the cached prefix.
   const modelTools = s.baseToolNames instanceof Set
@@ -141,16 +166,25 @@ async function executeModelRequestRound(s, context) {
         : {}),
     consumeBudget: (cost) => s.budget.consume(cost),
     onTextDelta: async (text, metadata = {}) => {
-      if (!text || s.requiresSourceHandoffProtection) return
-      if (s.requiresRepresentativeRead && !s.hasSuccessfulRepresentativeRead) return
-      if (!s.hasRequiredArtifacts() && !s.codeSnippetRequested) return
-      if (s.requiresExecutionEvidence && !s.hasRequiredExecutionEvidence()) return
-      if (context.modelMayRequestMutation || !context.hasCurrentAnswerReview()) return
-      streamedText = true
-      i.responseTextPublished = true
-      if (typeof s.onModelDelta === 'function') {
-        await s.onModelDelta({ text, iteration: s.iter, modelName: metadata.modelName || null })
-      }
+      if (!text) return
+      // After a tool call has started, later text in the same response is
+      // narration too. Source-handoff protection still screens it as a whole,
+      // so a turn under that protection streams no further text live.
+      if (narrationLive) return s.requiresSourceHandoffProtection ? undefined : publishText(text, metadata)
+      // Each of these keeps a not-yet-earned *answer* off the screen. Text in a
+      // response that turns out to call a tool is narration instead, so it is
+      // held rather than dropped and released when the call starts.
+      const answerAllowed = !s.requiresSourceHandoffProtection
+        && !(s.requiresRepresentativeRead && !s.hasSuccessfulRepresentativeRead)
+        && (s.hasRequiredArtifacts() || s.codeSnippetRequested)
+        && !(s.requiresExecutionEvidence && !s.hasRequiredExecutionEvidence())
+        && !context.modelMayRequestMutation
+        && context.hasCurrentAnswerReview()
+      if (answerAllowed) return publishText(text, metadata)
+      heldNarration.push({ text, metadata })
+    },
+    onToolCallStarted: async () => {
+      await releaseNarration()
     },
     onReasoningDelta: async (text, metadata = {}) => {
       if (!text || typeof s.onReasoningDelta !== 'function') return

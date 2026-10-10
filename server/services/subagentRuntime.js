@@ -124,6 +124,7 @@ async function executeSubagentTool(toolName, args, {
     case 'grep_code':
     case 'find_symbol':
     case 'list_imports':
+    case 'find_files':
       return dispatchCodeSearchTool(toolName, args, { userId })
     case 'lsp':
       return dispatchLspTool(args, { userId, signal })

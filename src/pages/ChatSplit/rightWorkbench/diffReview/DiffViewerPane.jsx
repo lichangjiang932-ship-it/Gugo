@@ -93,9 +93,81 @@ function Row({ comment, draft, onComment, onDraftChange, onSaveComment, onCancel
   )
 }
 
+function SideRow({ comment, draft, onCancelComment, onComment, onDraftChange, onSaveComment, row, rowId, t, view }) {
+  const half = (side) => {
+    const isOld = side === 'old'
+    const number = isOld ? row.oldNumber : row.newNumber
+    const text = isOld ? row.oldText : row.newText
+    const tinted = row.kind === 'changed' ? 'diff-row-changed'
+      : (isOld && row.kind === 'removed') ? 'diff-row-removed'
+        : (!isOld && row.kind === 'added') ? 'diff-row-added' : ''
+    return (
+      <div className={`grid min-w-0 grid-cols-[3rem_1fr] ${tinted}`} data-testid={`diff-side-${side}`}>
+        <span className="select-none border-r border-ink/5 px-1 text-right font-mono text-ink-fade">{number ?? ''}</span>
+        <span className={`min-w-0 px-2 font-mono ${view.wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>
+          {text || ' '}
+        </span>
+      </div>
+    )
+  }
+  const comments = comment || []
+  const showDraft = draft?.rowId === rowId
+  return (
+    <div className="border-b border-ink/5" data-testid="diff-row" data-kind={row.kind} data-side-by-side="true">
+      <div className="group grid grid-cols-2 divide-x divide-ink/10 text-xs leading-5">
+        {half('old')}
+        <div className="relative min-w-0">
+          {half('new')}
+          <button
+            type="button"
+            data-testid="diff-comment-add"
+            aria-label={t('diffReview.addComment')}
+            title={t('diffReview.addComment')}
+            onClick={() => onComment(rowId, row)}
+            className="absolute right-1 top-0.5 hidden h-4 w-4 items-center justify-center rounded-full bg-accent text-paper group-hover:flex"
+          >
+            <MessageSquarePlus className="h-3 w-3" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      {(comments.length > 0 || showDraft) && (
+        <div className="bg-paper-2/50 px-2 py-1.5" data-testid="diff-inline-comment">
+          {comments.map((entry) => (
+            <p key={entry.id} className="flex items-start gap-2 py-0.5 text-xs text-ink-soft">
+              <span className="min-w-0 flex-1">{entry.text}</span>
+              <button type="button" className="shrink-0 text-xs text-ink-fade hover:text-danger" onClick={() => entry.onRemove?.()}>
+                {t('diffReview.cancel')}
+              </button>
+            </p>
+          ))}
+          {showDraft && (
+            <div className="flex items-center gap-2 py-0.5">
+              <input
+                autoFocus
+                value={draft.text}
+                data-testid="diff-comment-input"
+                placeholder={t('diffReview.commentPlaceholder')}
+                onChange={(event) => onDraftChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') onCancelComment()
+                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); onSaveComment() }
+                }}
+                className="h-7 min-w-0 flex-1 rounded-control border border-ink/15 bg-paper px-2 text-xs text-ink outline-none focus:border-focus"
+              />
+              <button type="button" data-testid="diff-comment-save" className="text-xs text-accent" onClick={onSaveComment}>{t('diffReview.save')}</button>
+              <button type="button" data-testid="diff-comment-cancel" className="text-xs text-ink-fade" onClick={onCancelComment}>{t('diffReview.cancel')}</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
- * One file's diff. Side-by-side shares a single scroll container, so the two
- * columns cannot drift apart; unified is the default, matching the reference.
+ * One file's diff. Side by side puts the old line on the left and the new one on
+ * the right inside a single scroll container, so the two columns cannot drift
+ * apart; unified is the default, matching the reference.
  */
 export default function DiffViewerPane({
   comments = [],
@@ -103,6 +175,7 @@ export default function DiffViewerPane({
   file,
   initialCollapsed = false,
   onAddComment,
+  onDraftActiveChange,
   onRemoveComment,
   t,
   view,
@@ -133,26 +206,28 @@ export default function DiffViewerPane({
           {diff?.status === 'loading' && <p className="px-3 py-2 text-xs text-ink-fade">{t('diffReview.loading')}</p>}
           {diff?.status === 'error' && <p role="alert" className="px-3 py-2 text-xs text-danger">{diff.error || t('diffReview.failed')}</p>}
           {diff?.status === 'ready' && rows.length === 0 && <p className="px-3 py-2 text-xs text-ink-fade">{t('diffReview.emptyDiff')}</p>}
-          <div className={view.sideBySide ? 'grid grid-cols-2 divide-x divide-ink/10' : ''}>
+          <div>
             {rows.map((row, index) => {
               const rowId = rowKey(file.path, row, index)
               const shared = {
-                comment: commentsFor(rowId), draft, onCancelComment: () => setDraft(null),
-                onComment: (id) => setDraft({ rowId: id, row, text: '' }),
+                comment: commentsFor(rowId), draft, onCancelComment: () => { setDraft(null); onDraftActiveChange?.(false) },
+                onComment: (id, target) => { setDraft({ rowId: id, row: target, text: '' }); onDraftActiveChange?.(true) },
                 onDraftChange: (text) => setDraft((current) => (current ? { ...current, text } : current)),
                 onSaveComment: () => {
-                  if (!draft?.text?.trim()) { setDraft(null); return }
+                  if (!draft?.text?.trim()) { setDraft(null); onDraftActiveChange?.(false); return }
                   onAddComment?.({
                     id: `${rowId}:${Date.now()}`, rowId, path: file.path, side: 'new',
                     line: row.newNumber ?? row.oldNumber ?? 0,
                     codeLine: row.newText || row.oldText || '', text: draft.text.trim(),
                   })
                   setDraft(null)
+                  onDraftActiveChange?.(false)
                 },
-                row: view.sideBySide ? { ...row, newText: row.newText } : row,
-                rowId, t, view,
+                row, rowId, t, view,
               }
-              return <Row key={rowId} {...shared} />
+              return view.sideBySide
+                ? <SideRow key={rowId} {...shared} />
+                : <Row key={rowId} {...shared} />
             })}
           </div>
         </div>

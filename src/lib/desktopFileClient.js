@@ -27,7 +27,7 @@ export async function openDesktopFile(file, action, {
 
 export function desktopFileErrorKey(code) {
   if (['PATH_NOT_AUTHORIZED', 'DESKTOP_FILE_AUTH_REQUIRED', 'UNAUTHORIZED', 'LOCAL_ONLY'].includes(code)) return 'chatPreview.fileActionDenied'
-  if (['ENOENT', 'DESKTOP_FILE_NOT_FOUND', 'VERIFIED_FILE_NOT_FOUND', 'RETAINED_FILE_NOT_FOUND', 'VERIFIED_FILE_MISSING', 'RETAINED_FILE_MISSING'].includes(code)) return 'chatPreview.sourceMissing'
+  if (['ENOENT', 'PATH_NOT_FOUND', 'DESKTOP_FILE_NOT_FOUND', 'VERIFIED_FILE_NOT_FOUND', 'RETAINED_FILE_NOT_FOUND', 'VERIFIED_FILE_MISSING', 'RETAINED_FILE_MISSING'].includes(code)) return 'chatPreview.sourceMissing'
   if (code === 'DESKTOP_FILE_OPEN_UNSAFE') return 'chatPreview.fileOpenUnsafe'
   if (code === 'DESKTOP_FILE_CHANGED') return 'chatPreview.fileChanged'
   if (['DESKTOP_FILE_UNAVAILABLE', 'DESKTOP_FILE_BRIDGE_UNAVAILABLE', 'DESKTOP_FILE_SERVICE_UNTRUSTED'].includes(code)) return 'chatPreview.fileBridgeUnavailable'
