@@ -30,7 +30,10 @@ export default function RightPaneGrid({
   // the region puts the split back on its own.
   const stackBottom = openLeft && openRight && region.width < MIN_PANE_WIDTH * 2 + GUTTER_PX
   const splitColumns = openLeft && openRight && !stackBottom
-  if (!top && !openBottom) return null
+  // A takeover is a pane too: the change review covers the region on its own,
+  // and this refused to draw the region for it, so the review could not open
+  // unless something else happened to be showing underneath.
+  if (!top && !openBottom && !takeover) return null
 
   const divider = 'touch-none bg-transparent outline-none after:absolute after:bg-transparent hover:after:bg-accent/50 focus-visible:after:bg-focus'
   const rowDivider = (

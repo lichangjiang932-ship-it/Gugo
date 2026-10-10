@@ -22,7 +22,9 @@ import { openDock } from '../dock/dockStore.js'
 
 const BUTTON = 'flex h-7 w-7 items-center justify-center rounded-full text-ink-fade transition-colors hover:bg-ink/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 disabled:cursor-default disabled:text-skel-2 disabled:hover:bg-transparent disabled:hover:text-skel-2'
 const MENU_ITEM = 'flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs text-ink-soft hover:bg-[var(--color-row-hover)] disabled:opacity-40'
-const MENU = 'absolute right-0 top-8 z-30 w-56 rounded-card bg-surface p-1 shadow-xl'
+// The width cap keeps a menu inside the window even when its trigger sits hard
+// against an edge, which is where the right region puts it.
+const MENU = 'absolute right-0 top-8 z-30 w-56 max-w-[calc(100vw-1rem)] rounded-card bg-surface p-1 shadow-xl'
 const MENU_GROUP = 'px-2.5 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-ink-fade'
 
 function toolTitle(tool, t) {

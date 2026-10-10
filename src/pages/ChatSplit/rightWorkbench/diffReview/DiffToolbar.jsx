@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronLeft, ExternalLink, Maximize2, MoreVertical,
 import { COMPARE_MODES, compareLabel, WIRED_COMPARE_MODES } from '../../../../lib/diffReviewModel.js'
 
 const BUTTON = 'flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 disabled:cursor-default disabled:opacity-40'
-const MENU = 'absolute right-0 top-8 z-30 w-64 rounded-card border border-ink/10 bg-surface p-1 shadow-xl'
+const MENU = 'absolute right-0 top-8 z-30 w-64 max-w-[calc(100vw-1rem)] rounded-card border border-ink/10 bg-surface p-1 shadow-xl'
 const MENU_ITEM = 'flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs text-ink-soft transition-colors hover:bg-[var(--color-row-hover)]'
 
 function ViewToggle({ active, children, onClick, testId }) {
@@ -100,7 +100,11 @@ export default function DiffToolbar({
           <span className="truncate" data-testid="diff-breadcrumb-label">{compareLabel(target, t)}</span>
           <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
         </summary>
-        <div role="menu" data-testid="diff-target-menu" className="absolute left-0 top-8 z-30 w-56 rounded-card border border-ink/10 bg-surface p-1 shadow-xl">
+        {/* Opens from the right edge of its own trigger, like the ⋮ beside it:
+            opened the other way it ran off the window whenever the region sat
+            against the right side, and the items a reader came for were the ones
+            cut off. The width cap is the belt to that braces. */}
+        <div role="menu" data-testid="diff-target-menu" className="absolute right-0 top-8 z-30 w-56 max-w-[calc(100vw-1rem)] rounded-card border border-ink/10 bg-surface p-1 shadow-xl">
           {COMPARE_MODES.map((mode) => (
             <button key={mode} type="button" role="menuitem" data-testid={`diff-target-${mode}`} className={`${MENU_ITEM} disabled:opacity-50`}
               disabled={!WIRED_COMPARE_MODES.includes(mode)}
