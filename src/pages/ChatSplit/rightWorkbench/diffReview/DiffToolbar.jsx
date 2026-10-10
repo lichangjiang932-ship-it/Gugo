@@ -28,6 +28,7 @@ export default function DiffToolbar({
   onClose,
   onExpandToggle,
   onRefresh,
+  onReviewCode,
   onSearchChange,
   onTargetChange,
   onToggleFiles,
@@ -40,8 +41,8 @@ export default function DiffToolbar({
   const [menu, setMenu] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const rootRef = useRef(null)
-  const canOpenWindow = typeof globalThis.window?.gugoDesktop?.isDesktop === 'boolean'
-    && globalThis.window.gugoDesktop.isDesktop === true
+  const bridgeOpenWindow = globalThis.window?.gugoDesktop?.openDiffWindow
+  const canOpenWindow = typeof bridgeOpenWindow === 'function'
 
   useEffect(() => {
     if (!menu) return undefined
@@ -116,6 +117,11 @@ export default function DiffToolbar({
           <ViewToggle testId="diff-view-words" active={view.highlightWords} onClick={() => flip('highlightWords')}>{t('diffReview.highlightWords')}</ViewToggle>
           <ViewToggle testId="diff-view-whitespace" active={view.hideWhitespace} onClick={() => flip('hideWhitespace')}>{t('diffReview.hideWhitespace')}</ViewToggle>
           <span className="my-1 block h-px bg-ink/10" aria-hidden="true" />
+          <span className="my-1 block h-px bg-ink/10" aria-hidden="true" />
+          <button type="button" role="menuitem" data-testid="diff-review-code-item" className={MENU_ITEM}
+            onClick={() => { setMenu(''); onReviewCode?.() }}>
+            <span className="min-w-0 flex-1">{t('diffReview.reviewCode')}</span>
+          </button>
           <button type="button" role="menuitem" data-testid="diff-refresh" className={MENU_ITEM} onClick={() => { setMenu(''); onRefresh?.() }}>
             <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
             <span className="min-w-0 flex-1">{t('diffReview.refresh')}</span>
@@ -126,7 +132,7 @@ export default function DiffToolbar({
       {canOpenWindow && (
         <button type="button" className={BUTTON} data-testid="diff-open-window"
           aria-label={t('diffReview.openInNewWindow')} title={t('diffReview.openInNewWindow')}
-          onClick={() => globalThis.window?.gugoDesktop?.openDiffWindow?.()}>
+          onClick={() => bridgeOpenWindow()}>
           <ExternalLink className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
         </button>
       )}

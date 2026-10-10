@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react'
-import { filesFromStatusPayload } from '../../../../lib/diffReviewModel.js'
+import { useEffect, useMemo, useState } from 'react'
+import { buildFileDiff } from '../../../../lib/diffRows.js'
+import { buildFileTree, compareLabel, diffTextFromPayload, filesFromStatusPayload } from '../../../../lib/diffReviewModel.js'
 import DiffToolbar from './DiffToolbar.jsx'
+import DiffViewerPane from './DiffViewerPane.jsx'
+import FeedbackComposer from './FeedbackComposer.jsx'
+import FileTreePane from './FileTreePane.jsx'
 
 const DEFAULT_TARGET = Object.freeze({ mode: 'uncommitted', branch: 'main' })
 const DEFAULT_VIEW = Object.freeze({
@@ -11,17 +15,21 @@ const DEFAULT_VIEW = Object.freeze({
   wordWrap: true,
   highlightWords: true,
   hideWhitespace: false,
+  collapseToken: 0,
+  expandToken: 0,
 })
 
 /**
- * The docked review panel: the reviewer chrome on top, the changed files on the
- * left, the selected file's diff on the right.
+ * The docked diff review panel: reviewer chrome, changed files on the left, the
+ * selected file's diff on the right, collected comments at the bottom.
  *
- * Stage 2 ships the layout and the real file list; the diff body, the tree
- * grouping and the inline comments arrive in the next stages. Every control in
- * the toolbar already does something — nothing here is a placeholder icon.
+ * The list is read once and refreshed on demand, and a file's diff is only read
+ * when it is selected — the panel never loads the whole change set. Comments are
+ * local to the review until the reader sends them, and then they travel as one
+ * ordinary user message, so the agent sees them in the conversation it already
+ * knows how to read.
  */
-export default function DiffReviewPanel({ onClose, onExpandToggle, panelExpanded = false, t }) {
+export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage, panelExpanded = false, t }) {
   const [target, setTarget] = useState(DEFAULT_TARGET)
   const [view, setView] = useState(DEFAULT_VIEW)
   const [files, setFiles] = useState([])
@@ -29,6 +37,9 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, panelExpanded
   const [refreshToken, setRefreshToken] = useState(0)
   const [searchTerm, setSearchTerm] = useState('')
   const [selected, setSelected] = useState('')
+  const [diffs, setDiffs] = useState({})
+  const [comments, setComments] = useState([])
+  const [sending, setSending] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -47,8 +58,59 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, panelExpanded
     return () => { cancelled = true }
   }, [refreshToken])
 
+  useEffect(() => {
+    if (!selected || diffs[selected]) return undefined
+    let cancelled = false
+    const load = async () => {
+      try {
+        const response = await fetch(`/api/workbench/git/diff?path=${encodeURIComponent(selected)}`)
+        const payload = await response.json().catch(() => null)
+        const built = buildFileDiff(diffTextFromPayload(payload))
+        if (!cancelled) setDiffs((current) => ({ ...current, [selected]: { status: 'ready', ...built } }))
+      } catch {
+        if (!cancelled) setDiffs((current) => ({ ...current, [selected]: { status: 'error', rows: [], additions: 0, deletions: 0 } }))
+      }
+    }
+    void load()
+    return () => { cancelled = true }
+  }, [selected, diffs])
+
   const needle = searchTerm.trim().toLowerCase()
-  const visible = needle ? files.filter((file) => file.path.toLowerCase().includes(needle)) : files
+  const visible = useMemo(
+    () => (needle ? files.filter((file) => file.path.toLowerCase().includes(needle)) : files),
+    [files, needle],
+  )
+  const tree = useMemo(
+    () => buildFileTree(visible, { groupByFolder: view.groupByFolder, separateSpecial: view.separateSpecial }),
+    [visible, view.groupByFolder, view.separateSpecial],
+  )
+  const activeFile = files.find((file) => file.path === selected) || null
+  const diff = selected ? diffs[selected] || { status: 'loading', rows: [], additions: 0, deletions: 0 } : null
+  const label = compareLabel(target, t)
+  const initialCollapsed = view.collapseToken > view.expandToken
+
+  const send = (text) => {
+    if (!text) return
+    setSending(true)
+    try {
+      onSendMessage?.(text)
+    } finally {
+      setSending(false)
+    }
+  }
+  const sendFeedback = () => {
+    if (comments.length === 0) return
+    const lines = [t('diffReview.feedbackHeader', { label })]
+    comments.forEach((entry, index) => {
+      lines.push(t('diffReview.feedbackLine', { index: index + 1, path: entry.path, line: entry.line, text: entry.text }))
+      if (entry.codeLine?.trim()) lines.push(t('diffReview.feedbackCode', { code: entry.codeLine.trim() }))
+    })
+    send(lines.join('\n'))
+    setComments([])
+  }
+  const reviewCode = () => {
+    send(t('diffReview.reviewPrompt', { label, files: files.map((file) => file.path).slice(0, 20).join(', ') || '—' }))
+  }
 
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="diff-review-panel" data-target-mode={target.mode} data-status={status}>
@@ -56,7 +118,8 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, panelExpanded
         compact={!panelExpanded}
         onClose={onClose}
         onExpandToggle={onExpandToggle}
-        onRefresh={() => setRefreshToken((token) => token + 1)}
+        onRefresh={() => { setDiffs({}); setRefreshToken((token) => token + 1) }}
+        onReviewCode={reviewCode}
         onSearchChange={setSearchTerm}
         onTargetChange={setTarget}
         onToggleFiles={() => setView((current) => ({ ...current, showFiles: !current.showFiles }))}
@@ -68,41 +131,27 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, panelExpanded
       />
       <div className="flex min-h-0 flex-1">
         {view.showFiles && (
-          <aside className="min-h-0 w-[46%] max-w-[320px] shrink-0 overflow-y-auto border-r border-ink/10 p-2" data-testid="diff-file-pane">
-            {status === 'error' && <p role="alert" className="px-2 py-3 text-xs text-danger">{t('diffReview.failed')}</p>}
-            {status === 'loading' && <p className="px-2 py-3 text-xs text-ink-fade">{t('diffReview.loading')}</p>}
-            {status === 'ready' && visible.length === 0 && (
-              <p className="px-2 py-3 text-xs leading-5 text-ink-fade" data-testid="diff-tree-empty">{t('diffReview.emptyTree')}</p>
-            )}
-            {visible.length > 0 && (
-              <ul className="flex flex-col gap-0.5">
-                {visible.map((file) => (
-                  <li key={file.path}>
-                    <button
-                      type="button"
-                      data-testid="diff-file-row"
-                      data-path={file.path}
-                      aria-current={selected === file.path ? 'true' : undefined}
-                      title={file.path}
-                      onClick={() => setSelected(file.path)}
-                      className={`flex w-full min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left text-xs transition-colors ${
-                        selected === file.path ? 'bg-[var(--color-selected)] text-ink' : 'text-ink-soft hover:bg-[var(--color-row-hover)]'
-                      }`}
-                    >
-                      <span className="min-w-0 flex-1 truncate" dir="rtl">{file.path}</span>
-                      <span className="shrink-0 font-mono text-accent">+{file.additions}</span>
-                      <span className="shrink-0 font-mono text-danger">−{file.deletions}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </aside>
+          status === 'error'
+            ? <aside className="min-h-0 w-[46%] max-w-[320px] shrink-0 border-r border-ink/10 p-3" data-testid="diff-file-pane"><p role="alert" className="text-xs text-danger">{t('diffReview.failed')}</p></aside>
+            : status === 'loading'
+              ? <aside className="min-h-0 w-[46%] max-w-[320px] shrink-0 border-r border-ink/10 p-3" data-testid="diff-file-pane"><p className="text-xs text-ink-fade">{t('diffReview.loading')}</p></aside>
+              : tree.nodes.length === 0 && tree.special.length === 0
+                ? <aside className="min-h-0 w-[46%] max-w-[320px] shrink-0 border-r border-ink/10 p-3" data-testid="diff-file-pane"><p className="text-xs leading-5 text-ink-fade" data-testid="diff-tree-empty">{t('diffReview.emptyTree')}</p></aside>
+                : <FileTreePane nodes={tree.nodes} onSelect={setSelected} selected={selected} special={tree.special} t={t} />
         )}
-        <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="diff-viewer-pane">
-          {selected
-            ? <p className="text-xs text-ink-fade" data-testid="diff-viewer-pending">{t('diffReview.loading')}</p>
-            : <p className="text-xs text-ink-fade" data-testid="diff-empty">{t('diffReview.emptyDiff')}</p>}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <DiffViewerPane
+            key={`${selected}:${view.collapseToken}:${view.expandToken}`}
+            comments={comments}
+            diff={diff}
+            file={activeFile}
+            initialCollapsed={initialCollapsed}
+            onAddComment={(comment) => setComments((current) => [...current, comment])}
+            onRemoveComment={(id) => setComments((current) => current.filter((entry) => entry.id !== id))}
+            t={t}
+            view={view}
+          />
+          <FeedbackComposer comments={comments} onReviewCode={reviewCode} onSend={sendFeedback} sending={sending} t={t} />
         </div>
       </div>
     </section>

@@ -2382,21 +2382,7 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   flex-wrap: nowrap;
 }
 
-/* "Open with" is a nested list inside the file menu. It opens beside the menu
-   normally; when the pane is a narrow overlay there is no room to the right, so
-   it is flipped back inside instead of hanging off the panel edge. */
-.preview-pane-open-method-panel-flipped {
-  left: auto;
-  right: 100%;
-  margin-left: 0;
-  margin-right: 0.25rem;
-}
-
 @container chat-preview (max-width: 30rem) {
-  .preview-pane-open-method-panel {
-    width: 11.5rem;
-  }
-
   /* The command row reflows rather than forcing the pane into a horizontal
      scroll once it is narrower than the controls in it. */
   .chat-direct-file-toolbar {
@@ -2776,3 +2762,11 @@ html:has(.pet-window-root) #root {
   visibility: visible;
   opacity: 1;
 }
+
+/* Diff review rows: tinted bands, word-level marks. Colours come from the theme
+   tokens so light/dark follow the reader's choice. */
+.diff-row-added { background: rgba(var(--color-success-rgb), 0.12); }
+.diff-row-removed { background: rgba(var(--color-danger-rgb), 0.12); }
+.diff-row-changed { background: rgba(var(--color-warning-rgb), 0.10); }
+.diff-row-filler { background: transparent; }
+.diff-word { background: rgba(var(--color-accent-rgb), 0.22); border-radius: 2px; }

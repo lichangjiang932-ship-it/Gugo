@@ -72,6 +72,7 @@ export default function RightWorkbenchContent(props) {
         <DiffReviewPanel
           onClose={() => onTabChange?.('entry')}
           onExpandToggle={onExpandToggle}
+          onSendMessage={onSendMessage}
           panelExpanded={panelExpanded}
           t={t}
         />
