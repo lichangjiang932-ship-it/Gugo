@@ -57,6 +57,9 @@ export function parseHunks(body = []) {
     }
     if (!hunk) continue
     if (line.startsWith('\\')) continue // "\ No newline at end of file"
+    // A blob may hold several files: the next file's header lines are not content.
+    if (line.startsWith('diff --git ')) { hunk = null; continue }
+    if (/^(?:---|\+\+\+) [ab]\//u.test(line)) continue
     hunk.lines.push(line)
   }
   return hunks
