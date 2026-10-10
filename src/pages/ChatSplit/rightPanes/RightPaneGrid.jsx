@@ -64,6 +64,10 @@ export default function RightPaneGrid({
       className="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden"
       style={{ width: `${region.width}px` }}
     >
+      {/* Inside the region, not straddling its edge: the region clips its own
+          overflow, so a handle hung on the outside is cut in half and only the
+          sliver that happens to be inside can be grabbed — which is the same as
+          not being grabbable. The hairline still lands on the boundary. */}
       <button
         type="button"
         data-testid="right-region-resize-handle"
@@ -72,7 +76,7 @@ export default function RightPaneGrid({
         aria-label={t('workbench.resize')}
         aria-valuemin={region.minWidth}
         aria-valuenow={region.width}
-        className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize ${divider} after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2`}
+        className={`absolute inset-y-0 left-0 z-20 w-2 cursor-col-resize ${divider} after:inset-y-0 after:left-0 after:w-px`}
         onPointerDown={region.beginWidthDrag}
         onKeyDown={region.resizeWidthWithKeyboard}
         onDoubleClick={region.resetWidth}

@@ -68,7 +68,9 @@ export default function useChatOverlays({
     // The pane only exists while the side panel is open, so it is opened first,
     // as every other way of opening a preview does.
     onOpenDiff: (artifact) => {
-      setWorkbenchOpen?.(true)
+      // The file opens in its own pane; the tool panel is not switched on to
+      // carry it, so the reader keeps whatever tool they were on and the region
+      // is only as busy as the file they asked for.
       dispatch?.({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact })
     },
     workspacePath,

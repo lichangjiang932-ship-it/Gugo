@@ -93,15 +93,22 @@ test('right workbench toggle leaves the navigation rail mounted', () => {
   assert.match(headerBar, /aria-expanded=\{workbenchOpen\}/)
   assert.match(view, /<ChatRightPanels/)
   assert.match(rightPanels, /<RightWorkbench/)
-  // The region closes as one thing, and the workbench and an open file are panes
-  // inside it rather than the two branches of one ternary. Opening a file used to
-  // take the panel away from the tool that was on screen; that is the behaviour
-  // this file used to pin, and it is the behaviour the reader asked to change.
-  assert.match(rightPanels, /if \(!workbenchOpen\) return null[\s\S]*<RightPaneGrid/)
-  assert.match(rightPanels, /top=\{\s*<RightWorkbench/)
+  // The workbench and an open file are panes inside the region rather than the
+  // two branches of one ternary behind a single gate. Opening a file used to
+  // switch the tool panel on to carry it, which took the panel away from the
+  // tool that was on screen and parked the tool list above the file; that is
+  // what this file used to pin, and what the reader asked to change.
+  assert.doesNotMatch(rightPanels, /if \(!workbenchOpen\) return null/)
+  assert.match(rightPanels, /<RightPaneGrid/)
+  assert.match(rightPanels, /top=\{workbenchOpen \?/)
   assert.match(rightPanels, /bottomRight=\{previewArtifact \?/)
-  assert.match(chat, /onClosePreview=\{\(\) => setWorkbenchOpen\(false\)\}/)
-  assert.match(chat, /onOpenArtifact=\{\(artifact\) => \{ setWorkbenchOpen\(true\); dispatch\(\{ type: 'OPEN_PREVIEW_ARTIFACT'/)
+  // Closing the file closes the file: with the panes independent, sending the
+  // preview's close to the region's switch would take the tool panel down too.
+  assert.match(chat, /onClosePreview=\{\(\) => dispatch\(\{ type: 'CLOSE_PREVIEW_ARTIFACT' \}\)\}/)
+  // Opening a file opens the file, and leaves the tool panel's switch alone: it
+  // used to be pressed on as a side effect so the file had somewhere to appear,
+  // which also turned the tool list on above it.
+  assert.match(chat, /onOpenArtifact=\{\(artifact\) => \{ dispatch\(\{ type: 'OPEN_PREVIEW_ARTIFACT'/)
   assert.doesNotMatch(shortcuts, /CLOSE_PREVIEW_ARTIFACT/)
   assert.match(chat, /writeWorkbenchOpen\(workbenchOpen\)/)
 })
@@ -131,6 +138,14 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   // either of them stops being readable; it stacks them instead.
   assert.match(region, /MIN_PANE_WIDTH = 220/)
   assert.match(read('../src/pages/ChatSplit/rightPanes/RightPaneGrid.jsx'), /const stackBottom = openLeft && openRight && region\.width < MIN_PANE_WIDTH \* 2 \+ GUTTER_PX/)
+
+  // Every handle the reader drags sits inside the box that owns it. The region
+  // clips its own overflow, so one hung on the outside of its edge is cut in
+  // half: what is left is a sliver of a sliver, which is the same as no handle
+  // at all. That is how the region's own edge lost its drag.
+  const grid = read('../src/pages/ChatSplit/rightPanes/RightPaneGrid.jsx')
+  assert.doesNotMatch(grid, /-left-1/, 'no resize handle hangs outside its pane')
+  assert.match(grid, /data-testid="right-region-resize-handle"[\s\S]{0,420}?absolute inset-y-0 left-0 z-20 w-2/)
   assert.match(workbench, /h-full min-w-0[\s\S]{0,80}flex-row overflow-hidden/)
   assert.doesNotMatch(workbench, /h-full shrink-0 flex-col/)
   assert.match(rail, /NARROW_RAIL_QUERY = '\(max-width: 959px\)'/)

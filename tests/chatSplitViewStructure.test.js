@@ -45,14 +45,16 @@ test('chat split view delegates the right region without changing its API', () =
   assert.match(view, /export \{ ChatRightPanels \}/)
   assert.match(view, /<ChatRightPanels/)
   assert.doesNotMatch(view, /import RightPreviewPane|import RightWorkbench/)
-  // The region closes as one thing, but the panes inside it are placed rather
-  // than arbitrated: the workbench, the task list and the open file each take a
-  // slot. They used to be the two branches of one ternary — opening a file took
-  // the panel away from the tool that was on screen — which is what this file
-  // pinned before the reader asked for all three at once.
-  assert.match(rightPanels, /if \(!workbenchOpen\) return null/)
+  // The panes inside the region are placed rather than arbitrated: the
+  // workbench, the task list and the open file each take a slot, and each
+  // answers for whether it wants the room. They used to be the two branches of
+  // one ternary behind a single `workbenchOpen` gate — opening a file switched
+  // the tool panel on to carry it and took the panel away from the tool that was
+  // on screen — which is what this file pinned before the reader asked for all
+  // three at once.
+  assert.doesNotMatch(rightPanels, /if \(!workbenchOpen\) return null/)
   assert.match(rightPanels, /<RightPaneGrid/)
-  assert.match(rightPanels, /top=\{/)
+  assert.match(rightPanels, /top=\{workbenchOpen \?/)
   assert.match(rightPanels, /bottomLeft=\{planVisible \?/)
   assert.match(rightPanels, /bottomRight=\{previewArtifact \?/)
   assert.match(rightPanels, /<RightPreviewPane/)

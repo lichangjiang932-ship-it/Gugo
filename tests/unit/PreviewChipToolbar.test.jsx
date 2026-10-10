@@ -149,7 +149,10 @@ test('opening a change from the review opens the side panel first, then the diff
     await act(async () => review.openDiff({ key: 'd:/a.js', path: 'D:/a.js', displayPath: 'a.js', reported: { additions: 1, deletions: 0 } }, []))
     // The preview pane only exists inside the open side panel; dispatching
     // alone used to leave the click with nothing on screen.
-    assert.deepEqual(order, ['open:true', 'OPEN_PREVIEW_ARTIFACT'])
+    // The file opens in its own pane and the tool panel is left alone: switching
+    // it on here used to be how the file got somewhere to live, and it parked the
+    // tool list above the file for a reader who had asked for neither.
+    assert.deepEqual(order, ['OPEN_PREVIEW_ARTIFACT'])
   } finally {
     await h.unmount()
     dom.window.close()

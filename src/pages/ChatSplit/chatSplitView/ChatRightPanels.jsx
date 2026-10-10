@@ -74,14 +74,15 @@ export default function ChatRightPanels({
     })
   }
 
-  // The region is closed as a whole, as it always was: the panes share one edge
-  // with the conversation, so hiding that edge hides everything behind it.
-  if (!workbenchOpen) return null
-
+  // The region is open when any of its panes is wanted — not only when the tool
+  // panel is. Opening a file used to switch the tool panel on as a side effect,
+  // which parked the tool list in the pane above the file and left half the
+  // region to a launcher nobody had asked for. Each pane answers for itself now;
+  // the grid draws nothing when none of them wants the room.
   return (
     <RightPaneGrid
       t={t}
-      top={
+      top={workbenchOpen ? (
         <RightWorkbench
           embedded
           sessionId={sessionId}
@@ -98,7 +99,7 @@ export default function ChatRightPanels({
           isGenerating={isGenerating}
           statusMessage={workbenchMessage}
         />
-      }
+      ) : null}
       bottomLeft={planVisible ? (
         <PlanCard
           artifacts={planArtifacts}

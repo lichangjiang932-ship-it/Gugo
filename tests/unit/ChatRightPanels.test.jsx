@@ -97,15 +97,35 @@ test('an open file joins the workbench in the bottom row instead of replacing it
   }
 })
 
-test('a closed region renders nothing at all', async () => {
+test('a region with nothing to show renders nothing at all', async () => {
   const dom = setupDom()
   const root = createRoot(dom.window.document.getElementById('root'))
   try {
     await act(async () => root.render(
-      <I18nProvider><ChatRightPanels {...baseProps({ workbenchOpen: false, previewArtifact: PREVIEW_ARTIFACT })} /></I18nProvider>,
+      <I18nProvider><ChatRightPanels {...baseProps({ workbenchOpen: false, previewArtifact: null, planVisible: false })} /></I18nProvider>,
     ))
     assert.equal(dom.window.document.querySelector('[data-testid="right-pane-grid"]'), null)
     assert.equal(dom.window.document.querySelector('[data-testid="direct-file-pane"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a file opens on its own without switching the tool panel on', async () => {
+  const dom = setupDom()
+  const root = createRoot(dom.window.document.getElementById('root'))
+  const el = () => dom.window.document
+  try {
+    // The tool panel was never asked for. Opening a file used to switch it on so
+    // the file had somewhere to appear, which also parked the tool list in the
+    // pane above it — half the region showing a launcher nobody had opened.
+    await act(async () => root.render(
+      <I18nProvider><ChatRightPanels {...baseProps({ workbenchOpen: false, previewArtifact: PREVIEW_ARTIFACT })} /></I18nProvider>,
+    ))
+    assert.ok(el().querySelector('[data-testid="direct-file-pane"]'), 'the file is up')
+    assert.equal(el().querySelector('[data-testid="right-pane-top"]'), null, 'and nothing shares the region with it')
+    assert.equal(el().querySelector('[data-testid="right-workbench"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
