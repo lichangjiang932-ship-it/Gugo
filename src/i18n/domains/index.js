@@ -63,6 +63,7 @@ import settingsTools from './settingsTools.js'
 import reasonix from './reasonix.js'
 import usage from './usage.js'
 import settingsModels from './settingsModels.js'
+import diffReview from './diffReview.js'
 
 const domains = [
   ['webSearch', webSearch],
@@ -130,6 +131,7 @@ const domains = [
   ['reasonix', reasonix],
   ['usage', usage],
   ['settingsModels', settingsModels],
+  ['diffReview', diffReview],
 ]
 
 export const translations = { zh: {}, en: {} }

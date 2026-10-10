@@ -198,6 +198,8 @@ export default function RightWorkbench({
           onOpenArtifact={onOpenArtifact}
           onSendMessage={onSendMessage}
           onTabChange={onTabChange}
+          onExpandToggle={toggleExpand}
+          panelExpanded={panelExpanded}
           runCommand={runCommand}
           setCommand={setCommand}
           setCwd={setCwd}

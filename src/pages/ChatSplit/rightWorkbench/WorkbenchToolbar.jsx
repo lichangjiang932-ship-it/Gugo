@@ -220,6 +220,11 @@ export default function WorkbenchToolbar({
             <Copy className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 flex-1">{t('workbench.copyWorkspace')}</span>
           </button>
+          <button type="button" role="menuitem" data-testid="preview-menu-changes" onClick={() => { closeMenu(); onTabChange?.('diff') }}
+            className={MENU_ITEM}>
+            {t('diffReview.title')}
+          </button>
+          <span className="my-1 block h-px bg-ink/10" aria-hidden="true" />
           <button type="button" role="menuitem" data-testid="preview-menu-reset" onClick={() => { closeMenu(); onResetWidth?.() }}
             className={MENU_ITEM}>
             {t('workbench.resetWidth')}

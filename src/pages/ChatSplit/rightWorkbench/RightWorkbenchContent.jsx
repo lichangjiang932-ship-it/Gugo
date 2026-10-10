@@ -10,6 +10,7 @@ import PtyTerminalPanel from './PtyTerminalPanel.jsx'
 import PreviewServerBar from './PreviewServerBar.jsx'
 import WorkbenchEntry from './WorkbenchEntry.jsx'
 import WorkbenchFiles from './WorkbenchFiles.jsx'
+import DiffReviewPanel from './diffReview/DiffReviewPanel.jsx'
 
 // Labels are used rather than colour alone to tell the streams apart: the console
 // is a dark surface in every theme, so a themed colour token would be unreadable in
@@ -57,6 +58,8 @@ export default function RightWorkbenchContent(props) {
     onOpenArtifact,
     onSendMessage,
     onTabChange,
+    onExpandToggle,
+    panelExpanded = false,
     t,
     workspacePath,
   } = props
@@ -64,7 +67,15 @@ export default function RightWorkbenchContent(props) {
   return (
     <>
       {activeTab === 'entry' && <WorkbenchEntry contributedTabs={contributedTabs} onTabChange={onTabChange} t={t} />}
-      {activeTab === 'files' && <WorkbenchFiles artifacts={artifacts} onOpenArtifact={onOpenArtifact} t={t} />}
+
+      {activeTab === 'diff' && (
+        <DiffReviewPanel
+          onClose={() => onTabChange?.('entry')}
+          onExpandToggle={onExpandToggle}
+          panelExpanded={panelExpanded}
+          t={t}
+        />
+      )}      {activeTab === 'files' && <WorkbenchFiles artifacts={artifacts} onOpenArtifact={onOpenArtifact} t={t} />}
       {activeTab === 'browser' && (
         <section className="flex min-h-0 flex-1 flex-col">
           <PreviewServerBar active t={t} workspacePath={workspacePath} />
