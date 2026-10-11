@@ -2,6 +2,8 @@ import dns from 'node:dns/promises'
 import net from 'node:net'
 import { Agent } from 'undici'
 
+import { fetchWithEnvProxy, shouldUseEnvProxy } from '../adapters/proxyFetch.js'
+
 export { maskOutboundUrl } from './urlDisplay.js'
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
@@ -219,14 +221,26 @@ export async function fetchSafeOutbound(rawUrl, init = {}, {
 } = {}) {
   let current = String(rawUrl || '')
   let currentInit = { ...init }
+  // Only the real global fetch is proxy-aware. A caller that passed its own
+  // implementation — every test, and the DNS-pinning callers — keeps exactly the
+  // behaviour it asked for.
+  const usingGlobalFetch = fetchImpl === globalThis.fetch
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
     const target = await assertSafeOutboundUrl(current, { lookup, allowLocal, resolveDns })
-    const dispatcher = target.lockedIp && typeof dispatcherFactory === 'function'
+    // A forward proxy resolves the hostname itself, so the address validated
+    // above is not the address that gets connected to: a dispatcher pinned to
+    // that address reaches around the proxy and the request hangs until it times
+    // out. This is the connection the user asked for by setting HTTPS_PROXY —
+    // their proxy is the resolver now. The address check still runs, and a
+    // target that is local or private is never proxied at all, so it keeps both
+    // the check and the pin.
+    const proxied = usingGlobalFetch && shouldUseEnvProxy(target.toString())
+    const dispatcher = !proxied && target.lockedIp && typeof dispatcherFactory === 'function'
       ? dispatcherFactory(target.lockedIp, target)
       : null
     let response
     try {
-      response = await fetchImpl(target.toString(), {
+      response = await (usingGlobalFetch ? fetchWithEnvProxy : fetchImpl)(target.toString(), {
         ...currentInit,
         redirect: 'manual',
         ...(dispatcher ? { dispatcher } : {}),

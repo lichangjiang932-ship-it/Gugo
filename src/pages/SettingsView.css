@@ -135,27 +135,6 @@
   padding: 22px 28px 32px;
 }
 
-/* Keep this one configuration view in the same quiet, light console palette
- * as the restyled web-search cards without changing any other settings tab. */
-.settings-dialog-main:has(.web-search-settings) {
-  background: var(--color-paper);
-}
-
-.settings-dialog-main:has(.web-search-settings) .settings-dialog-toolbar {
-  border-bottom-color: rgb(var(--color-ink-rgb) / 0.08);
-}
-
-.settings-dialog-main:has(.web-search-settings) .settings-config-button,
-.settings-dialog-main:has(.web-search-settings) .settings-close-button {
-  color: var(--color-ink-soft);
-}
-
-.settings-dialog-main:has(.web-search-settings) .settings-config-button:hover,
-.settings-dialog-main:has(.web-search-settings) .settings-close-button:hover {
-  background: rgb(var(--color-paper-2-rgb) / 0.7);
-  color: var(--color-ink);
-}
-
 .settings-panel {
   width: 100%;
   max-width: 680px;
@@ -382,6 +361,28 @@
 .settings-inline-status {
   color: var(--color-ink-fade);
   font-size: 12px;
+}
+
+/*
+ * The provider list and the editor share a row only when the panel can hold both.
+ * This measures the panel, not the window: the dialog is a fixed 920px, so a
+ * viewport breakpoint opened the second column at a window size where the panel
+ * was still narrow, and left it stacked at a window size where there was room.
+ */
+.web-search-settings {
+  container: web-search-settings / inline-size;
+}
+
+.web-search-settings-split {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+@container web-search-settings (min-width: 560px) {
+  .web-search-settings-split {
+    grid-template-columns: minmax(170px, 0.8fr) minmax(0, 1.6fr);
+  }
 }
 
 .evolution-autopilot {

@@ -12,6 +12,7 @@ const {
   getOAuthAccessToken,
   getOAuthConnectionStatus,
   listOAuthProviders,
+  pollDeviceFlowConnection,
   startOAuthConnection,
 } = await import('../server/services/integrationOAuthService.js')
 const {
@@ -81,10 +82,10 @@ test('schema v27 persists OAuth sessions and command-scoped approval grants', ()
   ])
 })
 
-test('GitHub OAuth start stores a state hash, uses PKCE S256, and isolates session status', () => {
+test('GitHub OAuth start stores a state hash, uses PKCE S256, and isolates session status', async () => {
   const alice = issueTestSession({ email: 'oauth-start-alice@example.com' }).userId
   const bob = issueTestSession({ email: 'oauth-start-bob@example.com' }).userId
-  const started = startOAuthConnection({ userId: alice, provider: 'github', env: ENV, now: 1000 })
+  const started = await startOAuthConnection({ userId: alice, provider: 'github', env: ENV, now: 1000 })
   const authorization = new URL(started.authorizationUrl)
   const state = authorization.searchParams.get('state')
 
@@ -110,7 +111,7 @@ test('GitHub OAuth start stores a state hash, uses PKCE S256, and isolates sessi
 
 test('GitHub OAuth callback validates before persisting and state is one-time', async () => {
   const userId = issueTestSession({ email: 'oauth-complete@example.com' }).userId
-  const started = startOAuthConnection({ userId, provider: 'github', env: ENV })
+  const started = await startOAuthConnection({ userId, provider: 'github', env: ENV })
   const requests = []
   const fetchImpl = async (url, init = {}) => {
     requests.push({ url: String(url), init })
@@ -154,7 +155,7 @@ test('GitHub OAuth callback validates before persisting and state is one-time', 
 
 test('legacy plaintext PKCE verifier migrates during exchange and is cleared at completion', async () => {
   const userId = issueTestSession({ email: 'oauth-legacy-pkce@example.com' }).userId
-  const started = startOAuthConnection({ userId, provider: 'github', env: ENV })
+  const started = await startOAuthConnection({ userId, provider: 'github', env: ENV })
   getDb().prepare('UPDATE integration_oauth_sessions SET code_verifier = ? WHERE id = ?')
     .run('legacy-pkce-verifier', started.session.id)
   let exchangeBody = ''
@@ -188,7 +189,7 @@ test('failed OAuth validation does not overwrite an existing working token', asy
     config: { account: 'existing' },
     secret: { token: 'existing-good-token' },
   })
-  const started = startOAuthConnection({
+  const started = await startOAuthConnection({
     userId,
     provider: 'github',
     integrationId: existing.id,
@@ -215,7 +216,7 @@ test('failed OAuth validation does not overwrite an existing working token', asy
 
 test('expired and denied OAuth sessions fail closed without creating integrations', async () => {
   const userId = issueTestSession({ email: 'oauth-expiry@example.com' }).userId
-  const expiredStart = startOAuthConnection({
+  const expiredStart = await startOAuthConnection({
     userId,
     provider: 'github',
     env: ENV,
@@ -238,7 +239,7 @@ test('expired and denied OAuth sessions fail closed without creating integration
     (error) => error.code === 'OAUTH_SESSION_EXPIRED',
   )
 
-  const deniedStart = startOAuthConnection({ userId, provider: 'notion', env: ENV })
+  const deniedStart = await startOAuthConnection({ userId, provider: 'notion', env: ENV })
   const denied = await completeOAuthConnection({
     provider: 'notion',
     state: authState(deniedStart),
@@ -251,7 +252,7 @@ test('expired and denied OAuth sessions fail closed without creating integration
 
 test('Notion OAuth uses confidential-client exchange and validates the token', async () => {
   const userId = issueTestSession({ email: 'oauth-notion@example.com' }).userId
-  const started = startOAuthConnection({ userId, provider: 'notion', env: ENV })
+  const started = await startOAuthConnection({ userId, provider: 'notion', env: ENV })
   const authorization = new URL(started.authorizationUrl)
   assert.equal(authorization.searchParams.has('code_challenge'), false)
   assert.equal(authorization.searchParams.get('response_type'), 'code')
@@ -282,7 +283,7 @@ test('Notion OAuth uses confidential-client exchange and validates the token', a
 
 test('Slack OAuth requests read scopes and stores a probed bot token', async () => {
   const userId = issueTestSession({ email: 'oauth-slack@example.com' }).userId
-  const started = startOAuthConnection({ userId, provider: 'slack', env: ENV })
+  const started = await startOAuthConnection({ userId, provider: 'slack', env: ENV })
   const authorization = new URL(started.authorizationUrl)
   assert.equal(authorization.origin, 'https://slack.com')
   assert.equal(authorization.searchParams.get('scope'), 'channels:read,channels:history')
@@ -316,7 +317,7 @@ test('Slack OAuth requests read scopes and stores a probed bot token', async () 
 
 test('Google Drive OAuth is read-only, uses PKCE, and refreshes expired access tokens', async () => {
   const userId = issueTestSession({ email: 'oauth-drive@example.com' }).userId
-  const started = startOAuthConnection({ userId, provider: 'google_drive', env: ENV })
+  const started = await startOAuthConnection({ userId, provider: 'google_drive', env: ENV })
   const authorization = new URL(started.authorizationUrl)
   assert.equal(authorization.origin, 'https://accounts.google.com')
   assert.equal(authorization.searchParams.get('scope'), 'https://www.googleapis.com/auth/drive.readonly')
@@ -428,7 +429,7 @@ test('OAuth refresh refuses cloud metadata DNS before sending refresh credential
 
 test('OAuth authorization-code secrets are not forwarded across a 307 redirect', async () => {
   const userId = issueTestSession({ email: 'oauth-code-cross-origin@example.com' }).userId
-  const started = startOAuthConnection({ userId, provider: 'github', env: ENV })
+  const started = await startOAuthConnection({ userId, provider: 'github', env: ENV })
   const requests = []
   const completed = await completeOAuthConnection({
     provider: 'github',
@@ -522,6 +523,9 @@ test('OAuth routes require auth, expose start/status, and report missing server 
     assert.equal(status.status, 200)
   })
 
+  // Notion rather than GitHub: GitHub now ships a client id and uses the device
+  // flow, so it is configured with no environment at all. Notion still needs an
+  // OAuth client of its own, which is what this case is about.
   await withServer(() => ({ APP_PUBLIC_URL: 'http://127.0.0.1:5175' }), async (base) => {
     const response = await fetch(`${base}/api/integrations/oauth/start`, {
       method: 'POST',
@@ -529,9 +533,128 @@ test('OAuth routes require auth, expose start/status, and report missing server 
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ provider: 'github' }),
+      body: JSON.stringify({ provider: 'notion' }),
     })
     assert.equal(response.status, 503)
     assert.equal((await response.json()).code, 'OAUTH_NOT_CONFIGURED')
   })
+})
+
+test('GitHub ships a client id, so the device flow needs no environment at all', async () => {
+  const userId = issueTestSession({ email: 'oauth-device-start@example.com' }).userId
+
+  assert.deepEqual(
+    listOAuthProviders({ env: {} }).map(({ provider, configured }) => ({ provider, configured })),
+    [
+      { provider: 'github', configured: true },
+      { provider: 'notion', configured: false },
+      { provider: 'slack', configured: false },
+      { provider: 'google_drive', configured: false },
+    ],
+  )
+
+  const requests = []
+  const fetchImpl = async (url, init = {}) => {
+    requests.push({ url: String(url), init })
+    return jsonResponse({
+      device_code: 'device-code-alpha',
+      user_code: 'ABCD-1234',
+      verification_uri: 'https://github.com/login/device',
+      expires_in: 900,
+      interval: 5,
+    })
+  }
+
+  const started = await startOAuthConnection({ userId, provider: 'github', env: {}, fetchImpl })
+
+  assert.equal(requests[0].url, 'https://github.com/login/device/code')
+  assert.match(String(requests[0].init.body), /client_id=Ov23liDjJ2JknZkfVoyW/)
+  assert.equal(String(requests[0].init.body).includes('client_secret'), false)
+
+  // No window to open: the reader is handed a code and an address instead.
+  assert.equal(started.authorizationUrl, undefined)
+  assert.equal(started.deviceFlow.userCode, 'ABCD-1234')
+  assert.equal(started.deviceFlow.verificationUri, 'https://github.com/login/device')
+  assert.equal(started.session.status, 'pending')
+
+  const row = getDb().prepare(
+    'SELECT code_verifier FROM integration_oauth_sessions WHERE id = ?',
+  ).get(started.session.id)
+  assert.equal(isCredentialEnvelope(row.code_verifier), true)
+  assert.equal(row.code_verifier.includes('device-code-alpha'), false)
+  assert.equal('deviceCode' in started.session, false)
+  assert.equal('userCode' in started.session, false)
+})
+
+test('a device flow waits for the reader, then connects and validates before enabling', async () => {
+  const userId = issueTestSession({ email: 'oauth-device-complete@example.com' }).userId
+  let authorized = false
+  const requests = []
+  const fetchImpl = async (url, init = {}) => {
+    requests.push({ url: String(url), init })
+    const target = String(url)
+    if (target === 'https://github.com/login/device/code') {
+      return jsonResponse({
+        device_code: 'device-code-beta',
+        user_code: 'WXYZ-9876',
+        verification_uri: 'https://github.com/login/device',
+        expires_in: 900,
+        interval: 5,
+      })
+    }
+    if (target.includes('/access_token')) {
+      return jsonResponse(authorized
+        ? { access_token: 'device-access-token', token_type: 'bearer', scope: 'read:user' }
+        : { error: 'authorization_pending' })
+    }
+    return jsonResponse({ login: 'octocat', id: 1 })
+  }
+
+  const started = await startOAuthConnection({ userId, provider: 'github', env: {}, fetchImpl })
+  const waiting = await pollDeviceFlowConnection({ userId, id: started.session.id, env: {}, fetchImpl })
+  assert.equal(waiting.status, 'pending')
+  assert.equal(waiting.integration, null)
+
+  authorized = true
+  const completed = await pollDeviceFlowConnection({ userId, id: started.session.id, env: {}, fetchImpl })
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.integration.enabled, true)
+  assert.equal(completed.integration.config.authSource, 'oauth')
+  assert.equal(completed.integration.secret.token.present, true)
+  // The token never travels back through the status payload.
+  assert.equal(JSON.stringify(completed).includes('device-access-token'), false)
+
+  const tokenRequest = requests.find((request) => String(request.init.body || '').includes('device_code='))
+  assert.match(String(tokenRequest.init.body), /grant_type=urn(%3A|:)ietf(%3A|:)params(%3A|:)oauth(%3A|:)grant-type(%3A|:)device_code/)
+  assert.match(String(tokenRequest.init.body), /client_id=Ov23liDjJ2JknZkfVoyW/)
+  assert.equal(String(tokenRequest.init.body).includes('client_secret'), false)
+
+  // An authorized session is one-time: a further poll cannot re-exchange it.
+  const again = await pollDeviceFlowConnection({ userId, id: started.session.id, env: {}, fetchImpl })
+  assert.equal(again.status, 'completed')
+})
+
+test('a device flow that is denied or expires fails the session instead of hanging', async () => {
+  const userId = issueTestSession({ email: 'oauth-device-denied@example.com' }).userId
+  const fetchImpl = async (url, init = {}) => {
+    const target = String(url)
+    if (target === 'https://github.com/login/device/code') {
+      return jsonResponse({
+        device_code: 'device-code-gamma',
+        user_code: 'LMNO-1111',
+        verification_uri: 'https://github.com/login/device',
+        expires_in: 900,
+        interval: 5,
+      })
+    }
+    if (String(init.body || '').includes('device_code=')) {
+      return jsonResponse({ error: 'access_denied', error_description: 'The user denied the request' })
+    }
+    return jsonResponse({ login: 'octocat', id: 1 })
+  }
+
+  const started = await startOAuthConnection({ userId, provider: 'github', env: {}, fetchImpl })
+  const denied = await pollDeviceFlowConnection({ userId, id: started.session.id, env: {}, fetchImpl })
+  assert.equal(denied.status, 'failed')
+  assert.match(String(denied.error), /denied/i)
 })

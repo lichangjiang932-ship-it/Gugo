@@ -34,7 +34,10 @@ export const NATIVE_ACCESS = Object.freeze([
   native('onedrive', 'Microsoft 365', '#0078D4', 'access.onedriveDesc', 'access.onedriveHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'access_token', searchTerms: 'onedrive teams microsoft graph channel message', setupUrl: 'https://entra.microsoft.com/' }),
   native('slack', 'Slack', '#611F69', 'access.slackDesc', 'access.slackHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { oauth: true, connectionMethod: 'oauth', setupUrl: 'https://api.slack.com/apps' }),
   native('discord', 'Discord', '#5865F2', 'access.discordDesc', 'access.discordHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'bot_token', setupUrl: 'https://discord.com/developers/applications' }),
-  native('feishu', 'Feishu / Lark', '#3370FF', 'access.feishuDesc', 'access.feishuHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'app_credentials', setupUrl: 'https://open.feishu.cn/app' }),
+  // `connectionMethod` still describes what the integration ends up holding.
+  // `qrConnect` is the extra door in: scanning creates the app for the reader, so
+  // the manual appId/appSecret form is a fallback rather than the only way.
+  native('feishu', 'Feishu / Lark', '#3370FF', 'access.feishuDesc', 'access.feishuHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'app_credentials', qrConnect: true, setupUrl: 'https://open.feishu.cn/app' }),
   native('wechat_personal', '微信 / WeChat', '#07C160', 'access.wechatDesc', 'access.wechatHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'qr' }),
   native('telegram', 'Telegram Bot', '#229ED9', 'access.telegramDesc', 'access.telegramHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'bot_token', setupUrl: 'https://t.me/BotFather' }),
   native('qq', 'QQ Bot', '#12B7F5', 'access.qqDesc', 'access.qqHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'app_credentials', setupUrl: 'https://q.qq.com/' }),

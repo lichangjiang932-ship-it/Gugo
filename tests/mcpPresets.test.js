@@ -6,7 +6,7 @@ import { lookup, translations } from '../src/i18n/translations.js'
 
 test('Chrome DevTools MCP preset uses the official stdio package', () => {
   const preset = createMcpServerFromPreset('chrome-devtools')
-  assert.equal(MCP_SERVER_PRESETS.length, 11)
+  assert.equal(MCP_SERVER_PRESETS.length, 13)
   assert.equal(preset.name, 'chrome_devtools')
   assert.equal(preset.transport, 'stdio')
   assert.equal(preset.command, 'npx')
@@ -90,6 +90,29 @@ test('Credential-backed official presets (github / brave-search / slack / postgr
     assert.equal(getMcpServerPreset(id)?.official, true)
     // env placeholders must be empty strings so the editor prompts the user to fill them
     for (const key of envKeys) assert.equal(preset.env[key], '', `${id}.${key} starts empty`)
+  }
+})
+
+test('Notion preset is the remote one: a URL and no credential of any kind', () => {
+  const preset = createMcpServerFromPreset('notion')
+  assert.ok(preset, 'notion preset resolves')
+  assert.equal(preset.name, 'notion')
+  assert.equal(preset.transport, 'http')
+  assert.equal(preset.url, 'https://mcp.notion.com/mcp')
+  // Remote, so there is no command, and nothing to fill in: the hosted server
+  // registers the client itself and takes PKCE in place of a secret.
+  assert.equal(preset.command, '')
+  assert.deepEqual(preset.args, [])
+  assert.deepEqual(preset.env, {})
+  assert.equal(getMcpServerPreset('notion')?.official, true)
+  assert.notEqual(getMcpServerPreset('notion')?.showInAccess, false)
+})
+
+test('Notion MCP preset ships bilingual copy', () => {
+  for (const lang of ['zh', 'en']) {
+    for (const key of ['access.notionMcpDesc', 'access.notionMcpHint']) {
+      assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
+    }
   }
 })
 

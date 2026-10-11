@@ -49,12 +49,19 @@ function freezeDeep(value) {
   return value
 }
 
-test('none, absent and unknown retention preserve the default wire bytes', () => {
-  const baseline = request(undefined)
-  assert.equal(JSON.parse(baseline.init.body).system, 'BASE')
-  assert.equal(controls(JSON.parse(baseline.init.body)).length, 0)
-  for (const retention of ['none', '', 'automatic', '1', 1, true, null, ['long']]) {
-    assert.deepEqual(request(retention), baseline)
+test('absent retention turns caching on, and only an explicit off value preserves the default bytes', () => {
+  // Caching is on by default now: an absent setting means `short`. Only an
+  // explicit off value leaves the wire bytes untouched; an unrecognised value
+  // falls back to the default rather than silently disabling the marker.
+  const off = request('none')
+  assert.equal(JSON.parse(off.init.body).system, 'BASE')
+  assert.equal(controls(JSON.parse(off.init.body)).length, 0)
+  for (const retention of ['none', 'off', 'disabled']) {
+    assert.deepEqual(request(retention), off)
+  }
+  assert.deepEqual(request(undefined), request('short'))
+  for (const retention of ['', 'automatic', '1', 1, true, null, ['long']]) {
+    assert.deepEqual(request(retention), request('short'))
   }
 })
 

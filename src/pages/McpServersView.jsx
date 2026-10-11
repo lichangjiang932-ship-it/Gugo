@@ -7,6 +7,7 @@ import { parseMcpImportJson } from '../lib/mcpImport.js'
 import { MCP_SERVER_PRESETS } from '../lib/mcpPresets.js'
 import McpServerEditor from './mcp/McpServerEditor.jsx'
 import McpServerList from './mcp/McpServerList.jsx'
+import McpFirstRun from './mcp/McpFirstRun.jsx'
 import { emptyServer, formFromServer } from './mcp/mcpServerForm.js'
 import useMcpServersController from './mcp/useMcpServersController.js'
 
@@ -15,6 +16,13 @@ const IMPORT_PLACEHOLDER = '{"mcpServers":{"github":{"command":"npx","args":["-y
 export default function McpServersView() {
   const { t } = useT()
   const controller = useMcpServersController(t)
+  // Nothing to manage yet: the presets are the page. The two panels come back as
+  // soon as a preset is picked — which opens the editor — or a server is saved.
+  const showFirstRun = !controller.loading && !controller.editing && controller.servers.length === 0
+  const addManually = () => {
+    controller.setEditing(formFromServer(emptyServer()))
+    controller.setFieldErrors({})
+  }
   const externalEndpoint = `${window.location.origin}/mcp`
   const [importText, setImportText] = useState('')
   const [importMessage, setImportMessage] = useState('')
@@ -58,7 +66,7 @@ export default function McpServersView() {
               </select>
               <button
                 type="button"
-                onClick={() => { controller.setEditing(formFromServer(emptyServer())); controller.setFieldErrors({}) }}
+                onClick={addManually}
                 className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ink bg-ink px-3 text-xs font-medium text-paper transition-colors hover:bg-ink/90"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -69,7 +77,7 @@ export default function McpServersView() {
 
           <details className="mb-4 rounded-lg border border-ink/10 bg-paper px-5 py-3">
             <summary className="cursor-pointer select-none text-xs font-medium text-ink-soft transition-colors hover:text-ink">{t('mcp.importJsonTitle')}</summary>
-            <p className="mt-2 text-[11px] leading-4 text-ink-fade">{t('mcp.importJsonHint')}</p>
+            <p className="mt-2 text-xs leading-5 text-ink-fade">{t('mcp.importJsonHint')}</p>
             <textarea
               rows="4"
               value={importText}
@@ -87,14 +95,18 @@ export default function McpServersView() {
               >
                 {importing ? t('mcp.saving') : t('mcp.importJsonAction')}
               </button>
-              {importMessage && <span className="text-[11px] leading-4 text-ink-fade">{importMessage}</span>}
+              {importMessage && <span className="text-xs leading-5 text-ink-fade">{importMessage}</span>}
             </div>
           </details>
 
-          <div className="grid min-h-[430px] grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-            <McpServerList controller={controller} t={t} />
-            <McpServerEditor controller={controller} t={t} />
-          </div>
+          {showFirstRun
+            ? <McpFirstRun onPickPreset={controller.choosePreset} onAddManual={addManually} t={t} />
+            : (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+                <McpServerList controller={controller} t={t} />
+                <McpServerEditor controller={controller} t={t} />
+              </div>
+            )}
 
           <McpExternalConnectPanel endpoint={externalEndpoint} />
         </div>

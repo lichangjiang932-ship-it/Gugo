@@ -8,7 +8,7 @@ import {
 } from '../../lib/modelSelection.js'
 import { listSkills } from '../../lib/skillClient.js'
 import { listLocalSkills, mergeRuntimeSkills } from '../../lib/localSkills.js'
-import { presentSkillCollection } from '../../lib/skillPresentation.js'
+import { presentSkillCollection, skillIconKey } from '../../lib/skillPresentation.js'
 import { listPromptTemplatesApi, getPromptTemplateContentApi, renderPromptTemplate } from '../../lib/pluginClient.js'
 import { createSlashCommandRegistry, normalizeSlashCommandName } from '../../lib/slashCommandRegistry.js'
 import { CORE_SLASH_COMMANDS, registerCoreSlashCommands } from '../../lib/slashCoreCommands.js'
@@ -36,13 +36,17 @@ export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
       if (!skill?.id || skill.runnable === false || skillConfigs?.[skill.id]?.enabled === false) continue
       const name = normalizeSlashCommandName(skill.id)
       if (!name || CORE_SLASH_COMMANDS.includes(name)) continue
+      // The description column is whatever the skill says about itself. Leading
+      // with `skill.name` made every skill row read "代码审查 … 代码审查": the
+      // label already shows the name, and the sentence explaining the skill was
+      // sitting one property away, unused.
       registry.register({
         name,
-        description: skill.name || skill.desc || skill.description || skill.id,
+        description: skill.desc || skill.description || skill.name || skill.id,
         hint: '<prompt>',
         kind: 'skill',
         handler: async () => `/${name} `,
-        meta: { displayName: skill.name || skill.id },
+        meta: { displayName: skill.name || skill.id, iconKey: skillIconKey(skill) },
       }, 'core')
     }
     for (const template of promptTemplates) registerPromptTemplate(registry, template)

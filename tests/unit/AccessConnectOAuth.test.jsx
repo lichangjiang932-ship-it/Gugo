@@ -59,6 +59,11 @@ test('OAuth one-click opens the provider, polls the durable session, and connect
   }
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init })
+    // The modal asks which providers this deployment can actually run OAuth for
+    // before offering the button; this server has a Notion client registered.
+    if (String(url).endsWith('/oauth/providers')) {
+      return jsonResponse({ ok: true, providers: [{ provider: 'notion', label: 'Notion', configured: true }] })
+    }
     if (String(url).endsWith('/oauth/start')) {
       return jsonResponse({
         ok: true,
@@ -98,12 +103,15 @@ test('OAuth one-click opens the provider, polls the durable session, and connect
     })
 
     assert.equal(openedUrl, 'https://api.notion.com/v1/oauth/authorize?state=opaque')
-    assert.equal(requests[0].url, '/api/integrations/oauth/start')
-    assert.deepEqual(JSON.parse(requests[0].init.body), {
+    // The capability probe goes first; the start request is found by its path
+    // rather than by position so another probe cannot silently displace it.
+    assert.ok(requests.some((request) => request.url === '/api/integrations/oauth/providers'))
+    const start = requests.find((request) => request.url.endsWith('/oauth/start'))
+    assert.deepEqual(JSON.parse(start.init.body), {
       provider: 'notion',
       integrationId: 'integration-1',
     })
-    assert.equal(requests[1].url, '/api/integrations/oauth/sessions/oauth-session-1')
+    assert.ok(requests.some((request) => request.url === '/api/integrations/oauth/sessions/oauth-session-1'))
     assert.equal(connected[0]?.config?.authSource, 'oauth')
     assert.equal(popupClosed, true)
   } finally {

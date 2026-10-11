@@ -245,8 +245,16 @@ export function buildIncompleteTaskPresentation(msg, t, {
     && localizedFailureReason !== translated(t, 'errors.chatFailure')
       ? localizedFailureReason
       : ''
+  // The generic bucket several causes land in. The failure copy is what knows
+  // whether the transport named one — a timeout, an HTTP status, a disconnect —
+  // and when it did, that description is what the reader needs. Only when it
+  // named nothing is this a connection that simply went away.
+  const outcomeUnknownCopy = reasonCode === 'model_request_outcome_unknown'
+    ? modelRequestFailureCopy(failure, t)
+    : null
+  const providerStop = modelProviderStopDiagnostic(failure)
   const reason = cancelled ? translated(t, 'chatMessages.incompleteReasonCancelled')
-    : modelProviderStopDiagnostic(failure) || (reasonCode === 'model_request_outcome_unknown' ? modelRequestFailureCopy(failure, t).reason : reasonKey
+    : providerStop || (outcomeUnknownCopy ? outcomeUnknownCopy.reason : reasonKey
     ? translated(t, reasonKey, { attempts: Number(failure.attempts) || 0 })
     : specificFailureReason || translated(t, recordedUnknownReason
       ? 'chatMessages.incompleteReasonRecordedCode'
@@ -283,17 +291,35 @@ export function buildIncompleteTaskPresentation(msg, t, {
     : failure.retryable === true
   const manualRetryable = failure.manualRetryable === true
   const verificationNextStepKey = VERIFICATION_NEXT_STEP_KEYS[reasonCode]
+  // A lost connection is not a diagnosis. The reader closed the app or the line
+  // dropped — they know. What they need is that the checkpoint survived and how
+  // to carry on, in one line. The reason/missing/next-step breakdown below exists
+  // for failures that actually have to be read to be acted on.
+  //
+  // A turn the reader stopped is not a connection that dropped, and the failure
+  // code is what says which one happened: a stop arrives as TURN_CANCELLED, an
+  // abandoned request arrives as MODEL_REQUEST_OUTCOME_UNKNOWN on a blocked turn.
+  // The test is on the code rather than on `cancelled` because a concrete
+  // incomplete reason has to read the same whether or not the turn was cancelled.
+  const connectionLost = !cancelled
+    && failure.code !== 'TURN_CANCELLED'
+    && reasonCode === 'model_request_outcome_unknown'
+    && outcomeUnknownCopy?.specific !== true
+    && !providerStop
   return {
-    titleKey: cancelled ? 'chatMessages.toolStopped' : 'chatMessages.incompleteTitle',
+    titleKey: cancelled
+      ? 'chatMessages.toolStopped'
+      : connectionLost ? 'chatMessages.connectionLostTitle' : 'chatMessages.incompleteTitle',
     code: cancelled ? 'TURN_CANCELLED' : incompleteReasonCode.toUpperCase()
       || normalizePublicFailureCode(failure.code, 'TURN_INCOMPLETE'),
-    missing,
-    nextStep: translated(t, (reasonCode === 'model_request_outcome_unknown' ? 'modelRequestRecovery.nextVerifyModel' : verificationNextStepKey) || (retryable
+    missing: connectionLost ? [] : missing,
+    nextStep: connectionLost ? '' : translated(t, (reasonCode === 'model_request_outcome_unknown' ? 'modelRequestRecovery.nextVerifyModel' : verificationNextStepKey) || (retryable
       ? 'chatMessages.incompleteNextRetry'
       : manualRetryable
         ? 'chatMessages.incompleteNextManualRecovery'
         : 'chatMessages.incompleteNextAdjust')),
-    reason,
+    reason: connectionLost ? t('chatMessages.connectionLostBody') : reason,
+    concise: connectionLost,
     retainedCount,
     retryable,
     manualRetryable,

@@ -209,6 +209,7 @@ test('Anthropic 原生请求转换 system、PDF 与工具 schema', () => {
     messages: [{ role: 'system', content: 'Be concise.' }, PDF_MESSAGE],
     tools: [TOOL],
     toolChoice: 'auto',
+    env: { MODEL_PROMPT_CACHE_RETENTION: 'none' },
   })
   const body = JSON.parse(request.init.body)
 
@@ -329,9 +330,16 @@ const GEMINI_TIMING_CONFIG = {
   maxTokens: 1024,
 }
 
+// These tests are about how messages and tools are converted, not about the
+// cache policy. That policy now defaults to on, which turned the system prompt
+// into an annotated block and rewrote what these assert. Naming the policy here
+// keeps a change to its default from moving tests that are not about it; the
+// policy has its own tests.
+const NO_PROMPT_CACHE_ENV = Object.freeze({ MODEL_PROMPT_CACHE_RETENTION: 'none' })
+
 function timingRequest(config, messages) {
   const profile = resolveEndpointProfile({ baseUrl: config.baseUrl, modelName: config.modelName, env: {} })
-  return JSON.parse(buildModelProviderRequest({ config, profile, messages }).init.body)
+  return JSON.parse(buildModelProviderRequest({ config, profile, messages, env: NO_PROMPT_CACHE_ENV }).init.body)
 }
 
 function assistantToolCall(id, name = 'read_report') {

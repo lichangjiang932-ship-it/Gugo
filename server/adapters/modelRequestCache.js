@@ -79,9 +79,12 @@ export function anthropicCacheHeaders(headers, cacheControl, profile = {}) {
 export function anthropicPromptCacheControl(env = process.env) {
   const raw = env?.MODEL_PROMPT_CACHE_RETENTION
   const retention = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
-  if (retention === 'short') return ANTHROPIC_SHORT_CACHE_CONTROL
+  // On by default: the marker only tells the provider it may reuse the prefix,
+  // and a prefix that never changes costs nothing to reuse. The previous
+  // behaviour (nothing sent) is one env value away: `none`.
+  if (retention === 'none' || retention === 'off' || retention === 'disabled') return null
   if (retention === 'long') return ANTHROPIC_LONG_CACHE_CONTROL
-  return null
+  return ANTHROPIC_SHORT_CACHE_CONTROL
 }
 
 function isOfficialOpenAiEndpoint(baseUrl) {

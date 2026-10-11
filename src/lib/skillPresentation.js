@@ -268,6 +268,47 @@ function categoryForSkill(skill, capability) {
   return 'productivity'
 }
 
+/**
+ * What a skill is about, as one of a fixed set of families.
+ *
+ * A skill's own mark in a menu has to be derived rather than declared: skills
+ * arrive from the server and from a local folder, and nothing in either payload
+ * names an icon. Two marks that fit every skill left a list of thirty rows of the
+ * same glyph, which told the reader nothing. The family is read off the id and the
+ * display name first; the description is only consulted when neither says
+ * anything, because it is prose and names many things at once.
+ *
+ * It lives here, beside the other skill vocabulary, because these patterns are
+ * Chinese and this module is the one place allowed to know how a skill is named.
+ */
+const SKILL_ICON_RULES = [
+  [/(ppt|slide|presentation|deck|幻灯|演示)/, 'presentation'],
+  [/pdf/, 'pdf'],
+  [/(excel|xlsx|spreadsheet|sheet|表格)/, 'sheet'],
+  [/(image|photo|picture|图片|sprite)/, 'image'],
+  [/(video|audio|media|音视频|视频|音频)/, 'media'],
+  [/(font|字体)/, 'font'],
+  [/(archive|zip|rar|归档)/, 'archive'],
+  [/(translate|翻译)/, 'translate'],
+  [/(review|审查|audit|审计)/, 'review'],
+  [/(doc|word|文档|markdown)/, 'doc'],
+  [/(game|游戏)/, 'game'],
+  [/(plan|计划|任务|todo)/, 'plan'],
+  [/(design|设计|网页|webpage|web)/, 'design'],
+  [/(mail|邮件|slack|notion|connector|连接器|message)/, 'message'],
+  [/(chart|analysis|分析|数据|data|财务|finance|metric)/, 'chart'],
+  [/(code|代码|react|frontend|backend|debug|test|git)/, 'code'],
+]
+
+export function skillIconKey(skill) {
+  const identity = `${skill?.id || ''} ${skill?.name || ''}`.toLowerCase()
+  const byIdentity = SKILL_ICON_RULES.find(([pattern]) => pattern.test(identity))
+  if (byIdentity) return byIdentity[1]
+  const prose = `${skill?.desc || skill?.description || ''}`.toLowerCase()
+  const byProse = SKILL_ICON_RULES.find(([pattern]) => pattern.test(prose))
+  return byProse ? byProse[1] : ''
+}
+
 export function compareSkillCatalogEntries(left, right) {
   const leftCategory = CATALOG_CATEGORY_ORDER.indexOf(left?.categoryKey)
   const rightCategory = CATALOG_CATEGORY_ORDER.indexOf(right?.categoryKey)

@@ -82,6 +82,19 @@ export async function listIntegrationOAuthProvidersApi() {
   return jsonOk(resp)
 }
 
+/**
+ * Start a scan-to-connect flow. The status poll is the same one the OAuth
+ * session uses — whatever a session is waiting on, the client waits the same way.
+ */
+export async function startIntegrationQrApi({ provider } = {}) {
+  const resp = await fetch('/api/integrations/qr/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ provider }),
+  })
+  return jsonOk(resp)
+}
+
 export async function startIntegrationOAuthApi({ provider, integrationId } = {}) {
   const resp = await fetch('/api/integrations/oauth/start', {
     method: 'POST',

@@ -250,3 +250,41 @@ test('OAuth 未配置时展示如何启用 OAuth 的折叠引导', async () => {
     globalThis.fetch = originalFetch
   }
 })
+
+test('服务器没有配置 OAuth 的连接器不提供一键授权，直接给出令牌方式与启用引导', async () => {
+  const dom = setupDom()
+  const requests = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    requests.push(String(url))
+    if (String(url).endsWith('/oauth/providers')) {
+      return jsonResponse({ ok: true, providers: [{ provider: 'notion', label: 'Notion', configured: false }] })
+    }
+    return jsonResponse({ ok: true })
+  }
+  const { root } = await renderModal(dom, () => {}, {
+    connector: { provider: 'notion', label: 'Notion', hintKey: 'access.notionHint', oauth: true },
+  })
+
+  try {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    // The button that could only ever answer with an error is not offered, so
+    // the reader never sees the server-side rejection at all.
+    const buttons = [...dom.window.document.querySelectorAll('form button[type="button"]')]
+    assert.equal(buttons.some((button) => button.textContent.includes('access.oauthConnect')), false)
+    assert.equal(requests.some((url) => url.includes('/api/integrations/oauth/start')), false)
+
+    // The guide it used to show only after a failed click is shown up front, and
+    // the token form is the way in.
+    const help = dom.window.document.querySelector('[data-testid="oauth-help"]')
+    assert.ok(help, '未配置时直接展示启用引导')
+    assert.match(help.textContent, /access.oauthUnavailable/)
+    assert.match(help.textContent, /access.oauthHelpBody/)
+    assert.ok(dom.window.document.querySelector('form input[type="password"]'))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
+})

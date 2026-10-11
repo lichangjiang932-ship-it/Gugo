@@ -88,7 +88,7 @@ export function fitMemorySystemBlock(memories, { tokenCap, query = '', now = Dat
   return { memories: fitted, text, totalChars: text.length, tokenTruncated }
 }
 
-export function buildMemorySystemBlock(memories, { now = Date.now() } = {}) {
+export function buildMemorySystemBlock(memories) {
   if (!memories?.length) return ''
   const parts = [
     '# 用户长期记忆 (memories)',
@@ -96,13 +96,15 @@ export function buildMemorySystemBlock(memories, { now = Date.now() } = {}) {
     '以下是用户偏好、项目背景、反馈与参考资料。当前用户消息优先；与当前消息冲突或标记为较旧/陈旧/时间未知的内容，必须先核实再使用。\n',
   ]
   for (const m of memories) {
-    const freshness = classifyMemoryFreshness(m.updatedAt, { now })
     const updated = Number.isFinite(Number(m.updatedAt)) && Number(m.updatedAt) > 0
       ? new Date(Number(m.updatedAt)).toISOString().slice(0, 10) : '未知日期'
-    parts.push(`## [${m.type}] ${m.title}（更新：${updated}；新鲜度：${freshness.label}）`)
-    if (freshness.warning && freshness.ageDays != null) {
-      parts.push(`> 这条记忆写于 ${freshness.ageDays} 天前；涉及文件、行号、版本或外部状态时，必须先核实。`)
-    }
+    // The date and the freshness label are on the heading, and the rule about
+    // re-checking old entries is already in the preamble above. A per-memory
+    // sentence restating it cost ~23 tokens each — with two dozen memories that
+    // was 552 tokens, a quarter of the block, for no information the heading did
+    // not already carry. It is the kind of boilerplate that pushes a block past
+    // its cap and so decides which memories survive.
+    parts.push(`## [${m.type}] ${m.title}（更新：${updated}）`)
     if (m.excerpt) {
       const source = [m.slug || m.id, m.frontmatter?.source, m.sourceSessionId, m.sourceMessageId].filter(Boolean).join('；')
       parts.push(`> 摘录（原文字符 ${m.excerpt.start + 1}–${m.excerpt.end}/${m.excerpt.totalChars}；来源：${source}）`)

@@ -17,6 +17,7 @@ export const REQUIRED_PRIMARY_KEYS = Object.freeze({
   agent_event_subscriptions: ['subscription_key'],
   agent_event_subscription_dlq: ['dlq_id'],
   session_meters: ['session_id'],
+  session_tool_disclosures: ['user_id', 'session_id'],
   memory_links: ['from_id', 'to_slug'],
   memory_embeddings: ['memory_id'],
   memory_search_index: ['memory_id'],
@@ -86,6 +87,7 @@ const REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS = Object.freeze({
   goal_plans: 118,
   goal_plan_steps: 118,
   goal_plan_events: 118,
+  session_tool_disclosures: 122,
 })
 
 export const REQUIRED_AUTOINCREMENT_PRIMARY_KEYS = Object.freeze({

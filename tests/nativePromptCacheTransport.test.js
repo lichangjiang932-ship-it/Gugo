@@ -126,8 +126,11 @@ for (const streaming of [false, true]) {
         response: () => anthropicResponse(streaming),
       })
       assert.equal(request.headers.has('anthropic-beta'), false)
-      assert.deepEqual(cacheControls(request.body), retention === 'short'
-        ? [{ type: 'ephemeral' }, { type: 'ephemeral' }] : [])
+      // Absent and unrecognised retention both mean `short` now, so the marker is
+      // written; what this test is about is that neither drags the 1h beta along,
+      // which is the header assertion above. Only an explicit off writes nothing.
+      assert.deepEqual(cacheControls(request.body), retention === 'none'
+        ? [] : [{ type: 'ephemeral' }, { type: 'ephemeral' }])
     })
   }
 

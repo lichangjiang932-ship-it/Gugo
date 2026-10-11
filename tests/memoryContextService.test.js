@@ -211,7 +211,11 @@ for (const [label, filler] of [
 }
 
 test('a token cap smaller than the intact safety frame injects nothing and never touches usage', () => {
-  const tokenCap = 100
+  // The frame is the block before any body text: preamble plus one heading. It
+  // shrank when the per-memory restatement of the freshness rule was dropped, so
+  // the cap that sits below it moves with it. The assertion below is what keeps
+  // this honest — if the frame ever grows past the cap again, it fails here.
+  const tokenCap = 80
   assert.ok(textTokens(buildMemorySystemBlock([{ ...userPreference, body: '' }])) > tokenCap)
   const result = prepareMemoryInjectionContext({ userId: 'user-1', tokenCap, linkDepth: 0 }, {
     selectActiveMemoriesForInjection: () => ({ memories: [userPreference] }),

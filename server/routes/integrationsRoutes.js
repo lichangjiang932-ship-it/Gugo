@@ -1,3 +1,4 @@
+import QRCode from 'qrcode'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import {
@@ -14,12 +15,13 @@ import { socialBridgeManager } from '../services/socialBridgeManager.js'
 import { isWebConnectorProvider } from '../../shared/webConnectorCatalog.js'
 import { closeBrowserSession } from '../adapters/browserAutomation.js'
 import {
+  advanceOAuthSession,
   completeOAuthConnection,
-  getOAuthConnectionStatus,
   listOAuthProviders,
   oauthCompletionRedirect,
   startOAuthConnection,
 } from '../services/integrationOAuthService.js'
+import { startQrRegistration } from '../services/integrationQrRegistration.js'
 
 function unauthorized(res) { return sendJson(res, 401, { ok: false, error: 'Unauthorized' }) }
 
@@ -89,7 +91,7 @@ async function handleIntegrationCrud(req, res, url, parts, userId, env) {
     }
     if (req.method === 'POST' && parts[2] === 'oauth' && parts[3] === 'start') {
       const body = await readJson(req)
-      const result = startOAuthConnection({
+      const result = await startOAuthConnection({
         userId,
         provider: body.provider,
         integrationId: body.integrationId || null,
@@ -99,9 +101,20 @@ async function handleIntegrationCrud(req, res, url, parts, userId, env) {
       return sendJson(res, 200, { ok: true, ...result })
     }
     if (req.method === 'GET' && parts[2] === 'oauth' && parts[3] === 'sessions' && parts[4]) {
-      const session = getOAuthConnectionStatus({ userId, id: decodeURIComponent(parts[4]) })
+      // Reading a session also advances it. Neither a device flow nor a QR
+      // registration has a callback to arrive on, so the poll the client was
+      // already running is what asks the provider whether it is done yet.
+      const session = await advanceOAuthSession({ userId, id: decodeURIComponent(parts[4]), env })
       if (!session) return sendJson(res, 404, { ok: false, error: 'OAuth session not found' })
       return sendJson(res, 200, { ok: true, session })
+    }
+    if (req.method === 'POST' && parts[2] === 'qr' && parts[3] === 'start') {
+      const body = await readJson(req)
+      const result = await startQrRegistration({ userId, provider: body.provider, env })
+      // The client draws the code, so it is handed a PNG rather than the URL —
+      // the same shape the WeChat QR route returns.
+      const qrcodeUrl = await QRCode.toDataURL(result.qr.url, { width: 280, margin: 2 })
+      return sendJson(res, 200, { ok: true, session: result.session, qr: { ...result.qr, qrcodeUrl } })
     }
     if (req.method === 'GET' && parts.length === 2) {
       const kind = url.searchParams.get('kind') || null

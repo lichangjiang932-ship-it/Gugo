@@ -8,10 +8,10 @@ export default function McpServerEditor({ controller, t }) {
   const { editing } = controller
   if (!editing) {
     return (
-      <section className="flex min-h-[360px] items-center justify-center rounded-lg border border-ink/10 bg-paper px-8 text-center">
-        <div className="max-w-md text-xs leading-5 text-ink-fade">
-          <p>{t('mcp.selectHint')}</p>
-          <p className="mt-1 text-[11px]">{t('mcp.transportHint')}</p>
+      <section className="flex min-h-[240px] items-center justify-center rounded-lg border border-ink/10 bg-paper px-8 py-10 text-center">
+        <div className="max-w-md text-xs leading-5">
+          <p className="text-ink-soft">{t('mcp.selectHint')}</p>
+          <p className="mt-1.5 text-ink-fade">{t('mcp.transportHint')}</p>
         </div>
       </section>
     )
@@ -20,7 +20,7 @@ export default function McpServerEditor({ controller, t }) {
   const update = (patch) => controller.setEditing({ ...editing, ...patch })
 
   return (
-    <section className="min-h-[360px] overflow-hidden rounded-lg border border-ink/10 bg-paper">
+    <section className="min-h-[240px] overflow-hidden rounded-lg border border-ink/10 bg-paper">
       <header className="flex min-h-14 items-center justify-between gap-3 border-b border-ink/10 px-5 py-3">
         <h2 className="text-sm font-semibold text-ink">{editing.id ? t('mcp.editTitle') : t('mcp.newTitle')}</h2>
         <button
@@ -147,10 +147,10 @@ function OAuthFields({ controller, editing, t, update }) {
         <KeyRound className="mt-0.5 h-4 w-4 flex-none text-ink-fade" />
         <div className="min-w-0 flex-1">
           <h3 className="text-xs font-semibold text-ink">{t('mcp.oauthTitle')}</h3>
-          <p className="mt-0.5 text-[10px] leading-4 text-ink-fade">{t('mcp.oauthHint')}</p>
+          <p className="mt-0.5 text-xs leading-5 text-ink-fade">{t('mcp.oauthHint')}</p>
         </div>
         {editing.oauth?.configured && (
-          <span className={`rounded-full border px-2 py-0.5 text-[10px] ${editing.oauth.connected ? 'border-success/20 bg-success/5 text-success' : 'border-warning/20 bg-warning/5 text-warning'}`}>
+          <span className={`rounded-full border px-2 py-0.5 text-xs ${editing.oauth.connected ? 'border-success/20 bg-success/5 text-success' : 'border-warning/20 bg-warning/5 text-warning'}`}>
             {t(editing.oauth.connected ? 'mcp.oauthConnectedStatus' : 'mcp.oauthExpiredStatus')}
           </span>
         )}
@@ -167,7 +167,7 @@ function OAuthFields({ controller, editing, t, update }) {
       <Field label={t('mcp.oauthScopes')}>
         <input value={editing.oauthScopes || ''} onChange={(event) => update({ oauthScopes: event.target.value })} className={MONO_INPUT_CLASS} placeholder="read write" />
       </Field>
-      <details className="text-[10px] text-ink-fade">
+      <details className="text-xs text-ink-fade">
         <summary className="cursor-pointer select-none rounded-md py-1 transition-colors hover:text-ink">{t('mcp.oauthAdvanced')}</summary>
         <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
           <Field label={t('mcp.oauthAuthorizationEndpoint')}>
@@ -184,7 +184,7 @@ function OAuthFields({ controller, editing, t, update }) {
           {controller.oauthBusy ? t('mcp.oauthWorking') : t('mcp.oauthConnect')}
         </button>
         {editing.oauth?.configured && <button type="button" onClick={controller.disconnectOAuth} disabled={controller.oauthBusy} className={SECONDARY_BUTTON_CLASS}>{t('mcp.oauthDisconnect')}</button>}
-        {!editing.id && <span className="text-[10px] text-ink-fade">{t('mcp.oauthSaveFirst')}</span>}
+        {!editing.id && <span className="text-xs text-ink-fade">{t('mcp.oauthSaveFirst')}</span>}
       </div>
     </section>
   )
@@ -215,8 +215,8 @@ function Field({ label, hint, error, children }) {
     <div>
       <label className="mb-1.5 block text-xs text-ink-fade">{label}</label>
       {children}
-      {hint && !error && <p className="mt-1 text-[10px] leading-4 text-ink-fade">{hint}</p>}
-      {error && <p className="mt-1 text-[10px] leading-4 text-danger">{error}</p>}
+      {hint && !error && <p className="mt-1 text-xs leading-5 text-ink-fade">{hint}</p>}
+      {error && <p className="mt-1 text-xs leading-5 text-danger">{error}</p>}
     </div>
   )
 }

@@ -228,6 +228,36 @@ test('typing slash opens an inline command menu above the composer', () => {
   assert.match(menu, /bottom-\[calc\(100%\+10px\)\]/)
   assert.match(menu, /role="listbox"/)
   assert.match(chat, /slashRegistry\.listCommands\(\{ query: slashQuery \}\)/)
+
+  // A skill row's description is the skill's own sentence. Leading the fallback
+  // chain with `skill.name` made the label and the right-hand column the same
+  // string, so every skill read "代码审查 … 代码审查" and its real description
+  // was never shown.
+  const catalog = read('../src/pages/ChatSplit/useChatRuntimeCatalog.js')
+  assert.match(catalog, /description: skill\.desc \|\| skill\.description \|\| skill\.name \|\| skill\.id/)
+  assert.doesNotMatch(catalog, /description: skill\.name \|\|/)
+
+  // Every option draws a glyph, not only the built-ins: the mark is the gutter
+  // that keeps skill labels aligned with the commands above them. A skill's mark
+  // is derived from what it is about — a fixed set of families — rather than one
+  // sparkle for all of them, which told the reader nothing about the row.
+  //
+  // The family is worked out where the rest of the skill vocabulary lives, and
+  // the menu only maps the resulting key to a glyph: those patterns match on
+  // Chinese ids and names, and the menu is a component that must stay free of
+  // hardcoded Chinese.
+  const presentation = read('../src/lib/skillPresentation.js')
+  assert.match(presentation, /const SKILL_ICON_RULES = \[/)
+  assert.match(presentation, /export function skillIconKey\(skill\)/)
+  assert.match(menu, /SKILL_ICONS\[entry\.meta\?\.iconKey\] \|\| Sparkles/)
+  assert.doesNotMatch(menu, /[㐀-鿿]/)
+  assert.match(menu, /entry\.kind === 'prompt-template' \? BookOpen : Plug/)
+
+  // The row is one line of text running left to right. The description sat in a
+  // right-hand column, which left a wide gap down the middle of every row and
+  // made thirty commands look sparse.
+  assert.doesNotMatch(menu, /text-right/)
+  assert.match(menu, /min-w-0 flex-1 truncate text-\[13px\] leading-5 text-ink-fade\/90/)
 })
 
 test('workbench preference defaults to closed and round-trips', () => {

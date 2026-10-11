@@ -289,6 +289,12 @@ const translations = {
     "sideEffectUnknownTitle": "操作结果不确定，已停止自动重试",
     "sideEffectUnknownBody": "该操作可能已经写入、发送，或已由外部服务产生费用。请前往“设置 → 操作恢复”核验真实结果；在你确认前，系统不会自动再次执行。",
     "openSideEffectRecovery": "前往设置 → 操作恢复",
+    // A dropped connection or a closed app is a thing the reader already knows
+    // happened. The full diagnosis told them the outcome was unverifiable, what
+    // was retained, and why nothing was retried — four lines to say "the line
+    // went down, carry on". This says that instead.
+    "connectionLostTitle": "连接断开",
+    "connectionLostBody": "连接断开，发送「继续」即可从断开处接着做。",
     "modelRequestUnknownTitle": "模型请求结果尚未确认",
     "modelRequestUnknownBody": "这次没有取得可确认的完整模型结果。已保留检查点，未直接重发，以避免重复请求和上游模型供应商重复计费。",
     "openModelRequestRecovery": "打开模型请求恢复"
@@ -583,6 +589,8 @@ const translations = {
     "sideEffectUnknownTitle": "Operation outcome unknown; automatic retry stopped",
     "sideEffectUnknownBody": "The operation may already have written data, sent a message, or incurred a charge from an external service. Verify the real outcome in Settings → Operation recovery. It will not run again until you confirm.",
     "openSideEffectRecovery": "Open Settings → Operation recovery",
+    "connectionLostTitle": "Connection lost",
+    "connectionLostBody": "Connection lost — send “continue” to pick up where it stopped.",
     "modelRequestUnknownTitle": "Model request outcome is unknown",
     "modelRequestUnknownBody": "No verifiable complete model result was received. The checkpoint is retained; the request was not repeated to avoid duplicate execution or another charge from the upstream model provider.",
     "openModelRequestRecovery": "Open model request recovery"

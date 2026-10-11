@@ -242,6 +242,61 @@ export const MCP_SERVER_PRESETS = Object.freeze([
     enabled: true,
     autoApprove: Object.freeze([]),
   }),
+  Object.freeze({
+    // The first remote preset, and the only one that needs no credential of any
+    // kind. Notion's own integration is a confidential client — the token
+    // exchange carries a client secret that only the app's owner can hold — but
+    // Notion's hosted MCP server publishes a registration endpoint and accepts
+    // `token_endpoint_auth_method: "none"`, so a client registers itself and
+    // signs in with PKCE alone. Anyone who wants Notion without keeping a secret
+    // anywhere should take this door rather than the native one.
+    id: 'notion',
+    provider: 'mcp_notion',
+    label: 'Notion (MCP)',
+    publisher: 'Notion',
+    brandColor: '#111111',
+    category: 'productivity',
+    searchTerms: 'notion pages docs wiki database workspace notes mcp remote oauth',
+    descriptionKey: 'access.notionMcpDesc',
+    hintKey: 'access.notionMcpHint',
+    official: true,
+    name: 'notion',
+    transport: 'http',
+    command: '',
+    args: Object.freeze([]),
+    env: Object.freeze({}),
+    cwd: '',
+    url: 'https://mcp.notion.com/mcp',
+    headers: Object.freeze({}),
+    enabled: true,
+    autoApprove: Object.freeze([]),
+  }),
+  Object.freeze({
+    // Same shape as Notion, and verified the same way: Linear's hosted MCP
+    // publishes a registration endpoint and lists `none` among its token auth
+    // methods, so a client signs in by PKCE with nothing to prepare. The native
+    // Linear connector below still wants an API token.
+    id: 'linear',
+    provider: 'mcp_linear',
+    label: 'Linear (MCP)',
+    publisher: 'Linear',
+    brandColor: '#5E6AD2',
+    category: 'productivity',
+    searchTerms: 'linear issues projects cycles roadmap team mcp remote oauth',
+    descriptionKey: 'access.linearMcpDesc',
+    hintKey: 'access.linearMcpHint',
+    official: true,
+    name: 'linear',
+    transport: 'http',
+    command: '',
+    args: Object.freeze([]),
+    env: Object.freeze({}),
+    cwd: '',
+    url: 'https://mcp.linear.app/mcp',
+    headers: Object.freeze({}),
+    enabled: true,
+    autoApprove: Object.freeze([]),
+  }),
 ])
 
 export function getMcpServerPreset(id) {

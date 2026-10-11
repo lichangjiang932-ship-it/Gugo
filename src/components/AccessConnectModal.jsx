@@ -3,8 +3,10 @@ import { ExternalLink, LoaderCircle, QrCode, X } from 'lucide-react'
 import {
   getWechatQrcodeApi,
   getIntegrationOAuthStatusApi,
+  listIntegrationOAuthProvidersApi,
   pollWechatQrcodeApi,
   startIntegrationOAuthApi,
+  startIntegrationQrApi,
   testIntegrationApi,
   toggleIntegrationEnabledApi,
   upsertIntegrationApi,
@@ -12,6 +14,7 @@ import {
 import { createPoller } from '../lib/wechatQrPoller.js'
 import { openOAuthAuthorizationWindow } from '../lib/oauthPopup.js'
 import { manualIntegrationValues } from '../lib/accessManualCredentials.js'
+import { copyTextToClipboard } from '../lib/clipboard.js'
 import Modal from './Modal.jsx'
 
 const EMPTY = Object.freeze({
@@ -47,6 +50,21 @@ export default function AccessConnectModal({ connector, integration, onClose, on
   const [qr, setQr] = useState(null)
   const [qrStatus, setQrStatus] = useState('')
   const [oauthSessionId, setOauthSessionId] = useState('')
+  // Set once the server answers with a device code: the reader signs in on the
+  // provider's own page, so this pane's job becomes showing the code and the
+  // address to paste it into while the same poll loop waits for them to finish.
+  const [device, setDevice] = useState(null)
+  const [codeCopied, setCodeCopied] = useState(false)
+  // Scan-to-connect: the provider hands back a page to put in a QR code, and
+  // finishing on the phone is what creates the credential.
+  const [scan, setScan] = useState(null)
+  const [scanStatus, setScanStatus] = useState('')
+  // Whether the *server* can run this provider's OAuth — the catalog says a
+  // connector supports OAuth, which is a different question from whether this
+  // deployment has an OAuth client registered for it. `null` means the question
+  // has not been answered; the button stays then, so a failed probe never hides
+  // a feature that would have worked.
+  const [oauthConfigured, setOauthConfigured] = useState(null)
   const oauthPopupRef = useRef(null)
 
   useEffect(() => {
@@ -90,6 +108,54 @@ export default function AccessConnectModal({ connector, integration, onClose, on
     return () => { cancelled = true; poller?.stop?.() }
   }, [connector.provider, integration?.id, onConnected, t])
 
+  // GitHub asks not to be polled faster than the interval it hands back; asking
+  // sooner earns a `slow_down` and a longer wait anyway.
+  const pollDelayMs = device ? Math.max(device.interval * 1000, 5000) : 1000
+
+  // Scan-to-connect runs itself: the code is up, and whoever holds the phone is
+  // the one who acts. An existing integration means there is nothing to create,
+  // so the manual form is all that is left to show.
+  useEffect(() => {
+    if (!connector.qrConnect || integration) return undefined
+    let poller
+    let cancelled = false
+    const begin = async () => {
+      setBusy(true)
+      setMessage('')
+      try {
+        const started = await startIntegrationQrApi({ provider: connector.provider })
+        if (cancelled) return
+        setScan(started.qr)
+        setScanStatus(t('access.scanWaiting'))
+        poller = createPoller({
+          fetch: async () => {
+            const result = await getIntegrationOAuthStatusApi(started.session.id)
+            const raw = result?.session?.status || 'pending'
+            // The poller speaks the QR vocabulary; a finished session is the same
+            // event under the OAuth flows' name for it.
+            return { ...result, status: raw === 'completed' ? 'confirmed' : raw }
+          },
+          intervalMs: Math.max((started.qr?.interval || 5) * 1000, 3000),
+          maxAttempts: 60,
+          maxFailures: 3,
+          onUpdate: (event) => {
+            if (cancelled) return
+            if (event.type === 'done' && event.status === 'confirmed') onConnected(event.data?.session?.integration)
+            else if (event.type === 'done') setMessage(t('access.scanExpired'))
+            else if (event.type === 'error') setMessage(event.message || t('access.connectError'))
+          },
+        })
+        poller.start()
+      } catch (error) {
+        if (!cancelled) setMessage(error.message || t('access.connectError'))
+      } finally {
+        if (!cancelled) setBusy(false)
+      }
+    }
+    begin()
+    return () => { cancelled = true; poller?.stop?.() }
+  }, [connector.qrConnect, connector.provider, integration, onConnected, t])
+
   useEffect(() => {
     if (!oauthSessionId) return undefined
     let cancelled = false
@@ -111,7 +177,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
           setMessage(session.error || t('access.oauthFailed'))
           return
         }
-        timer = window.setTimeout(poll, 1000)
+        timer = window.setTimeout(poll, pollDelayMs)
       } catch (error) {
         if (!cancelled) {
           setBusy(false)
@@ -124,9 +190,35 @@ export default function AccessConnectModal({ connector, integration, onClose, on
       cancelled = true
       if (timer) window.clearTimeout(timer)
     }
-  }, [oauthSessionId, onConnected, t])
+  }, [oauthSessionId, onConnected, t, pollDelayMs])
+
+  // Ask once, and only for the connectors that claim OAuth at all, so the other
+  // thirty do not pay for a request they cannot use.
+  useEffect(() => {
+    if (!connector.oauth) return undefined
+    let cancelled = false
+    listIntegrationOAuthProvidersApi()
+      .then((data) => {
+        if (cancelled) return
+        const entry = (data?.providers || []).find((item) => item.provider === connector.provider)
+        if (entry) setOauthConfigured(entry.configured === true)
+      })
+      .catch(() => { /* Leave it unknown. */ })
+    return () => { cancelled = true }
+  }, [connector.oauth, connector.provider])
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+
+  const openDevicePage = () => {
+    if (!device?.verificationUri) return
+    globalThis.window?.open?.(device.verificationUri, '_blank', 'noopener,noreferrer')
+  }
+
+  const copyDeviceCode = () => {
+    if (!device?.userCode) return
+    void copyTextToClipboard(device.userCode)
+    setCodeCopied(true)
+  }
 
   const beginOAuth = async () => {
     setBusy(true)
@@ -136,6 +228,14 @@ export default function AccessConnectModal({ connector, integration, onClose, on
         provider: connector.provider,
         integrationId: integration?.id,
       })
+      // A device flow has no window to wait on: the reader is handed a code and
+      // the page to paste it into, and signs in to their own account there.
+      if (data.deviceFlow) {
+        setDevice(data.deviceFlow)
+        setOauthSessionId(data.session.id)
+        setBusy(false)
+        return
+      }
       const popup = openOAuthAuthorizationWindow(data.authorizationUrl, connector.provider)
       if (!popup) throw new Error(t('access.oauthPopupBlocked'))
       oauthPopupRef.current = popup
@@ -177,6 +277,12 @@ export default function AccessConnectModal({ connector, integration, onClose, on
   }
 
   const passwordPlaceholder = integration ? t('access.secretKept') : ''
+  // With no OAuth client on the server the button could only ever answer with an
+  // error, so it is not offered: the token form below is the way in, and the
+  // guide that used to appear after a failed click is shown up front instead.
+  const oauthUnavailable = connector.oauth === true && oauthConfigured === false
+  const showOAuthButton = connector.oauth === true && oauthConfigured !== false
+  const showOAuthGuide = oauthUnavailable || oauthHelp
 
   return (
     <Modal onClose={onClose} closeOnBackdrop={false} ariaLabel={`${connector.label} ${t('access.connect')}`} overlayClassName="bg-ink/30" className="max-w-md border-ink-fade/40">
@@ -196,7 +302,32 @@ export default function AccessConnectModal({ connector, integration, onClose, on
           </div>
         ) : (
           <form onSubmit={save} className="p-5 flex flex-col gap-4">
-            {connector.oauth && (
+            {scan && (
+              <div className="rounded-lg border border-ink/10 bg-paper-2/40 p-4" data-testid="qr-connect-panel">
+                <p className="text-xs font-semibold text-ink">{t('access.scanTitle')}</p>
+                <p className="mt-1 text-xs leading-5 text-ink-fade">{t('access.scanHint')}</p>
+                <div className="mt-3 flex flex-col items-center gap-2">
+                  <img src={scan.qrcodeUrl} alt="" className="h-44 w-44 rounded-md border border-ink/10 bg-white" />
+                  <p className="text-center text-xs text-ink-fade" role="status">{scanStatus}</p>
+                </div>
+              </div>
+            )}
+            {device ? (
+              <div className="rounded-lg border border-ink/10 bg-paper-2/40 p-4" data-testid="device-flow-panel">
+                <p className="text-xs font-semibold text-ink">{t('access.deviceCodeTitle')}</p>
+                <p className="mt-1 text-xs leading-5 text-ink-fade">{t('access.deviceCodeHint')}</p>
+                <div className="mt-3 flex items-center gap-2">
+                  <code data-testid="device-flow-code" className="min-w-0 flex-1 rounded-md border border-ink/15 bg-paper px-3 py-2 text-center font-mono text-lg font-semibold tracking-[0.2em] text-ink">{device.userCode}</code>
+                  <button type="button" onClick={copyDeviceCode} className="h-10 shrink-0 rounded-md border border-ink/15 bg-paper px-3 text-xs text-ink-soft transition-colors hover:bg-paper-2">
+                    {codeCopied ? t('access.deviceCodeCopied') : t('access.deviceCodeCopy')}
+                  </button>
+                </div>
+                <button type="button" onClick={openDevicePage} className="mt-3 flex h-10 w-full items-center justify-center rounded-md bg-ink text-sm text-paper transition-colors hover:bg-ink/90">
+                  {t('access.deviceCodeOpen')}
+                </button>
+                <p className="mt-2 text-center text-xs text-ink-fade" role="status">{t('access.deviceCodeWaiting')}</p>
+              </div>
+            ) : showOAuthButton && (
               <>
                 <button
                   type="button"
@@ -214,9 +345,10 @@ export default function AccessConnectModal({ connector, integration, onClose, on
                 </div>
               </>
             )}
-            {oauthHelp && (
-              <details className="rounded-md border border-warning/20 bg-warning/5 p-3 text-xs leading-5 text-warning" data-testid="oauth-help">
+            {showOAuthGuide && (
+              <details className="rounded-md border border-ink/10 bg-paper-2/40 p-3 text-xs leading-5 text-ink-soft" data-testid="oauth-help">
                 <summary className="cursor-pointer font-medium">{t('access.oauthHelpToggle')}</summary>
+                {oauthUnavailable && <p className="mt-2">{t('access.oauthUnavailable')}</p>}
                 <p className="mt-2">{t('access.oauthHelpBody')}</p>
                 <a href="https://github.com/lichangjiang932-ship-it/Gugo/blob/main/docs/CONFIGURATION.md" target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 underline">{t('access.oauthHelpDoc')}<ExternalLink className="w-3 h-3" /></a>
               </details>

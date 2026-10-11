@@ -35,6 +35,16 @@ export default function IncompleteTaskNotice({
     retainedCount,
     verifiedCount,
   })
+  // A dropped connection is one line, in red, and nothing else: no icon, no
+  // rule, no code chip, no breakdown. Everything the fuller card carries is for
+  // failures the reader has to diagnose; this one they already understand.
+  if (presentation.concise) {
+    return (
+      <p className="mt-3 text-sm text-danger" data-testid="incomplete-task-notice" role="alert">
+        {presentation.reason}
+      </p>
+    )
+  }
   return (
     <section
       className="mt-3 border-l-2 border-l-warning/60 py-2 pl-3 text-ui text-ink"
@@ -56,14 +66,18 @@ export default function IncompleteTaskNotice({
             <span className="font-medium">{t('chatMessages.incompleteReasonLabel')}</span>
             <span className="ml-1 text-ink-soft">{presentation.reason}</span>
           </p>
-          <p data-testid="incomplete-task-missing">
-            <span className="font-medium">{t('chatMessages.incompleteMissingLabel')}</span>
-            <span className="ml-1 text-ink-soft">{presentation.missing.join(t('chatMessages.incompleteListSeparator'))}</span>
-          </p>
-          <p data-testid="incomplete-task-next-step">
-            <span className="font-medium">{t('chatMessages.incompleteNextStepLabel')}</span>
-            <span className="ml-1 text-ink-soft">{presentation.nextStep}</span>
-          </p>
+          {presentation.missing.length > 0 && (
+            <p data-testid="incomplete-task-missing">
+              <span className="font-medium">{t('chatMessages.incompleteMissingLabel')}</span>
+              <span className="ml-1 text-ink-soft">{presentation.missing.join(t('chatMessages.incompleteListSeparator'))}</span>
+            </p>
+          )}
+          {presentation.nextStep && (
+            <p data-testid="incomplete-task-next-step">
+              <span className="font-medium">{t('chatMessages.incompleteNextStepLabel')}</span>
+              <span className="ml-1 text-ink-soft">{presentation.nextStep}</span>
+            </p>
+          )}
           {presentation.verificationChecks.length > 0 ? (
             <div className="space-y-1 text-ink-soft" data-testid="incomplete-task-verification-details">
               <span className="font-medium text-ink">

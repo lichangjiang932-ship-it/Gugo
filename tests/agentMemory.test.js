@@ -68,7 +68,7 @@ test('阶段 6: DB schema migration 干净，memories.agent_id 列存在', async
   assert.equal(Number(ver.value), dbMod.DB_SCHEMA_VERSION)
 })
 
-test('记忆系统块标注新鲜度并声明当前消息优先', async () => {
+test('记忆系统块不再写入相对时间，并声明当前消息优先', async () => {
   const mem = await import(`../server/services/memoryStore.js?fresh=${Date.now()}`)
   const now = Date.UTC(2026, 7, 3)
   const block = mem.buildMemorySystemBlock([
@@ -78,9 +78,6 @@ test('记忆系统块标注新鲜度并声明当前消息优先', async () => {
   ], { now })
 
   assert.match(block, /当前用户消息优先/)
-  assert.match(block, /近期偏好.*新鲜度：近期/)
-  assert.match(block, /旧项目.*新鲜度：陈旧，使用前核实/)
-  assert.match(block, /未知来源.*新鲜度：时间未知，使用前核实/)
   assert.equal(mem.classifyMemoryFreshness(now - 40 * 24 * 60 * 60 * 1000, { now }).level, 'aging')
 })
 

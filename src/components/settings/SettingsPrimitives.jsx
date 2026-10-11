@@ -1,6 +1,6 @@
-export function SettingsPanel({ title, description, children, testId }) {
+export function SettingsPanel({ title, description, children, testId, className = '' }) {
   return (
-    <section className="settings-panel" data-testid={testId}>
+    <section className={`settings-panel ${className}`.trim()} data-testid={testId}>
       <header className="settings-panel-header">
         <h1>{title}</h1>
         {description ? <p>{description}</p> : null}

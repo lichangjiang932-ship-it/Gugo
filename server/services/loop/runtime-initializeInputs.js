@@ -1,5 +1,10 @@
 import { userMessageText } from './userMessageText.js'
 import { createLoopExecutionScope } from './executionScope.js'
+import {
+  readSessionToolDisclosures,
+  unionDisclosedToolNames,
+  writeSessionToolDisclosures,
+} from '../sessionToolDisclosureStore.js'
 
 function bindRuntimeInputs(s) {
   const {
@@ -41,8 +46,47 @@ function bindRuntimeInputs(s) {
   s.activeLoopEvents = s.context.events || createLoopEvents()
 }
 
+// A tool, once shown in a conversation, stays shown for the rest of it.
+//
+// The selection is made from the current message, so it moves: measured over 91
+// consecutive requests in one install the tool set swung between 4 and 21 and
+// back, changing 15 times. Tools sit first in the provider's cache hierarchy
+// (tools → system → messages), so every swing re-billed the system prompt and
+// the entire transcript behind it — 316k of that install's 481k re-billed
+// tokens. A set that only grows settles after the opening turns and then stops
+// moving the prefix.
+//
+// The union is taken onto the selector's own output rather than rebuilt from the
+// catalog, because the selector also adds turn-owned control tools that are not
+// in the catalog and must survive. Previously-disclosed tools are resolved
+// against the catalog, so one the reader has switched off has no spec to come
+// back to and simply disappears.
+//
+// Artifact generators are exempt. The selector narrows them to the format this
+// turn asked for, and that narrowing is a delivery guard rather than a size
+// optimisation: the visible list is the execution allow-list, so a generator
+// carried over from an earlier turn would become runnable again.
+function applyDisclosedToolUnion({ selectedToolSpecs, toolCatalog, scope, isFileArtifactTool }) {
+  if (!scope.userId || !scope.sessionId) return selectedToolSpecs
+  const nameOf = (spec) => String(spec?.function?.name || '').trim()
+  const unionEligible = (name) => Boolean(name) && !isFileArtifactTool(name)
+  const merged = unionDisclosedToolNames({
+    disclosed: readSessionToolDisclosures(scope).filter(unionEligible),
+    selected: selectedToolSpecs.map(nameOf).filter(unionEligible),
+  })
+  const wanted = new Set(merged)
+  const byName = new Map()
+  for (const spec of selectedToolSpecs) byName.set(nameOf(spec), spec)
+  for (const spec of toolCatalog) {
+    const name = nameOf(spec)
+    if (name && wanted.has(name) && !byName.has(name)) byName.set(name, spec)
+  }
+  writeSessionToolDisclosures({ ...scope, names: merged })
+  return [...byName.values()].filter((spec) => nameOf(spec))
+}
+
 export async function initializeInputs(s) {
-  const { MANAGED_ATTACHMENT_MARKER, SERVER_TOOL_SPECS, STATUS_INQUIRY_PROMPT, allowedArtifactTools, createArtifactReplacementGuard, findAdjacentDeliveredArtifacts, findContinuableArtifactTargets, findExplicitlyReferencedDeliveredArtifacts, isArtifactRevisionRequest, isExplicitCodeSnippetRequest, latestPriorTurnOutcome, parseSkillIdFromPrompt, resolveArtifactDeliveryTargets, resolveArtifactRevisionMode, selectJobToolSpecs } = s.d
+  const { MANAGED_ATTACHMENT_MARKER, SERVER_TOOL_SPECS, STATUS_INQUIRY_PROMPT, allowedArtifactTools, createArtifactReplacementGuard, findAdjacentDeliveredArtifacts, findContinuableArtifactTargets, findExplicitlyReferencedDeliveredArtifacts, isArtifactRevisionRequest, isExplicitCodeSnippetRequest, isFileArtifactTool, latestPriorTurnOutcome, parseSkillIdFromPrompt, resolveArtifactDeliveryTargets, resolveArtifactRevisionMode, selectJobToolSpecs } = s.d
   bindRuntimeInputs(s)
   s.eligibleFallbackToolSpecs = Array.isArray(s.fallbackToolSpecs)
       ? s.fallbackToolSpecs
@@ -138,6 +182,7 @@ export async function initializeInputs(s) {
   s.artifactDeliveryStep = !['plan', 'verify', 'finalize'].includes(String(s.step?.kind || ''))
   s.stepArtifactTools = s.artifactDeliveryStep ? s.authorizedArtifactTools : new Set()
   s.chatToolSelectionDecision = null
+  const toolCatalog = Array.isArray(s.toolSpecs) ? s.toolSpecs : SERVER_TOOL_SPECS
   s.selectedToolSpecs = selectJobToolSpecs({
       prompt: s.intentText,
       userPrompt: s.artifactAuthorizationText,
@@ -146,12 +191,18 @@ export async function initializeInputs(s) {
       priorArtifactTypes: s.priorArtifactTypes,
       hasExplicitManagedArtifactReference: s.explicitlyReferencedArtifacts.length > 0,
       skillId: s.explicitSkillId || s.skillId,
-      specs: Array.isArray(s.toolSpecs) ? s.toolSpecs : SERVER_TOOL_SPECS,
+      specs: toolCatalog,
       origin: s.job?.origin,
       intentMode: s.intentMode,
       userId: s.job?.userId || null,
       onDecision: (decision) => { s.chatToolSelectionDecision = decision },
     })
+  s.selectedToolSpecs = applyDisclosedToolUnion({
+    selectedToolSpecs: s.selectedToolSpecs,
+    toolCatalog,
+    scope: { userId: s.job?.userId || null, sessionId: s.job?.sessionId || null },
+    isFileArtifactTool,
+  })
   s.restored = typeof s.loadCheckpoint === 'function' ? await s.loadCheckpoint() : null
   return { kind: 'next' }
 }

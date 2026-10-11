@@ -93,8 +93,17 @@ test('typing slash opens an inline action menu and click selection does not send
     const coreOption = menu.querySelector('[role="option"]')
     const skillOption = [...menu.querySelectorAll('[role="option"]')]
       .find((option) => option.textContent.includes('slides'))
+    // Both kinds draw a glyph. A skill used to draw nothing, which pulled its
+    // label 32px left of the command above it; the glyph is what holds the label
+    // column still, so this is alignment rather than decoration.
     assert.ok(coreOption.querySelector('svg'))
-    assert.equal(skillOption.querySelector('svg'), null)
+    assert.ok(skillOption.querySelector('svg'))
+    assert.notEqual(coreOption.querySelector('svg').innerHTML, skillOption.querySelector('svg').innerHTML)
+    // A command that takes text says so on screen. A skill's hint is the same
+    // `<prompt>` on every row, so it stays screen-reader-only instead of
+    // repeating down the column.
+    assert.match(coreOption.textContent, /\[show\|hide\|toggle\]/)
+    assert.equal(skillOption.querySelector('.sr-only').textContent, '<prompt>')
     assert.match(menu.textContent, /上下文/)
     assert.match(menu.textContent, /显示或隐藏上下文/)
     assert.equal(menu.querySelector('[aria-selected="true"]').textContent.includes('上下文'), true)

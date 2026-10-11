@@ -91,6 +91,7 @@ import { migrateToV118 } from './v118GoalPlans.js'
 import { migrateToV119 } from './v119MemoryEmbeddingSpace.js'
 import { migrateToV120 } from './v120MemorySearchIndex.js'
 import { migrateToV121 } from './v121GoalPlanColumnRepair.js'
+import { migrateToV122 } from './v122SessionToolDisclosures.js'
 export { migrateToV120 }
 export { migrateToV121 }
 
@@ -192,6 +193,7 @@ export const schemaMigrations = Object.freeze([
   { version: 119, up: migrateToV119, atomicWithVersion: true },
   { version: 120, up: migrateToV120, atomicWithVersion: true },
   { version: 121, up: migrateToV121, atomicWithVersion: true },
+  { version: 122, up: migrateToV122, atomicWithVersion: true },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30

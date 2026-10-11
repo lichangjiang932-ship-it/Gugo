@@ -21,6 +21,7 @@ import { getDb } from '../db.js'
 import { mapPersistedTurnEventRow } from './turnEventStore.js'
 import { withLocalTurnTraceReader } from './localTurnTraceReader.js'
 import { USAGE_REPORT_LIMITS } from '../../shared/usageReportLimits.js'
+import { computeCacheWaste, createRateResolver } from '../../shared/modelCacheStats.js'
 
 const USAGE_FIELDS = Object.freeze([
   'promptTokens',
@@ -117,13 +118,17 @@ function boundedEntries(map, limit) {
  *   perModelPhases: number
  * }}
  */
-export function summarizeUsageEvents(events = [], { truncated = false } = {}) {
+export function summarizeUsageEvents(events = [], { truncated = false, env = process.env } = {}) {
   const totals = emptyTotals()
   const models = new Map()
   const sessions = new Map()
   const turns = { total: 0, completed: 0, stopped: 0, byType: {} }
   const phaseTotals = emptyTotals()
   let perModelPhases = 0
+  // Per-request records, in order, grouped by the conversation they belong to.
+  // Cache continuity is per conversation — the same prefix in another session is
+  // a different prefix — so waste is measured within a session, never across.
+  const phasesBySession = new Map()
 
   const sessionEntry = (sessionId) => {
     const key = String(sessionId || '(none)')
@@ -150,6 +155,14 @@ export function summarizeUsageEvents(events = [], { truncated = false } = {}) {
         model.totalTokens = model.usage.promptTokens + model.usage.completionTokens
       }
       addUsage(phaseTotals, payload.usage)
+      // Events arrive newest first; the scan needs them the way they happened.
+      if (!phasesBySession.has(session)) phasesBySession.set(session, [])
+      phasesBySession.get(session).unshift({
+        usage: payload.usage,
+        modelName: payload.modelName,
+        providerId: payload.providerId,
+        timestamp: Number(event.createdAt) || 0,
+      })
       continue
     }
     if (!TERMINAL_TURN_EVENT_TYPES.has(event?.type)) continue
@@ -174,6 +187,17 @@ export function summarizeUsageEvents(events = [], { truncated = false } = {}) {
   for (const entry of sessions.values()) {
     entry.cacheHitRatePercent = cacheHitRatePercent(entry.usage)
   }
+
+  // A hit rate says a miss happened; this says how much it cost and what likely
+  // caused it. Summed per session because that is the unit the cache follows.
+  const cacheWaste = { missedTokens: 0, missedCost: 0, missCount: 0 }
+  const resolvePrice = createRateResolver(env)
+  for (const records of phasesBySession.values()) {
+    const waste = computeCacheWaste(records, { resolvePrice })
+    cacheWaste.missedTokens += waste.missedTokens
+    cacheWaste.missedCost += waste.missedCost
+    cacheWaste.missCount += waste.missCount
+  }
   return {
     window: {
       since: null,
@@ -188,6 +212,7 @@ export function summarizeUsageEvents(events = [], { truncated = false } = {}) {
       totalTokens: phaseTotals.promptTokens + phaseTotals.completionTokens,
     },
     cacheHitRatePercent: cacheHitRatePercent(totals),
+    cacheWaste,
     byModel: boundedEntries(models, MAX_MODELS),
     bySession: boundedEntries(sessions, MAX_SESSIONS),
     perModelPhases,
