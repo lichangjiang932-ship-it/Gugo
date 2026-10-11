@@ -2824,9 +2824,16 @@ html:has(.pet-window-root) #root {
 }
 
 /* Diff review rows: tinted bands, word-level marks. Colours come from the theme
-   tokens so light/dark follow the reader's choice. */
-.diff-row-added { background: rgba(var(--color-success-rgb), 0.12); }
-.diff-row-removed { background: rgba(var(--color-danger-rgb), 0.12); }
-.diff-row-changed { background: rgba(var(--color-warning-rgb), 0.10); }
+   tokens so light/dark follow the reader's choice.
+ *
+ * The alpha goes in through the slash form. `--color-*-rgb` holds space-separated
+ * channels, so `rgba(var(--x-rgb), 0.12)` expands to `rgba(6 118 71, 0.12)` —
+ * space syntax and comma syntax in one value, which is not a colour at all, and
+ * the declaration was dropped on the floor: every changed line in the review drew
+ * with no band behind it and nobody noticed, because a missing background looks
+ * exactly like a background that was never meant to be there. */
+.diff-row-added { background: rgb(var(--color-success-rgb) / 0.12); }
+.diff-row-removed { background: rgb(var(--color-danger-rgb) / 0.12); }
+.diff-row-changed { background: rgb(var(--color-warning-rgb) / 0.10); }
 .diff-row-filler { background: transparent; }
-.diff-word { background: rgba(var(--color-accent-rgb), 0.22); border-radius: 2px; }
+.diff-word { background: rgb(var(--color-accent-rgb) / 0.22); border-radius: 2px; }

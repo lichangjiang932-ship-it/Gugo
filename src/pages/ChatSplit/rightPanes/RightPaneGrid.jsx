@@ -1,3 +1,4 @@
+import { Fragment, useCallback, useState } from 'react'
 import { GUTTER_PX, MIN_PANE_WIDTH, useRightRegionLayout } from './useRightRegionLayout.js'
 
 /**
@@ -6,36 +7,74 @@ import { GUTTER_PX, MIN_PANE_WIDTH, useRightRegionLayout } from './useRightRegio
  * It replaces the pair of sibling columns the workbench and the dock used to be:
  * side by side they read as two unrelated strips, a file opened in one evicted
  * the other, and the task list could only ever be a full-height sliver. Here a
- * pane above may share the region with up to two below.
+ * pane above may share the region with the panes below.
  *
- * The arrangement is written out rather than left to flow, because the two cases
- * are not the same shape: a pane *above* pushes what follows into a bottom row,
- * but two panes with nothing above them sit side by side. Letting the boxes flow
- * would stack that pair, which is the arrangement this is meant to stop.
+ * Nothing here covers anything else. The change review spent a while as a
+ * takeover, which was right while it carried a file tree of its own down one
+ * side and would have fought a quarter of the region — once that tree became the
+ * ≡ overlay, the takeover had no reason left and only made the review the one
+ * pane with no edge of its own and the one that hid its neighbours.
+ *
+ * The arrangement is written out rather than left to flow, because the cases are
+ * not the same shape: a pane *above* pushes what follows into a bottom row, but
+ * panes with nothing above them sit side by side. Letting the boxes flow would
+ * stack that row, which is the arrangement this is meant to prevent — and when
+ * the row cannot give every pane a readable width, stacking is what it does on
+ * purpose.
  */
 export default function RightPaneGrid({
-  bottomLeft = null,
-  bottomRight = null,
+  bottoms = [],
   t,
-  takeover = null,
   top = null,
 }) {
   const region = useRightRegionLayout()
-  const openLeft = Boolean(bottomLeft)
-  const openRight = Boolean(bottomRight)
-  const openBottom = openLeft || openRight
-  // Two panes below sit side by side only while both can still hold a readable
-  // line. When the region is too narrow for that, stacking them is the honest
-  // answer — a 180px column of a document is not a pane, it is a sliver. Widening
-  // the region puts the split back on its own.
-  const stackBottom = openLeft && openRight && region.width < MIN_PANE_WIDTH * 2 + GUTTER_PX
-  const splitColumns = openLeft && openRight && !stackBottom
-  // A takeover is a pane too: the change review covers the region on its own,
-  // and this refused to draw the region for it, so the review could not open
-  // unless something else happened to be showing underneath.
-  if (!top && !openBottom && !takeover) return null
+  const panes = bottoms.filter(Boolean)
+  const openBottom = panes.length > 0
+  const needed = panes.length * MIN_PANE_WIDTH + (panes.length - 1) * GUTTER_PX
+  const stackBottom = panes.length > 1 && region.width < needed
 
-  const divider = 'touch-none bg-transparent outline-none after:absolute after:bg-transparent hover:after:bg-accent/50 focus-visible:after:bg-focus'
+  // Each pane's share of the row, in the same order as `panes`. Dragging a
+  // divider between two of them moves the boundary without changing the total,
+  // so a reader can give the diff the room and leave the file a column, and the
+  // panes they are not touching stay where they were.
+  const [weights, setWeights] = useState(() => panes.map(() => 1))
+  // Adjusting during render, not in an effect: a pane opening or closing changes
+  // how many shares the row has, and painting one frame with the wrong number of
+  // them is a frame with the wrong widths in it.
+  if (weights.length !== panes.length) setWeights(panes.map(() => 1))
+
+  const beginDividerDrag = useCallback((index) => (event) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const row = event.currentTarget.parentElement?.getBoundingClientRect?.()
+    if (!row?.width) return
+    const total = weights.reduce((sum, value) => sum + value, 0) || panes.length
+    const start = { fromX: event.clientX, weights: [...weights], unit: row.width / total }
+    const onMove = (moveEvent) => {
+      const shift = (moveEvent.clientX - start.fromX) / start.unit
+      const next = [...start.weights]
+      // The boundary moves both sides by the same amount, and neither may go
+      // past the width a pane needs to stay readable.
+      const wall = MIN_PANE_WIDTH / start.unit
+      next[index] = Math.max(wall, Math.min(start.weights[index] + start.weights[index + 1] - wall, start.weights[index] + shift))
+      next[index + 1] = start.weights[index] + start.weights[index + 1] - next[index]
+      setWeights(next)
+    }
+    const stop = () => {
+      globalThis.window?.removeEventListener?.('pointermove', onMove)
+      globalThis.window?.removeEventListener?.('pointerup', stop)
+    }
+    globalThis.window?.addEventListener?.('pointermove', onMove)
+    globalThis.window?.addEventListener?.('pointerup', stop)
+  }, [panes.length, weights])
+
+  if (!top && !openBottom) return null
+
+  // The line is drawn, not hinted at: a separator that only appears under the
+  // pointer leaves every pane looking like it runs into the next one, and a
+  // reader has no way to see that they are separate at all — let alone that the
+  // edge between them can be pulled.
+  const divider = 'touch-none bg-transparent outline-none after:absolute after:bg-ink/12 hover:after:bg-accent/50 focus-visible:after:bg-focus'
   const rowDivider = (
     <button
       type="button"
@@ -48,18 +87,6 @@ export default function RightPaneGrid({
       onKeyDown={region.resizeRowWithKeyboard}
     />
   )
-  const columnDivider = (
-    <button
-      type="button"
-      data-testid="right-pane-column-divider"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={t('workbench.resize')}
-      className={`relative w-2 shrink-0 cursor-col-resize ${divider} after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2`}
-      onPointerDown={region.beginColumnDrag}
-      onKeyDown={region.resizeColumnWithKeyboard}
-    />
-  )
 
   return (
     <div
@@ -69,8 +96,7 @@ export default function RightPaneGrid({
     >
       {/* Inside the region, not straddling its edge: the region clips its own
           overflow, so a handle hung on the outside is cut in half and only the
-          sliver that happens to be inside can be grabbed — which is the same as
-          not being grabbable. The hairline still lands on the boundary. */}
+          sliver that happens to be inside can be grabbed. */}
       <button
         type="button"
         data-testid="right-region-resize-handle"
@@ -104,30 +130,28 @@ export default function RightPaneGrid({
           data-stacked={stackBottom ? 'true' : undefined}
           className={`flex min-h-0 flex-1 overflow-hidden ${stackBottom ? 'flex-col' : 'flex-row'}`}
         >
-          {openLeft && (
-            <div
-              data-testid="right-pane-bottom-left"
-              className="flex min-h-0 min-w-0 flex-col overflow-hidden"
-              // Stacked or alone, it shares the room evenly rather than taking
-              // whatever its content wants — a plan card with a long list would
-              // otherwise leave the pane under it a strip.
-              style={splitColumns ? { flex: `0 0 ${region.bottomLeftRatio * 100}%` } : { flex: '1 1 0%' }}
-            >
-              {bottomLeft}
-            </div>
-          )}
-          {splitColumns && columnDivider}
-          {openRight && (
-            <div data-testid="right-pane-bottom-right" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              {bottomRight}
-            </div>
-          )}
-        </div>
-      )}
-
-      {takeover && (
-        <div data-testid="right-pane-takeover" className="absolute inset-0 z-30 flex min-h-0 flex-col overflow-hidden bg-paper">
-          {takeover}
+          {panes.map((pane, index) => (
+            <Fragment key={pane.key}>
+              {index > 0 && (stackBottom ? rowDivider : (
+                <button
+                  type="button"
+                  data-testid="right-pane-column-divider"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label={t('workbench.resize')}
+                  className={`relative w-2 shrink-0 cursor-col-resize ${divider} after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2`}
+                  onPointerDown={beginDividerDrag(index - 1)}
+                />
+              ))}
+              <div
+                data-testid={`right-pane-bottom-${pane.key}`}
+                className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+                style={panes.length === 1 ? { flex: '1 1 auto' } : { flex: `${weights[index] ?? 1} 1 0%` }}
+              >
+                {pane.node}
+              </div>
+            </Fragment>
+          ))}
         </div>
       )}
     </div>

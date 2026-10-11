@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 import { ChatRightPanels } from '../../src/pages/ChatSplit/ChatSplitView.jsx'
-import { resetDockForTests } from '../../src/pages/ChatSplit/dock/dockStore.js'
+import { closeDock, openDock, resetDockForTests } from '../../src/pages/ChatSplit/dock/dockStore.js'
 
 /**
  * The workbench and an open file are panes that live at the same time.
@@ -152,21 +152,27 @@ test('closing the file leaves the workbench where it was', async () => {
   }
 })
 
-test('the task list takes the bottom-left pane beside an open file', async () => {
+test('the change review takes a pane beside an open file instead of covering its neighbours', async () => {
   const dom = setupDom()
   const root = createRoot(dom.window.document.getElementById('root'))
   const el = () => dom.window.document
   try {
+    openDock()
     await act(async () => root.render(
       <I18nProvider>
-        <ChatRightPanels {...baseProps({ planVisible: true, previewArtifact: PREVIEW_ARTIFACT, todos: [] })} />
+        <ChatRightPanels {...baseProps({ previewArtifact: PREVIEW_ARTIFACT })} />
       </I18nProvider>,
     ))
-    assert.ok(el().querySelector('[data-testid="right-pane-bottom-left"]'), 'the task list has its own pane')
+    // The review has its own pane, the workbench keeps the one above it, and the
+    // file keeps its own — nothing is drawn over anything else, and the review
+    // is no longer the one pane with no edge of its own.
+    assert.ok(el().querySelector('[data-testid="right-pane-bottom-middle"]'), 'the review has its own pane')
     assert.ok(el().querySelector('[data-testid="right-pane-bottom-right"] [data-testid="direct-file-pane"]'))
-    assert.ok(el().querySelector('[data-testid="right-pane-row-divider"]'), 'the two rows can be dragged apart')
-    assert.ok(el().querySelector('[data-testid="right-pane-column-divider"]'), 'so can the two below')
+    assert.ok(el().querySelector('[data-testid="right-pane-top"] [data-testid="right-workbench"]'), 'the workbench keeps its pane')
+    assert.equal(el().querySelector('[data-testid="right-pane-takeover"]'), null, 'nothing is covered')
+    assert.ok(el().querySelector('[data-testid="right-pane-column-divider"]'), 'the panes below can be dragged apart')
   } finally {
+    closeDock()
     await act(async () => root.unmount())
     dom.window.close()
   }

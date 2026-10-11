@@ -5,6 +5,7 @@ import PermissionRequestCard from './chatMessages/PermissionRequestCard.jsx'
 import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
 import ChatDesktopPetHost from './chatSplitView/ChatDesktopPetHost.jsx'
+import PlanCard from './chatSplitView/PlanCard.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
 import { revealTurnInConversation } from '../../lib/chatMessageSignals.js'
 import ChatSessionHeaderBar from './chatSplitView/ChatSessionHeaderBar.jsx'
@@ -119,7 +120,7 @@ export default function ChatSplitView({
 
   return (
     <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper" mainAs="main" mainClassName="relative flex min-w-0 flex-1 overflow-hidden" mainProps={{ 'data-chat-main-area': true }}>
-      <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
+      <div className="chat-main-pane relative flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
         <ChatSessionHeaderBar
           activeSession={activeSession} hasWorkspace={hasWorkspace} workspacePath={selectedWorkspacePath || activeSession?.workspacePath || ''}
           onClosePlan={onClosePlan} onOpenPlan={onOpenPlan}
@@ -241,14 +242,27 @@ export default function ChatSplitView({
           workspaceBusy={workspaceBusy}
           workspaceError={workspaceError}
         />
+
+        {/* The task list floats at the top-right of the conversation, inside this
+            column rather than over the whole window: the region opens and closes
+            beside it constantly, and a card pinned to the window would slide out
+            from under the reader's eye every time the panel arrived or left. Here
+            it stays against the text it belongs to and moves with it. */}
+        {planVisible && (
+          <PlanCard
+            artifacts={planArtifacts}
+            onClose={onClosePlan}
+            onOpenArtifact={onOpenArtifact}
+            onRevealTurn={revealTurnInConversation}
+            sessionId={activeSessionId}
+            t={t}
+            todos={activeSession?.todos || []}
+          />
+        )}
       </div>
 
       <ChatRightPanels
         onInsertText={(text) => setInput((current) => (current ? `${current} ${text}` : text))}
-        planArtifacts={planArtifacts}
-        planVisible={planVisible}
-        onClosePlan={onClosePlan}
-        onRevealTurn={revealTurnInConversation}
         workbenchOpen={workbenchOpen}
         sessionId={activeSessionId}
         todos={activeSession?.todos || []}
@@ -270,10 +284,6 @@ export default function ChatSplitView({
         onPreviewMessage={onPreviewMessage}
         selectedWorkspacePath={selectedWorkspacePath}
       />
-
-      {/* The plan card belongs to the session, not to the tool panel, so it is
-          drawn over the main area and stays put whether or not the panel is open. */}
-      
 
       <ChatDesktopPetHost isGenerating={isGenerating} messages={messages} onClose={onCloseDesktopPet}
         tasks={tasks} toolApproval={toolApproval} visible={desktopPetVisible} />

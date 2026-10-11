@@ -247,6 +247,7 @@ function ResidentToolbar({ pane, resident, t }) {
     <header className="flex h-12 shrink-0 items-center border-b border-ink/10 px-3">
       <WorkbenchToolbar
         activeTab={resident.activeTab}
+        closeLabelKey={resident.closeLabelKey}
         contributedTabs={resident.contributedTabs || []}
         inAppPreview={resident.inAppPreview === true}
         onClose={resident.onClose}

@@ -100,8 +100,16 @@ test('right workbench toggle leaves the navigation rail mounted', () => {
   // what this file used to pin, and what the reader asked to change.
   assert.doesNotMatch(rightPanels, /if \(!workbenchOpen\) return null/)
   assert.match(rightPanels, /<RightPaneGrid/)
-  assert.match(rightPanels, /top=\{workbenchOpen \?/)
-  assert.match(rightPanels, /bottomRight=\{previewArtifact \?/)
+  // The tool list is the front door, not a resident pane: with a file or the
+  // task list up it stops taking the pane above them.
+  // The tool list is the panel's front door and the tab is what closes it; it is
+  // not suppressed by whatever else the reader has open, or Back from a tool
+  // would land on a pane with nothing in it.
+  assert.match(rightPanels, /const showWorkbench = workbenchOpen/)
+  assert.match(rightPanels, /const showWorkbench = workbenchOpen\r?\n/)
+  assert.match(rightPanels, /top=\{showWorkbench \?/)
+  assert.match(rightPanels, /bottoms=\{\[/)
+  assert.match(rightPanels, /previewArtifact \? \{/)
   // Closing the file closes the file: with the panes independent, sending the
   // preview's close to the region's switch would take the tool panel down too.
   assert.match(chat, /onClosePreview=\{\(\) => dispatch\(\{ type: 'CLOSE_PREVIEW_ARTIFACT' \}\)\}/)
@@ -137,7 +145,8 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   // And the region will not draw two panes side by side below the width where
   // either of them stops being readable; it stacks them instead.
   assert.match(region, /MIN_PANE_WIDTH = 220/)
-  assert.match(read('../src/pages/ChatSplit/rightPanes/RightPaneGrid.jsx'), /const stackBottom = openLeft && openRight && region\.width < MIN_PANE_WIDTH \* 2 \+ GUTTER_PX/)
+  assert.match(read('../src/pages/ChatSplit/rightPanes/RightPaneGrid.jsx'), /const needed = panes\.length \* MIN_PANE_WIDTH \+ \(panes\.length - 1\) \* GUTTER_PX/)
+  assert.match(read('../src/pages/ChatSplit/rightPanes/RightPaneGrid.jsx'), /const stackBottom = panes\.length > 1 && region\.width < needed/)
 
   // Every handle the reader drags sits inside the box that owns it. The region
   // clips its own overflow, so one hung on the outside of its edge is cut in
@@ -264,11 +273,13 @@ test('the tool panel and the plan card are controlled by two independent switche
   // And the reverse: the card's own close only writes the card.
   assert.match(index, /onClosePlan=\{\(\) => \{ setPlanVisible\(false\); setDismissedPlanSignature\(planSignature\) \}\}/)
 
-  // The card is a pane of the region, driven straight from `planVisible`: it no
-  // longer goes through the dock, which knew about one panel at a time and would
-  // have evicted whatever else the reader had open to show it.
-  const panels = read('../src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx')
-  assert.ok(panels.includes('<PlanCard'), 'the plan card is a pane of the region')
-  assert.match(panels, /bottomLeft=\{planVisible \?/)
+  // The card floats over the conversation, driven straight from `planVisible`,
+  // and is anchored inside the conversation column rather than over the window —
+  // the region opens and closes beside it constantly, and a card pinned to the
+  // window would slide out from under the reader every time the panel arrived.
+  const splitView = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  assert.ok(splitView.includes('<PlanCard'), 'the plan card floats over the conversation')
+  assert.match(splitView, /planVisible && \(/)
+  assert.doesNotMatch(read('../src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx'), /<PlanCard/, 'the card is not a pane of the region')
   assert.doesNotMatch(read('../src/pages/ChatSplit/dock/dockStore.js'), /'plan'/, 'the dock no longer holds the plan')
 })

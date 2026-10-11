@@ -10,7 +10,6 @@ import { readDockState, subscribeDock } from '../dock/dockStore.js'
 import RightPaneGrid from '../rightPanes/RightPaneGrid.jsx'
 import RightPreviewPane from '../RightPreviewPane.jsx'
 import RightWorkbench from '../RightWorkbench.jsx'
-import PlanCard from './PlanCard.jsx'
 
 /**
  * The right region: the workbench above, and the task list and the open file
@@ -43,10 +42,6 @@ export default function ChatRightPanels({
   onClosePreviewTab,
   onClosePreview,
   onPreviewMessage,
-  planArtifacts = [],
-  planVisible = false,
-  onClosePlan,
-  onRevealTurn,
 }) {
   const { t } = useT()
   const toast = useToast()
@@ -75,14 +70,22 @@ export default function ChatRightPanels({
   }
 
   // The region is open when any of its panes is wanted — not only when the tool
-  // panel is. Opening a file used to switch the tool panel on as a side effect,
-  // which parked the tool list in the pane above the file and left half the
-  // region to a launcher nobody had asked for. Each pane answers for itself now;
-  // the grid draws nothing when none of them wants the room.
+  // panel is. Each pane answers for itself; the grid draws nothing when none of
+  // them wants the room.
+  //
+  // Inside the tool panel the two levels are the tab: the entry list is the front
+  // door and a tool is the room behind it, so choosing a tool is what closes the
+  // list and Back (`workbench-tool-entry`) is what brings it back. The list used
+  // to be suppressed whenever anything else was open, which made Back look like
+  // it had closed the panel: the tab did return to `entry` and the pane was then
+  // hidden for having nothing but the list to show. It can share the region with
+  // the review and an open file; it simply is not what a tool tab shows.
+  const showWorkbench = workbenchOpen
+
   return (
     <RightPaneGrid
       t={t}
-      top={workbenchOpen ? (
+      top={showWorkbench ? (
         <RightWorkbench
           embedded
           sessionId={sessionId}
@@ -100,20 +103,15 @@ export default function ChatRightPanels({
           statusMessage={workbenchMessage}
         />
       ) : null}
-      bottomLeft={planVisible ? (
-        <PlanCard
-          artifacts={planArtifacts}
-          docked
-          onClose={onClosePlan}
-          onOpenArtifact={onOpenArtifact}
-          onRevealTurn={onRevealTurn}
-          sessionId={sessionId}
-          t={t}
-          todos={todos}
-        />
-      ) : null}
-      bottomRight={previewArtifact ? (
-        <RightPreviewPane
+      bottoms={[
+        dockState.panel === 'diff' ? {
+          key: 'middle',
+          node: <DockHost embedded onSendMessage={onWorkbenchSend} t={t} workspacePath={selectedWorkspacePath} />,
+        } : null,
+        previewArtifact ? {
+          key: 'right',
+          node: (
+            <RightPreviewPane
           embedded
           artifact={previewArtifact}
           previewTabs={previewTabs}
@@ -124,9 +122,14 @@ export default function ChatRightPanels({
           onMessage={onPreviewMessage}
           residentToolbar={{
             activeTab: workbenchTab,
+            // This bar sits inside the preview, so its ✕ closes the preview. It
+            // was wired to the tool panel's switch, which left the page the
+            // reader was looking at exactly where it was and made the mark look
+            // like it did nothing at all.
+            closeLabelKey: 'chatPreview.close',
             contributedTabs,
             inAppPreview,
-            onClose: onCloseWorkbench,
+            onClose: onClosePreview,
             onPickElement: elementPicker.toggle,
             onScreenshot: takeScreenshot,
             picking: elementPicker.picking,
@@ -134,10 +137,9 @@ export default function ChatRightPanels({
             workspacePath: selectedWorkspacePath,
           }}
         />
-      ) : null}
-      takeover={dockState.panel === 'diff' ? (
-        <DockHost embedded onSendMessage={onWorkbenchSend} t={t} workspacePath={selectedWorkspacePath} />
-      ) : null}
+          ),
+        } : null,
+      ]}
     />
   )
 }

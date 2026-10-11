@@ -1,7 +1,10 @@
 import { useState } from 'react'
-import { Download, Eye, FileText, Files } from 'lucide-react'
+import { Download, Eye, FileText, Files, Menu } from 'lucide-react'
 import { classifyDirectFile, withArtifactPreviewMode } from '../../../lib/directFilePreview.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
+import CurrentFileChange from '../../../components/CurrentFileChange.jsx'
+import FileIdentity from '../preview/FileIdentity.jsx'
+import FileListOverlay from './diffReview/FileListOverlay.jsx'
 
 function FileVisual({ artifact }) {
   if (classifyDirectFile(artifact) !== 'image' || !artifact.url) return <FileText className="h-3.5 w-3.5" />
@@ -49,17 +52,52 @@ function FileRow({ artifact, onOpenArtifact, onSelect, selected = false, t }) {
   )
 }
 
-export default function WorkbenchFiles({ artifacts, onOpenArtifact, t }) {
+/**
+ * The workspace's files, with the folder itself one press away.
+ *
+ * This pane used to be only the list of files the session produced, which is the
+ * wrong list the moment a reader wants a file the session did not touch. It
+ * wears the same shell as the change review now — the ≡ brings the folder over
+ * the pane, and a file picked from it is read here — and keeps the session's own
+ * outputs as what it shows before anything is picked, because that list carries
+ * the download and preview links and nothing else does.
+ */
+export default function WorkbenchFiles({ artifacts, onOpenArtifact, t, workspacePath = '' }) {
   // "Currently selected" is local to this list: clicking a row marks it, so the
   // reader always sees which file the preview would act on.
   const [selectedKey, setSelectedKey] = useState(() => '')
+  const [listOpen, setListOpen] = useState(false)
+  const [openPath, setOpenPath] = useState('')
   const selectKey = (artifact) => String(artifact.id || artifact.url || artifact.filename || '')
   const groups = [
     { key: 'outputs', title: 'workbench.outputFiles', files: artifacts.filter((file) => !file.userAttachment) },
     { key: 'sources', title: 'workbench.sourceFiles', files: artifacts.filter((file) => file.userAttachment) },
   ]
+  const openFolder = openPath ? openPath.replace(/[\\/][^\\/]*$/u, '') : workspacePath
   return (
-    <section data-testid="workbench-files" data-artifact-surface="workbench-files" className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
+    <section data-testid="workbench-files" data-artifact-surface="workbench-files" className="relative flex min-h-0 flex-1 flex-col">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink/10 px-2">
+        <button
+          type="button"
+          data-testid="workbench-files-toggle"
+          aria-pressed={listOpen}
+          aria-label={t(listOpen ? 'diffReview.hideFiles' : 'diffReview.showFiles')}
+          title={t(listOpen ? 'diffReview.hideFiles' : 'diffReview.showFiles')}
+          onClick={() => setListOpen((open) => !open)}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.06] hover:text-ink"
+        >
+          <Menu className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
+        </button>
+        {openPath
+          ? <FileIdentity preview={{ path: openPath }} t={t} />
+          : <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{t('workbench.workspaceFiles')}</span>}
+      </div>
+      {openPath ? (
+        <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="workbench-file-content">
+          <CurrentFileChange className="text-xs" file={{ path: openPath }} t={t} wrap />
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
       {artifacts.length === 0 ? (
         <div className="flex h-44 items-center justify-center text-ink-fade"><Files className="h-7 w-7 opacity-30" aria-hidden="true" /></div>
       ) : groups.filter((group) => group.files.length > 0).map((group) => (
@@ -77,6 +115,16 @@ export default function WorkbenchFiles({ artifacts, onOpenArtifact, t }) {
           ))}
         </section>
       ))}
+        </div>
+      )}
+      {listOpen && (
+        <FileListOverlay
+          onClose={() => setListOpen(false)}
+          onPick={(path) => { setOpenPath(path); setListOpen(false) }}
+          rootPath={openFolder}
+          t={t}
+        />
+      )}
     </section>
   )
 }

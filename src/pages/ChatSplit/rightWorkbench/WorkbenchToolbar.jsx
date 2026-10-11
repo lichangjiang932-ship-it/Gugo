@@ -77,6 +77,7 @@ function previewEvent(name) {
  */
 export default function WorkbenchToolbar({
   activeTab,
+  closeLabelKey = 'workbench.close',
   contributedTabs = [],
   inAppPreview = false,
   onClose,
@@ -252,8 +253,12 @@ export default function WorkbenchToolbar({
           ? <Minimize2 className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
           : <Maximize2 className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />}
       </button>
+      {/* The mark says what the press closes, and over a file preview that is the
+          preview — not the tool panel behind it. Saying "close the workbench"
+          there was true of the wiring and wrong for the reader, who saw a page
+          stay on screen after pressing it. */}
       <button type="button" data-testid="workbench-close" onClick={() => onClose?.()}
-        aria-label={t('workbench.close')} title={t('workbench.close')} className={BUTTON}>
+        aria-label={t(closeLabelKey)} title={t(closeLabelKey)} className={BUTTON}>
         <X className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
       </button>
     </nav>

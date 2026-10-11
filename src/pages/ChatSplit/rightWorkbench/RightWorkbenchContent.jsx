@@ -77,7 +77,7 @@ export default function RightWorkbenchContent(props) {
           t={t}
           workspacePath={props.workspacePath || ''}
         />
-      )}      {activeTab === 'files' && <WorkbenchFiles artifacts={artifacts} onOpenArtifact={onOpenArtifact} t={t} />}
+      )}      {activeTab === 'files' && <WorkbenchFiles artifacts={artifacts} onOpenArtifact={onOpenArtifact} t={t} workspacePath={workspacePath} />}
       {activeTab === 'browser' && (
         <section className="flex min-h-0 flex-1 flex-col">
           <PreviewServerBar active t={t} workspacePath={workspacePath} />

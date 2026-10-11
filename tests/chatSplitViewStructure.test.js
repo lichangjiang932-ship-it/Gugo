@@ -54,9 +54,21 @@ test('chat split view delegates the right region without changing its API', () =
   // three at once.
   assert.doesNotMatch(rightPanels, /if \(!workbenchOpen\) return null/)
   assert.match(rightPanels, /<RightPaneGrid/)
-  assert.match(rightPanels, /top=\{workbenchOpen \?/)
-  assert.match(rightPanels, /bottomLeft=\{planVisible \?/)
-  assert.match(rightPanels, /bottomRight=\{previewArtifact \?/)
+  // Inside the tool panel the tab is the two levels: the entry list is the front
+  // door, a tool is the room behind it. Choosing a tool closes the list and Back
+  // brings it back — the list is not suppressed for anything else the reader has
+  // open, which is what made Back look like it had closed the panel.
+  assert.match(rightPanels, /const showWorkbench = workbenchOpen/)
+  assert.match(rightPanels, /top=\{showWorkbench \?/)
+  // The panes below are a list rather than a fixed pair: the change review and
+  // an open file each put one in, and the row divides what is there instead of
+  // reserving two places and leaving one empty. The task list is not one of
+  // them — it floats over the conversation, in the view itself.
+  assert.match(rightPanels, /bottoms=\{\[/)
+  assert.match(rightPanels, /dockState\.panel === 'diff' \? \{/)
+  assert.match(rightPanels, /previewArtifact \? \{/)
   assert.match(rightPanels, /<RightPreviewPane/)
+  assert.match(view, /<PlanCard/)
+  assert.doesNotMatch(rightPanels, /<PlanCard/)
   assert.match(rightPanels, /<RightWorkbench/)
 })

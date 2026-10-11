@@ -52,6 +52,8 @@ test('the panel mounts and switching every comparison target keeps rendering', a
     )
   }
   // Session mode reads the conversation feed, which starts empty: the honest
-  // empty state, not a crash.
-  assert.ok(dom.window.document.querySelector('[data-testid="diff-tree-empty"]'), 'session mode shows its empty state')
+  // empty state, not a crash. It used to live in the file column; with that
+  // column gone it is the viewer's own, which is where a reader with nothing
+  // selected is looking anyway.
+  assert.ok(dom.window.document.querySelector('[data-testid="diff-empty"]'), 'session mode shows its empty state')
 })

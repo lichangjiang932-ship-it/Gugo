@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronLeft, ExternalLink, Maximize2, MoreVertical, PanelLeftClose, PanelLeftOpen, RotateCw, Search, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, ExternalLink, Maximize2, Menu, MoreVertical, RotateCw, X } from 'lucide-react'
 import { COMPARE_MODES, compareLabel, WIRED_COMPARE_MODES } from '../../../../lib/diffReviewModel.js'
 
 const BUTTON = 'flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 disabled:cursor-default disabled:opacity-40'
@@ -26,22 +26,20 @@ function ViewToggle({ active, children, onClick, testId }) {
 export default function DiffToolbar({
   compact = false,
   contentMode = 'diff',
+  fileListOpen = false,
   onClose,
   onContentModeChange,
   onExpandToggle,
   onRefresh,
   onReviewCode,
-  onSearchChange,
   onTargetChange,
-  onToggleFiles,
+  onToggleFileList,
   onViewChange,
-  searchTerm = '',
   target,
   t,
   view,
 }) {
   const [menu, setMenu] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
   const rootRef = useRef(null)
   const bridgeOpenWindow = globalThis.window?.gugoDesktop?.openDiffWindow
   const canOpenWindow = typeof bridgeOpenWindow === 'function'
@@ -61,16 +59,14 @@ export default function DiffToolbar({
 
   return (
     <header ref={rootRef} className="flex h-10 shrink-0 items-center gap-1 border-b border-ink/10 px-2" data-testid="diff-toolbar">
-      {/* The panel-edge mark, not a `···`: the control collapses the file column,
-          and three dots read as "more options" — a reader looking for the way to
-          put the column away never found it. The icon and the label both follow
-          the state, so they say what the press will do. */}
-      <button type="button" className={BUTTON} data-testid="diff-toggle-files" aria-pressed={view.showFiles}
-        aria-label={t(view.showFiles ? 'diffReview.hideFiles' : 'diffReview.showFiles')}
-        title={t(view.showFiles ? 'diffReview.hideFiles' : 'diffReview.showFiles')} onClick={() => onToggleFiles?.()}>
-        {view.showFiles
-          ? <PanelLeftClose className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
-          : <PanelLeftOpen className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />}
+      {/* Three bars, the mark every editor puts on "show me the files". An earlier
+          `···` read as "more options" and a panel-edge glyph read as "collapse
+          this panel"; neither is what the reader is looking for, which is the
+          list of everything in the folder. */}
+      <button type="button" className={BUTTON} data-testid="diff-toggle-files" aria-pressed={fileListOpen}
+        aria-label={t(fileListOpen ? 'diffReview.hideFiles' : 'diffReview.showFiles')}
+        title={t(fileListOpen ? 'diffReview.hideFiles' : 'diffReview.showFiles')} onClick={() => onToggleFileList?.()}>
+        <Menu className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
       </button>
 
       {/* What the right pane is showing. Beside the list toggle rather than in
@@ -133,12 +129,6 @@ export default function DiffToolbar({
 
       <span className="min-w-0 flex-1" />
 
-      <button type="button" className={BUTTON} data-testid="diff-search-toggle" aria-expanded={searchOpen}
-        aria-label={t('diffReview.searchChangedFiles')} title={t('diffReview.searchChangedFiles')}
-        onClick={() => { setSearchOpen((open) => !open); if (searchOpen) onSearchChange?.('') }}>
-        <Search className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
-      </button>
-
       <details className="relative" open={menu === 'more'}>
         <summary
           data-testid="diff-more"
@@ -148,9 +138,6 @@ export default function DiffToolbar({
           <MoreVertical className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
         </summary>
         <div role="menu" data-testid="diff-view-menu" className={MENU}>
-          <ViewToggle testId="diff-view-group" active={view.groupByFolder} onClick={() => flip('groupByFolder')}>{t('diffReview.groupByFolder')}</ViewToggle>
-          <ViewToggle testId="diff-view-separate" active={view.separateSpecial} onClick={() => flip('separateSpecial')}>{t('diffReview.separateSpecial')}</ViewToggle>
-          <span className="my-1 block h-px bg-ink/10" aria-hidden="true" />
           <button type="button" role="menuitem" data-testid="diff-collapse-all" className={MENU_ITEM} onClick={() => { setMenu(''); onViewChange?.({ ...view, collapseToken: (view.collapseToken || 0) + 1 }) }}>
             <span className="min-w-0 flex-1">{t('diffReview.collapseAll')}</span>
           </button>
@@ -193,18 +180,6 @@ export default function DiffToolbar({
       <button type="button" className={BUTTON} data-testid="diff-close" aria-label={t('diffReview.close')} title={t('diffReview.close')} onClick={() => onClose?.()}>
         <X className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
       </button>
-
-      {searchOpen && (
-        <input
-          autoFocus
-          value={searchTerm}
-          data-testid="diff-search-input"
-          aria-label={t('diffReview.searchChangedFiles')}
-          placeholder={t('diffReview.searchChangedFiles')}
-          onChange={(event) => onSearchChange?.(event.target.value)}
-          className="ml-1 h-7 w-40 rounded-control border border-ink/15 bg-paper px-2 text-xs text-ink outline-none focus:border-focus"
-        />
-      )}
     </header>
   )
 }

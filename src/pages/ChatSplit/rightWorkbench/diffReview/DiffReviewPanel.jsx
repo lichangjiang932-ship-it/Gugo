@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { buildFileDiff } from '../../../../lib/diffRows.js'
-import { buildFileTree, compareLabel, diffTextFromPayload, filesFromStatusPayload } from '../../../../lib/diffReviewModel.js'
+import { compareLabel, diffTextFromPayload, filesFromStatusPayload } from '../../../../lib/diffReviewModel.js'
 import { subscribeSessionChanges } from '../../../../lib/sessionChangesFeed.js'
 import { getAuthToken } from '../../../../lib/accountClient.js'
 import CurrentFileChange from '../../../../components/CurrentFileChange.jsx'
@@ -18,13 +18,10 @@ function authHeaders() {
 import DiffToolbar from './DiffToolbar.jsx'
 import DiffViewerPane from './DiffViewerPane.jsx'
 import FeedbackComposer from './FeedbackComposer.jsx'
-import FileTreePane from './FileTreePane.jsx'
+import FileListOverlay from './FileListOverlay.jsx'
 
 const DEFAULT_TARGET = Object.freeze({ mode: 'uncommitted', branch: 'main' })
 const DEFAULT_VIEW = Object.freeze({
-  showFiles: true,
-  groupByFolder: true,
-  separateSpecial: false,
   sideBySide: false,
   wordWrap: true,
   highlightWords: true,
@@ -49,9 +46,9 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
   const [files, setFiles] = useState([])
   const [status, setStatus] = useState('loading')
   const [refreshToken, setRefreshToken] = useState(0)
-  const [searchTerm, setSearchTerm] = useState('')
   const [selected, setSelected] = useState('')
   const [contentMode, setContentMode] = useState('diff')
+  const [fileListOpen, setFileListOpen] = useState(false)
   const [diffs, setDiffs] = useState({})
   const [comments, setComments] = useState([])
   const [sending, setSending] = useState(false)
@@ -137,8 +134,16 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
     return () => window.removeEventListener('chat-workbench:open-diff', onOpen)
   }, [])
 
-  const needle = searchTerm.trim().toLowerCase()
   const source = isSession ? feed.files : files
+  // Which folder the file list browses: the one holding the file in hand, so the
+  // list is about where the reader already is, and the workspace otherwise.
+  const listRoot = selected ? String(selected).replace(/[\\/][^\\/]*$/u, '') : (workspacePath || '')
+  // The review's list is the conversation's own change set and nothing else: the
+  // pane next door browses the whole folder, and a reader who opened *this* one
+  // is asking what this conversation touched.
+  const changedEntries = source
+    .map((file) => ({ name: String(file.path || file.displayPath || '').split(/[\\/]/u).pop() || '' }))
+    .filter((entry) => entry.name)
   // Land on a file rather than on an empty pane. The review is opened to read a
   // change, and a reader who has to guess that a row is clickable reads the blank
   // right-hand side as "there is nothing here" — which is what it looked like.
@@ -150,14 +155,6 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
     setPrevSource(source)
     if (!source.some((file) => file.path === selected)) setSelected(String(source[0]?.path || ''))
   }
-  const visible = useMemo(
-    () => (needle ? source.filter((file) => file.path.toLowerCase().includes(needle)) : source),
-    [source, needle],
-  )
-  const tree = useMemo(
-    () => buildFileTree(visible, { groupByFolder: view.groupByFolder, separateSpecial: view.separateSpecial }),
-    [visible, view.groupByFolder, view.separateSpecial],
-  )
   const activeFile = source.find((file) => file.path === selected) || null
   const diff = selected
     ? isSession
@@ -195,16 +192,15 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
       <DiffToolbar
         compact={!panelExpanded}
         contentMode={contentMode}
+        fileListOpen={fileListOpen}
         onClose={onClose}
         onContentModeChange={setContentMode}
         onExpandToggle={onExpandToggle}
         onRefresh={() => { setDiffs({}); setRefreshToken((token) => token + 1) }}
         onReviewCode={reviewCode}
-        onSearchChange={setSearchTerm}
         onTargetChange={(next) => { setTarget(next); setDiffs({}); setPendingRefresh(false) }}
-        onToggleFiles={() => setView((current) => ({ ...current, showFiles: !current.showFiles }))}
+        onToggleFileList={() => setFileListOpen((open) => !open)}
         onViewChange={setView}
-        searchTerm={searchTerm}
         t={t}
         target={target}
         view={view}
@@ -219,23 +215,20 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
           {t('diffReview.newChanges')}
         </button>
       )}
-      <div className="flex min-h-0 flex-1">
-        {view.showFiles && (
-          status === 'error'
-            ? <aside className="min-h-0 w-[46%] max-w-[320px] shrink-0 border-r border-ink/10 p-3" data-testid="diff-file-pane"><p role="alert" className="text-xs text-danger">{t('diffReview.failed')}</p></aside>
-            : status === 'loading'
-              ? <aside className="min-h-0 w-[46%] max-w-[320px] shrink-0 border-r border-ink/10 p-3" data-testid="diff-file-pane"><p className="text-xs text-ink-fade">{t('diffReview.loading')}</p></aside>
-              : tree.nodes.length === 0 && tree.special.length === 0
-                ? <aside className="min-h-0 w-[46%] max-w-[320px] shrink-0 border-r border-ink/10 p-3" data-testid="diff-file-pane"><p className="text-xs leading-5 text-ink-fade" data-testid="diff-tree-empty">{t('diffReview.noChanges')}</p></aside>
-                : <FileTreePane nodes={tree.nodes} onSelect={setSelected} selected={selected} special={tree.special} t={t} />
-        )}
+      {/* No resident file column: at 46% of the pane it was the largest thing on
+          screen and the least of what a reader came for. The list it held is the
+          overlay the ≡ opens, which names every file in the folder rather than
+          only the ones this conversation touched. */}
+      <div className="relative flex min-h-0 flex-1">
         <div className="flex min-h-0 flex-1 flex-col">
-          {contentMode === 'file' && activeFile ? (
+          {contentMode === 'file' && selected ? (
             // The file as it stands. A changed file is usually source or text the
             // reader can simply read, and only some of them have an edit recorded
-            // to diff against — without this, those files were a dead end.
+            // to diff against — without this, those files were a dead end. A file
+            // reached from the folder list need not be in the change set at all,
+            // so the path is enough to read it by.
             <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="diff-file-content">
-              <CurrentFileChange className="text-xs" counts={activeFile} file={activeFile} t={t} wrap={view.wordWrap} />
+              <CurrentFileChange className="text-xs" counts={activeFile} file={activeFile || { path: selected }} t={t} wrap={view.wordWrap} />
             </div>
           ) : (
             <DiffViewerPane
@@ -253,6 +246,16 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
           )}
           <FeedbackComposer comments={comments} onReviewCode={reviewCode} onSend={sendFeedback} sending={sending} t={t} />
         </div>
+        {fileListOpen && (
+          <FileListOverlay
+            changed={source}
+            entries={changedEntries}
+            onClose={() => setFileListOpen(false)}
+            onPick={(path) => { setSelected(path); setContentMode('file'); setFileListOpen(false) }}
+            rootPath={listRoot}
+            t={t}
+          />
+        )}
       </div>
     </section>
   )
