@@ -70,11 +70,13 @@ export default function RightPaneGrid({
 
   if (!top && !openBottom) return null
 
-  // The line is drawn, not hinted at: a separator that only appears under the
-  // pointer leaves every pane looking like it runs into the next one, and a
-  // reader has no way to see that they are separate at all — let alone that the
-  // edge between them can be pulled.
-  const divider = 'touch-none bg-transparent outline-none after:absolute after:bg-ink/12 hover:after:bg-accent/50 focus-visible:after:bg-focus'
+  // The panes are cards: a border, a corner, and a gap between them. The line
+  // between two panes used to be the only thing separating them, which drew them
+  // as one surface ruled into strips; a card each says they are separate things
+  // that happen to be stacked. The drag strip stays — it is the gap now, and the
+  // hairline only shows under the pointer, to say the gap can be pulled.
+  const divider = 'touch-none bg-transparent outline-none after:absolute after:bg-transparent hover:after:bg-accent/50 focus-visible:after:bg-focus'
+  const card = 'overflow-hidden rounded-card border border-ink/10 bg-paper'
   const rowDivider = (
     <button
       type="button"
@@ -91,7 +93,7 @@ export default function RightPaneGrid({
   return (
     <div
       data-testid="right-pane-grid"
-      className="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden"
+      className="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden p-1.5"
       style={{ width: `${region.width}px` }}
     >
       {/* Inside the region, not straddling its edge: the region clips its own
@@ -115,7 +117,7 @@ export default function RightPaneGrid({
         <>
           <div
             data-testid="right-pane-top"
-            className="flex min-h-0 flex-col overflow-hidden"
+            className={`flex min-h-0 flex-col ${card}`}
             style={openBottom ? { flex: `0 0 ${region.topRatio * 100}%` } : { flex: '1 1 auto' }}
           >
             {top}
@@ -145,7 +147,7 @@ export default function RightPaneGrid({
               ))}
               <div
                 data-testid={`right-pane-bottom-${pane.key}`}
-                className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+                className={`flex min-h-0 min-w-0 flex-col ${card}`}
                 style={panes.length === 1 ? { flex: '1 1 auto' } : { flex: `${weights[index] ?? 1} 1 0%` }}
               >
                 {pane.node}
