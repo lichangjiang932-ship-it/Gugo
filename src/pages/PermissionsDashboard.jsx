@@ -18,8 +18,7 @@ export default function PermissionsDashboard() {
   const { state: appState, dispatch } = useAppContext()
   const controller = usePermissionsDashboard(t)
   return (
-    <AppLayout className="flex h-screen overflow-hidden bg-paper">
-      <div className="flex-1 overflow-y-auto p-8">
+    <AppLayout className="flex h-screen overflow-hidden bg-paper" mainAs="main" mainClassName="flex-1 overflow-y-auto p-8">
         <div className="mb-6 flex items-end justify-between">
           <div><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">PERMISSIONS</span><h1 className="mt-1.5 font-semibold text-[28px] text-ink">{t('permissionsDashboard.title')}</h1><p className="mt-1 font-semibold text-base text-ink-soft">{t('permissionsDashboard.subtitle')}</p></div>
           <button onClick={controller.runChecks} disabled={controller.checking} className="flex h-9 items-center gap-1.5 rounded-md border border-dashed border-ink-fade/60 px-4 font-semibold text-sm text-ink-soft transition-colors hover:border-ink-fade disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${controller.checking ? 'animate-spin' : ''}`} />{controller.checking ? t('permissionsDashboard.checking') : t('permissionsDashboard.refresh')}</button>
@@ -31,7 +30,6 @@ export default function PermissionsDashboard() {
         <WorkspaceTrustSection controller={controller} t={t} />
         <ToolGateSection controller={controller} t={t} />
         <BrowserPermissionSection controller={controller} t={t} />
-      </div>
     </AppLayout>
   )
 }

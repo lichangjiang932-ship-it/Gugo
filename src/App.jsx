@@ -75,7 +75,12 @@ function App() {
       <CommandPalette />
       <SessionSearchModal />
       <Suspense fallback={<Fallback />}>
-        <main>
+        {/* Not a landmark: each page owns its own `<main>`, and a page's main
+            sits beside the navigation rail rather than around it. Wrapping the
+            routes here put a second `<main>` outside the page's — two nested
+            landmarks, of which a reader only ever sees one — and put the rail
+            inside it as well. */}
+        <div>
           <PreviewBanner />
           <RouteErrorBoundary fallbackWrapper={PageErrorFallbackShell}>
           <Routes>
@@ -106,7 +111,7 @@ function App() {
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
           </RouteErrorBoundary>
-        </main>
+        </div>
       </Suspense>
     </ErrorBoundary>
     </ActiveAgentProvider>

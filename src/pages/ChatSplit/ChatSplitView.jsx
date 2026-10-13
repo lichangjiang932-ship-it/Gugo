@@ -141,6 +141,8 @@ export default function ChatSplitView({
           onManageModels={onManageModels}
           onRetryModelFailure={onRetryModelFailure}
           onPromptSelect={setInput}
+          modelReadinessKind={modelReadiness?.kind || ''}
+          onConfigureModel={onOpenModelPicker}
           onOpenArtifact={onOpenArtifact}
           onOpenInPreview={onOpenInPreview}
           onExpandCompaction={onExpandCompaction}

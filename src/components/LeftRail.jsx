@@ -1,12 +1,13 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { Search } from 'lucide-react'
 import NewChatGlyph from './leftRail/NewChatGlyph.jsx'
 import { useLocation, useNavigate } from '../lib/router.jsx'
 import { useAppContext } from '../store/AppContext'
-import { archiveSessionRemote, forkSessionRemote, pinSessionRemote, unarchiveSessionRemote, unpinSessionRemote } from '../lib/sessionClient.js'
+import { archiveSessionRemote, forkSessionRemote, pinSessionRemote, renameSessionRemote, unarchiveSessionRemote, unpinSessionRemote } from '../lib/sessionClient.js'
 import { getAuthToken } from '../lib/accountClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
+import Modal from './Modal.jsx'
 import BrandMark from './BrandMark.jsx'
 import AccountArea from './leftRail/AccountArea.jsx'
 import LoginModal from './leftRail/LoginModal.jsx'
@@ -26,6 +27,10 @@ export default function LeftRail() {
   const { state, dispatch } = useAppContext()
   const { t, lang } = useT()
   const toast = useToast()
+  // The conversation awaiting a delete confirmation, or null. Held here rather
+  // than inside SessionList because the dialog is not the list's to own: the
+  // list closes its menu and hands the row over.
+  const [pendingDelete, setPendingDelete] = useState(null)
   const controller = useLeftRailController({ authMode: state.authMode, dispatch, location, navigate, t, toast })
   const { closeSessionMenu, setAccountMenuOpen } = controller
   const closeRailMenus = useCallback(() => {
@@ -66,7 +71,37 @@ export default function LeftRail() {
   const handleOpenSession = (sessionId) => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'SWITCH_SESSION', payload: sessionId }); navigate('/chat') }
   const handleDelete = (session) => {
     controller.setOpenMenuId(null)
-    if (confirm(t('nav.confirmDeleteSession', { title: session.title }))) dispatch({ type: 'DELETE_SESSION', payload: session.id })
+    // Not `confirm()`: it cannot be styled, it cannot be reached from the menu
+    // that asked for it, and the desktop shell can block it outright — a blocked
+    // dialog reads as a button that does nothing.
+    setPendingDelete(session)
+  }
+  const confirmDelete = () => {
+    const session = pendingDelete
+    setPendingDelete(null)
+    if (!session) return
+    dispatch({ type: 'DELETE_SESSION', payload: session.id })
+    toast.success(t('nav.deletedSession', { title: session.title }))
+  }
+  const handleRename = async (session, title) => {
+    // The optimistic rename carries `onlyIfMatches`, which is what stops the
+    // async AI title backfill from landing on top of a name the reader chose.
+    dispatch({
+      type: 'UPDATE_SESSION_TITLE_FOR',
+      payload: { sessionId: session.id, title, onlyIfMatches: session.title },
+    })
+    if (!getAuthToken()) return
+    try {
+      const result = await renameSessionRemote(session.id, title)
+      if (result?.session) dispatch({ type: 'APPLY_SERVER_SESSION_METADATA', payload: { sessionId: session.id, session: result.session } })
+    } catch (error) {
+      if (/session not found/i.test(error.message || '')) return
+      dispatch({
+        type: 'UPDATE_SESSION_TITLE_FOR',
+        payload: { sessionId: session.id, title: session.title, onlyIfMatches: title },
+      })
+      toast.error({ title: t('nav.renameFailed'), body: error.message })
+    }
   }
   const handleFork = async (session) => {
     controller.setOpenMenuId(null)
@@ -92,6 +127,9 @@ export default function LeftRail() {
     try {
       const result = archived ? await unarchiveSessionRemote(session.id) : await archiveSessionRemote(session.id)
       if (result?.session) dispatch({ type: 'APPLY_SERVER_SESSION_METADATA', payload: { sessionId: session.id, session: result.session } })
+      // The row leaves the list either way; saying where it went is the only
+      // thing that distinguishes a deliberate archive from a mistake.
+      toast.success(archived ? t('nav.unarchivedSession') : t('nav.archivedSession'))
     } catch (error) {
       if (/session not found/i.test(error.message || '')) return
       dispatch({ type: archived ? 'ARCHIVE_SESSION' : 'UNARCHIVE_SESSION', payload: session.id })
@@ -157,10 +195,29 @@ export default function LeftRail() {
         </button>
       </div>
 
-      <div id="left-rail-history" hidden={collapsed} className="left-rail-history mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onNewRecent={handleNewChat} onSearch={handleSearch} showSearchAction={false} locale={lang} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>
+      <div id="left-rail-history" hidden={collapsed} className="left-rail-history mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onNewRecent={handleNewChat} onSearch={handleSearch} showSearchAction={false} locale={lang} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} onRename={handleRename} t={t} /></div>
       {collapsed && <div className="min-h-0 flex-1" />}
-      <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
+      <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} localWorkspace={state.authMode === 'local'} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>
     {state.authMode !== 'local' && <LoginModal login={controller.login} onChange={controller.updateLogin} onClose={() => controller.updateLogin({ open: false, target: null })} onSendCode={controller.sendCode} onVerify={controller.verify} t={t} />}
+    {pendingDelete && <Modal
+      onClose={() => setPendingDelete(null)}
+      closeOnBackdrop={false}
+      ariaLabelledby="session-delete-title"
+      className="flex w-[400px] max-w-[90vw] flex-col gap-3 p-5"
+    >
+      <div id="session-delete-title" className="text-base font-semibold text-ink">
+        {t('nav.confirmDeleteSession', { title: pendingDelete.title })}
+      </div>
+      <p className="text-xs text-ink-soft">{t('nav.confirmDeleteSessionBody')}</p>
+      <div className="flex justify-end gap-2">
+        <button type="button" data-testid="session-delete-cancel" onClick={() => setPendingDelete(null)} className="h-9 rounded-control border border-ink/15 px-3.5 text-xs text-ink-soft hover:bg-paper-2">
+          {t('common.cancel')}
+        </button>
+        <button type="button" data-testid="session-delete-confirm" onClick={confirmDelete} className="h-9 rounded-control border border-danger/30 bg-danger/10 px-3.5 text-xs text-danger hover:bg-danger/15">
+          {t('nav.deleteSession')}
+        </button>
+      </div>
+    </Modal>}
   </>
 }

@@ -122,6 +122,50 @@ test('the window presets re-read the report and all-time drops the since filter'
   }
 })
 
+test('a slow earlier response cannot overwrite the range the reader is looking at', async () => {
+  const originalFetch = globalThis.fetch
+  const dom = setupDom()
+  try {
+    // Hold every request open so the two can be answered out of order.
+    const pending = []
+    globalThis.fetch = (url) => new Promise((resolve) => {
+      pending.push({ url: String(url), resolve })
+    })
+    const rootElement = document.getElementById('root')
+    const root = createRoot(rootElement)
+    await act(async () => { root.render(<SettingsUsagePanel t={t} />) })
+    // The mount read (30 days) is still in flight when the reader switches.
+    await act(async () => {
+      rootElement.querySelector('[data-testid="settings-usage-window-7"]').click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    assert.equal(pending.length, 2)
+    assert.equal(sinceOf({ url: pending[0].url }), localDateDaysAgo(30))
+    assert.equal(sinceOf({ url: pending[1].url }), localDateDaysAgo(7))
+
+    const rowFor = (key) => makeReport({
+      byModel: [{ key, modelPhases: 2, totalTokens: 1_200, usage: USAGE, cacheHitRatePercent: 60 }],
+    })
+    // The range the reader asked for answers first...
+    await act(async () => {
+      pending[1].resolve(jsonResponse({ ok: true, report: rowFor('range-seven') }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    // ...and the abandoned one lands afterwards. It must be discarded.
+    await act(async () => {
+      pending[0].resolve(jsonResponse({ ok: true, report: rowFor('range-thirty') }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    assert.match(rootElement.textContent, /range-seven/)
+    assert.doesNotMatch(rootElement.textContent, /range-thirty/)
+    await act(async () => root.unmount())
+  } finally {
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('a failed read shows the error copy instead of stale numbers', async () => {
   const originalFetch = globalThis.fetch
   const dom = setupDom()
@@ -195,6 +239,31 @@ test('the panel names which way the per-model breakdown disagrees with the turn 
     const second = await renderPanel({ ok: true, report: larger })
     assert.match(second.rootElement.querySelector('[data-testid="settings-usage-note"]').textContent, /usage.breakdownLarger/)
     await act(async () => second.root.unmount())
+  } finally {
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('the cache waste the server already computed is shown, and only when there is some', async () => {
+  const originalFetch = globalThis.fetch
+  const dom = setupDom()
+  try {
+    const wasteful = await renderPanel({ ok: true, report: makeReport({
+      cacheWaste: { missedTokens: 12_345, missedCost: 0, missCount: 3 },
+    }) })
+    const line = wasteful.rootElement.querySelector('[data-testid="settings-usage-cache-waste"]')
+    assert.ok(line, 'waste that was computed is worth showing')
+    assert.match(line.textContent, /12,345/)
+    assert.match(line.textContent, /count=3/)
+    await act(async () => wasteful.root.unmount())
+
+    const clean = await renderPanel({ ok: true, report: makeReport({
+      cacheWaste: { missedTokens: 0, missedCost: 0, missCount: 0 },
+    }) })
+    assert.equal(clean.rootElement.querySelector('[data-testid="settings-usage-cache-waste"]'), null,
+      'nothing to say when nothing was re-billed')
+    await act(async () => clean.root.unmount())
   } finally {
     dom.window.close()
     globalThis.fetch = originalFetch

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, Folder, FolderOpen, GitFork, MoreHorizontal, Pin, PinOff, Search, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Folder, FolderOpen, GitFork, MoreHorizontal, PenLine, Pin, PinOff, Search, X } from 'lucide-react'
 import NewChatGlyph from './NewChatGlyph.jsx'
 import { groupSessionsByProject, pinnedTimestampOf, sessionTimePresentation } from './sessionListUtils.js'
 
@@ -64,6 +64,7 @@ export default function SessionList({
   onPinToggle,
   onArchiveToggle,
   onDelete,
+  onRename,
   storedProjects = [],
   showSearchAction = true,
   locale = 'zh',
@@ -71,6 +72,36 @@ export default function SessionList({
 }) {
   const listRef = useRef(null)
   const menuRef = useRef(null)
+  // Which row is being renamed, and what has been typed into it. Editing in
+  // place rather than in a dialog: the title is one line in a list the reader is
+  // already looking at, and a modal for it would hide the list they are naming
+  // one item of.
+  const [renamingId, setRenamingId] = useState(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  // Which row is editing, tracked synchronously. Enter commits and then removes
+  // the input, which fires blur; a state-only guard is still the old value in
+  // that handler, so the same rename would be sent twice.
+  const renamingRef = useRef(null)
+  const beginRename = (session, currentTitle) => {
+    renamingRef.current = session.id
+    setRenamingId(session.id)
+    setRenameDraft(currentTitle)
+  }
+  const commitRename = (session, currentTitle) => {
+    if (renamingRef.current !== session.id) return
+    renamingRef.current = null
+    setRenamingId(null)
+    const next = renameDraft.replace(/\s+/gu, ' ').trim()
+    // An unchanged or blank name is a cancel, not a rename: the title is the
+    // only way to tell one conversation from another, and blanking it would
+    // leave a row nobody can identify.
+    if (!next || next === currentTitle) return
+    onRename?.(session, next)
+  }
+  const cancelRename = () => {
+    renamingRef.current = null
+    setRenamingId(null)
+  }
   const menuOriginRef = useRef(null)
   const menuOriginIdRef = useRef(null)
   const menuTriggersRef = useRef(new Map())
@@ -166,6 +197,7 @@ export default function SessionList({
     const time = sessionTimePresentation(session, { locale })
     const contextPosition = contextMenu?.sessionId === session.id ? contextMenu : null
     const menuId = `session-actions-${session.id}`
+    const isRenaming = renamingId === session.id
     return <div
       key={session.id ?? index}
       className="left-rail-session-row left-rail-action-scope"
@@ -182,6 +214,29 @@ export default function SessionList({
         onMenuOpen(session.id)
       }}
     >
+      {isRenaming ? <div className="left-rail-session-open">
+        <input
+          data-session-rename-input
+          autoFocus
+          value={renameDraft}
+          maxLength={200}
+          aria-label={t('nav.renameSessionFor', { title })}
+          onChange={(event) => setRenameDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              commitRename(session, title)
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              cancelRename()
+            }
+          }}
+          // Enter commits and then unmounts the input, which fires blur: the
+          // second of the two finds the row already closed and does nothing.
+          onBlur={() => commitRename(session, title)}
+          className="min-w-0 flex-1 rounded-control border border-focus bg-paper px-1.5 py-0.5 text-ui leading-5 text-ink outline-none"
+        />
+      </div> : (
       <button
         type="button"
         data-session-open
@@ -204,7 +259,7 @@ export default function SessionList({
         {isPinned && <span title={t('nav.pinnedSession')} className="left-rail-session-pin" aria-hidden="true"><Pin data-session-pinned className="h-3 w-3" strokeWidth={1.65} /></span>}
         <span data-session-title className={`block min-w-0 flex-1 truncate text-ui leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{title}</span>
         {time && <time className="left-rail-session-time" dateTime={time.dateTime} aria-hidden="true">{time.compact}</time>}
-      </button>
+      </button>)}
       <button
         type="button"
         ref={(element) => {
@@ -246,6 +301,9 @@ export default function SessionList({
         </button>
         <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onFork?.(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           <GitFork className="h-3.5 w-3.5" />{t('nav.forkSession')}
+        </button>
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); beginRename(session, title) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+          <PenLine className="h-3.5 w-3.5" aria-hidden="true" />{t('nav.renameSession')}
         </button>
         <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onDelete(session) }} className="left-rail-menu-danger flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs focus:outline-none">
           <X className="h-3.5 w-3.5" />{t('nav.deleteSession')}

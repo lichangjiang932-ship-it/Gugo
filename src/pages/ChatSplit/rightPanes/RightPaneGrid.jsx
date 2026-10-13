@@ -1,4 +1,5 @@
-import { Fragment, useCallback, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
+import { setRegionOpen } from '../../../lib/chatLayoutBudget.js'
 import { GUTTER_PX, MIN_PANE_WIDTH, useRightRegionLayout } from './useRightRegionLayout.js'
 
 /**
@@ -30,6 +31,14 @@ export default function RightPaneGrid({
   const region = useRightRegionLayout()
   const panes = bottoms.filter(Boolean)
   const openBottom = panes.length > 0
+  // The rail keeps room for the region only while the region is actually drawn.
+  // The rail is app-level and this is the chat page's, so the one fact the rail
+  // needs travels through the shared budget rather than up through props.
+  const regionShown = Boolean(top) || openBottom
+  useEffect(() => {
+    setRegionOpen(regionShown)
+    return () => setRegionOpen(false)
+  }, [regionShown])
   const needed = panes.length * MIN_PANE_WIDTH + (panes.length - 1) * GUTTER_PX
   const stackBottom = panes.length > 1 && region.width < needed
 

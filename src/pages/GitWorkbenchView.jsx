@@ -14,8 +14,7 @@ import WorkbenchGit from './ChatSplit/rightWorkbench/WorkbenchGit.jsx'
 export default function GitWorkbenchView() {
   const { t } = useT()
   return (
-    <AppLayout>
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-3 px-4 py-4">
+    <AppLayout mainAs="main" mainClassName="mx-auto flex h-full w-full max-w-3xl flex-col gap-3 px-4 py-4">
         <header className="flex items-center gap-2" data-testid="git-workbench-header">
           <GitBranch className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
           <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{t('workbench.gitPageTitle')}</h1>
@@ -24,7 +23,6 @@ export default function GitWorkbenchView() {
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-card border border-ink/10 bg-paper">
           <WorkbenchGit t={t} />
         </div>
-      </div>
     </AppLayout>
   )
 }

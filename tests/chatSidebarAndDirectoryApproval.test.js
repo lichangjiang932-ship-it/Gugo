@@ -135,13 +135,24 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   for (const [, classes] of notices) assert.match(classes, /w-full min-w-0 max-w-\[780px\]/)
   assert.doesNotMatch(view, /calc\(100vw-320px\)/)
   assert.doesNotMatch(noticesSource, /calc\(100vw-320px\)/)
-  // The requirement is unchanged — the region must shrink inside the viewport,
-  // never push it — but the width is no longer each panel's own business: it
-  // moved up to the region, which is the only thing that can see how many panes
-  // are asking at once. The clamp lives there now.
+  // The requirement is unchanged — the region must shrink inside the space the
+  // conversation is not using, never push it — but neither side decides that
+  // alone any more, and neither measures the whole window: both spend from one
+  // budget, measured from the element the chat column actually lives in, so the
+  // rail and the region cannot reserve the same pixels twice.
+  const budget = read('../src/lib/chatLayoutBudget.js')
+  assert.match(budget, /export const MIN_CHAT_WIDTH = 400/)
+  assert.match(budget, /Number\(chatAreaWidth\) - MIN_CHAT_WIDTH/)
+  assert.match(budget, /CHAT_AREA_SELECTOR = '\[data-chat-main-area\]'/)
+  assert.doesNotMatch(budget, /regionMaxWidth\(viewport/)
   const region = read('../src/pages/ChatSplit/rightPanes/useRightRegionLayout.js')
-  assert.match(region, /MIN_CHAT_WIDTH = 400/)
-  assert.match(region, /return Math\.min\(regionMaxWidth\(viewport\), Math\.max\(MIN_REGION_WIDTH, wanted\)\)/)
+  assert.match(region, /const chatAreaWidth = useChatAreaWidth\(\)/)
+  assert.match(region, /const width = clampRegionWidth\(preferredWidth, chatAreaWidth\)/)
+  // The rail reserves the region's floor too, but only while the region is open:
+  // closed, that room belongs to the conversation.
+  const railWidth = read('../src/components/leftRail/useLeftRailWidth.js')
+  assert.match(railWidth, /MIN_CHAT_WIDTH, MIN_REGION_WIDTH, useRegionOpen/)
+  assert.match(railWidth, /regionOpen \? MIN_REGION_WIDTH : 0/)
   // And the region will not draw two panes side by side below the width where
   // either of them stops being readable; it stacks them instead.
   assert.match(region, /MIN_PANE_WIDTH = 220/)
@@ -312,4 +323,25 @@ test('the tool panel and the plan card are controlled by two independent switche
   assert.match(splitView, /planVisible && \(/)
   assert.doesNotMatch(read('../src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx'), /<PlanCard/, 'the card is not a pane of the region')
   assert.doesNotMatch(read('../src/pages/ChatSplit/dock/dockStore.js'), /'plan'/, 'the dock no longer holds the plan')
+})
+
+test('the conversation menu renames in place, asks before deleting, and says what it did', () => {
+  const rail = read('../src/components/LeftRail.jsx')
+  const list = read('../src/components/leftRail/SessionList.jsx')
+  // Deleting used a native confirm(): it cannot be styled, it cannot be reached
+  // from the menu that asked for it, and the desktop shell can block it — which
+  // reads as a button that does nothing.
+  assert.doesNotMatch(rail, /if \(confirm\(t\('nav\.confirmDeleteSession'/)
+  assert.match(rail, /data-testid="session-delete-confirm"/)
+  assert.match(rail, /data-testid="session-delete-cancel"/)
+  // A row that leaves the list says where it went, and a rename reaches the
+  // server rather than living only in this browser.
+  assert.match(rail, /toast\.success\(t\('nav\.deletedSession'/)
+  assert.match(rail, /archived \? t\('nav\.unarchivedSession'\) : t\('nav\.archivedSession'\)/)
+  assert.match(rail, /renameSessionRemote\(session\.id, title\)/)
+  // The rename carries `onlyIfMatches`, so the async AI title backfill cannot
+  // land on top of a name the reader chose.
+  assert.match(rail, /onlyIfMatches: session\.title/)
+  assert.match(list, /data-session-rename-input/)
+  assert.match(list, /t\('nav\.renameSession'\)/)
 })

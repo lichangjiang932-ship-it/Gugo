@@ -28,6 +28,10 @@ export const SESSION_ADMIN_PORT_METHODS = Object.freeze([
 export const SESSION_ADMIN_PORT_OPTIONAL_METHODS = Object.freeze([
   'importLegacySessions',
   'setSessionWorkspace',
+  // Optional rather than required so the contract version does not have to move:
+  // a host that never renames simply does not provide it, and the route answers
+  // 501 rather than the port failing to prepare.
+  'renameSession',
 ])
 
 export const LEGACY_SESSION_IMPORT_LIMITS = Object.freeze({
@@ -380,6 +384,17 @@ function sessionWorkspaceInput(method, input) {
 function normalizeInput(method, input) {
   if (method === 'importLegacySessions') return legacyImportInput(method, input)
   if (method === 'setSessionWorkspace') return sessionWorkspaceInput(method, input)
+  if (method === 'renameSession') {
+    const source = inputRecord(method, input)
+    const raw = ownDataValue(source, 'title', (message) => invalidInput(method, message))
+    if (typeof raw !== 'string') throw invalidInput(method, 'title must be a string')
+    // Collapse whitespace: a title is one line wherever it is drawn, so a
+    // pasted newline would only ever be a stray gap in the rail.
+    const title = raw.replace(/\s+/gu, ' ').trim()
+    if (!title) throw invalidInput(method, 'title must not be blank')
+    if (title.length > 200) throw invalidInput(method, 'title must be at most 200 characters')
+    return { ...sessionInput(method, source), title }
+  }
   if (method === 'searchMessages') {
     const source = inputRecord(method, input)
     return {

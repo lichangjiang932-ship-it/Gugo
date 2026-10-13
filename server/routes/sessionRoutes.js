@@ -103,15 +103,41 @@ function sendSessionError(res, error) {
 const SESSION_METADATA_ACTIONS = Object.freeze({
   archive: 'archiveSession',
   pin: 'pinSession',
+  rename: 'renameSession',
   unarchive: 'unarchiveSession',
   unpin: 'unpinSession',
 })
 
-async function handleSessionMetadataAction(res, { admin, parts, userId }) {
-  const method = SESSION_METADATA_ACTIONS[parts[3]]
+/** The one action whose input is not the URL alone. */
+const SESSION_ACTIONS_WITH_BODY = new Set(['rename'])
+
+async function handleSessionMetadataAction(req, res, { admin, parts, userId }) {
+  const action = parts[3]
+  const method = SESSION_METADATA_ACTIONS[action]
+  // `renameSession` is an optional port method, so a backend that does not
+  // implement it must say so rather than have the port throw on the call.
+  if (typeof admin[method] !== 'function') {
+    return sendJson(res, 501, {
+      error: {
+        code: 'SESSION_ACTION_UNSUPPORTED',
+        message: `this persistence backend does not support ${action}`,
+      },
+    })
+  }
+  let title
+  if (SESSION_ACTIONS_WITH_BODY.has(action)) {
+    const body = await readJson(req).catch(() => ({}))
+    title = typeof body?.title === 'string' ? body.title.trim() : ''
+    if (!title) {
+      return sendJson(res, 400, {
+        error: { code: 'SESSION_TITLE_REQUIRED', message: 'title is required' },
+      })
+    }
+  }
   const session = await admin[method]({
     userId,
     sessionId: decodeURIComponent(parts[2]),
+    ...(title === undefined ? {} : { title }),
   })
   return session
     ? sendJson(res, 200, { ok: true, session })
@@ -307,7 +333,7 @@ export async function handleSessionRequest(
     && parts[2]
     && SESSION_METADATA_ACTIONS[parts[3]]
     && parts.length === 4) {
-    return await handleSessionMetadataAction(res, { admin, parts, userId })
+    return await handleSessionMetadataAction(req, res, { admin, parts, userId })
   }
 
   return sendJson(res, 404, { error: 'not found' })

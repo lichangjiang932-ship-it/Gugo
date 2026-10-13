@@ -1,4 +1,4 @@
-import { BarChart3, Bug, FileText, FolderOpen, Globe2, GitPullRequest, Map, Presentation, Sparkles } from 'lucide-react'
+import { AlertTriangle, BarChart3, Bug, FileText, FolderOpen, Globe2, GitPullRequest, Map, Presentation, Sparkles } from 'lucide-react'
 import { useT } from '../../../i18n/I18nProvider.jsx'
 import { projectHue } from '../../../lib/projectGlyph.js'
 
@@ -40,13 +40,33 @@ function projectName(path) {
   return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''
 }
 
+/**
+ * The readiness kinds the reader has to do something about. `loading` is not one
+ * of them — it resolves on its own — and `provider-chat-only` can still send.
+ */
+const BLOCKING_READINESS_KINDS = new Set([
+  'unconfigured',
+  'empty',
+  'selection-required',
+  'provider-unverified',
+  'provider-unavailable',
+  'provider-changed',
+  'error',
+])
+
 export default function NewConversationWelcome({
   onPromptSelect,
   workspacePath = '',
+  modelReadinessKind = '',
+  onConfigureModel,
 }) {
   const { t } = useT()
   const project = projectName(workspacePath)
   const starters = project ? CODE_STARTERS : GENERAL_STARTERS
+  // The page used to look ready to work while the only thing stopping it was a
+  // small line under the composer. The blocker belongs where the reader is
+  // looking when they arrive.
+  const modelBlocked = BLOCKING_READINESS_KINDS.has(String(modelReadinessKind))
 
   return (
     <section
@@ -68,6 +88,25 @@ export default function NewConversationWelcome({
       <p className="mt-2.5 max-w-lg text-balance text-center text-ui leading-6 text-ink-soft">
         {t(project ? 'welcome.hint' : 'welcome.hintNoProject')}
       </p>
+
+      {modelBlocked && (
+        <div
+          data-testid="welcome-model-blocker"
+          role="status"
+          className="mt-5 flex w-full max-w-[640px] items-center gap-3 rounded-card border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-left"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" strokeWidth={1.8} aria-hidden="true" />
+          <p className="min-w-0 flex-1 text-xs leading-5 text-ink-soft">{t('welcome.modelNotReady')}</p>
+          <button
+            type="button"
+            data-testid="welcome-configure-model"
+            onClick={() => onConfigureModel?.()}
+            className="h-8 shrink-0 rounded-control border border-ink/15 bg-paper px-3 text-xs text-ink transition-colors hover:bg-paper-2"
+          >
+            {t('welcome.modelNotReadyAction')}
+          </button>
+        </div>
+      )}
 
       <div className="mt-7 grid w-full max-w-[640px] grid-cols-1 gap-2.5 sm:grid-cols-2" data-testid="welcome-starters">
         {starters.map(({ key, icon: Icon, tone }) => (

@@ -1,4 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
+import {
+  DEFAULT_REGION_WIDTH,
+  MAX_REGION_WIDTH,
+  MIN_CHAT_WIDTH,
+  MIN_REGION_WIDTH,
+  clampRegionWidth,
+  regionMaxWidth,
+  useChatAreaWidth,
+  viewportWidth,
+} from '../../../lib/chatLayoutBudget.js'
 
 /**
  * The right region's own geometry: how wide it is, and how it divides its height
@@ -11,12 +21,22 @@ import { useCallback, useEffect, useState } from 'react'
  * panels could each claim space from a chat column that only had it once, and
  * neither could be laid out until the other had decided. One owner fixes both —
  * the region decides its width, the panes are told theirs.
+ *
+ * What the region may spend is no longer its own decision either: the budget
+ * lives in `../layout/chatLayoutBudget.js`, because the rail beside it spends
+ * from the same one.
  */
 
-export const MIN_CHAT_WIDTH = 400
-export const MIN_REGION_WIDTH = 320
-export const MAX_REGION_WIDTH = 900
-export const DEFAULT_REGION_WIDTH = 480
+export {
+  DEFAULT_REGION_WIDTH,
+  MAX_REGION_WIDTH,
+  MIN_CHAT_WIDTH,
+  MIN_REGION_WIDTH,
+  clampRegionWidth,
+  regionMaxWidth,
+  viewportWidth,
+}
+
 export const REGION_WIDTH_STORAGE_KEY = 'gugo:right-region-width'
 
 /** Narrower than this and a pane has no readable line left in it. */
@@ -26,21 +46,6 @@ export const GUTTER_PX = 8
 /** The share of the region each half may not shrink past. */
 const MIN_RATIO = 0.2
 const MAX_RATIO = 0.8
-
-export function viewportWidth() {
-  return typeof window === 'undefined' ? 1440 : window.innerWidth
-}
-
-/** How wide the region may be before it starts eating the conversation. */
-export function regionMaxWidth(viewport = viewportWidth()) {
-  return Math.max(MIN_REGION_WIDTH, Math.min(MAX_REGION_WIDTH, Number(viewport) - MIN_CHAT_WIDTH))
-}
-
-export function clampRegionWidth(value, viewport = viewportWidth()) {
-  const numeric = Number(value)
-  const wanted = Number.isFinite(numeric) && numeric > 0 ? numeric : DEFAULT_REGION_WIDTH
-  return Math.min(regionMaxWidth(viewport), Math.max(MIN_REGION_WIDTH, wanted))
-}
 
 export function clampRatio(value, fallback) {
   const numeric = Number(value)
@@ -75,10 +80,11 @@ export function useRightRegionLayout() {
   const [preferredWidth, setPreferredWidth] = useState(readStoredRegionWidth)
   const [topRatio, setTopRatio] = useState(0.5)
   const [bottomLeftRatio, setBottomLeftRatio] = useState(0.5)
-  // The width actually drawn is the preference put through the current window,
-  // worked out during render so a window that grows gets its room back without
-  // anyone having to tell the region about the resize.
-  const width = clampRegionWidth(preferredWidth)
+  // The width actually drawn is the preference put through the room this window
+  // has left after the navigation rail, worked out during render so a window that
+  // grows gets its room back without anyone having to tell the region.
+  const chatAreaWidth = useChatAreaWidth()
+  const width = clampRegionWidth(preferredWidth, chatAreaWidth)
 
   useEffect(() => {
     try {

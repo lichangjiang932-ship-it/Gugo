@@ -58,8 +58,17 @@ export default function ChatRightPanels({
   // of the region would leave it arguing with the panes around it.
   const [dockState, setDockState] = useState(readDockState)
   useEffect(() => {
-    const timer = setTimeout(() => subscribeDock(setDockState), 0)
-    return () => clearTimeout(timer)
+    // `subscribeDock` hands back its own unsubscribe. Dropping it left the
+    // module's listener set holding this component after it unmounted, so every
+    // later dock change called setState on a dead tree. The subscription is
+    // deferred a tick so the first paint does not wait on it, which means the
+    // cleanup has to cover both cases: still pending, or already live.
+    let unsubscribe = null
+    const timer = setTimeout(() => { unsubscribe = subscribeDock(setDockState) }, 0)
+    return () => {
+      clearTimeout(timer)
+      unsubscribe?.()
+    }
   }, [])
 
   const takeScreenshot = () => {

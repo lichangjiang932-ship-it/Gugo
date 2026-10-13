@@ -36,3 +36,24 @@ test('each starter has a title, a description and a sendable prompt in both lang
     }
   }
 })
+
+test('the welcome names a missing model instead of looking ready to work', async () => {
+  const welcomeSource = fs.readFileSync(
+    new URL('../src/pages/ChatSplit/chatMessages/NewConversationWelcome.jsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(welcomeSource, /data-testid="welcome-model-blocker"/)
+  assert.match(welcomeSource, /data-testid="welcome-configure-model"/)
+  assert.match(welcomeSource, /BLOCKING_READINESS_KINDS\.has\(String\(modelReadinessKind\)\)/)
+  // A load in progress resolves on its own, and a chat-only provider can still
+  // send — neither is something the reader has to act on, so neither is blocking.
+  assert.doesNotMatch(welcomeSource, /'loading'|'provider-chat-only'/)
+  assert.match(viewSource, /modelReadinessKind=\{modelReadiness\?\.kind \|\| ''\}/)
+  assert.match(viewSource, /onConfigureModel=\{onOpenModelPicker\}/)
+  const { translateKey } = await import('../src/i18n/translations.js')
+  for (const lang of ['zh', 'en']) {
+    for (const key of ['welcome.modelNotReady', 'welcome.modelNotReadyAction']) {
+      assert.ok(translateKey(key, lang) && translateKey(key, lang) !== key, `${lang}: ${key}`)
+    }
+  }
+})

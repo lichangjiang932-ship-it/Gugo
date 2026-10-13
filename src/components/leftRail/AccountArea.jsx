@@ -4,10 +4,17 @@ import BrandMark from '../BrandMark.jsx'
 import DesktopUpdateCard from '../DesktopUpdateCard.jsx'
 import { UiContributionRenderer, useUiContributions } from '../../plugins/uiContributionRegistry.js'
 
-export default function AccountArea({ compact = false, accountMenuOpen, accountMenuRef, user, onToggle, onNavigate, t }) {
+export default function AccountArea({ compact = false, accountMenuOpen, accountMenuRef, localWorkspace = false, user, onToggle, onNavigate, t }) {
   const contributedMenuItems = useUiContributions('account-menu')
   const menuRef = useRef(null)
   const triggerRef = useRef(null)
+  // On a single-user install the account is a machine, and `local@gugo.invalid`
+  // was being drawn where a reader looks for their own name — so the control
+  // read as account details rather than as the way to settings, connections,
+  // skills and memory. It says what the menu is instead of who the user is;
+  // signed in, it keeps saying who.
+  const label = localWorkspace ? t('nav.localWorkspace') : (user.name || t('settings.account'))
+  const sublabel = localWorkspace ? t('nav.localWorkspaceHint') : user.email
   useEffect(() => {
     if (accountMenuOpen) menuRef.current?.querySelector('button, a[href]')?.focus()
   }, [accountMenuOpen])
@@ -40,9 +47,9 @@ export default function AccountArea({ compact = false, accountMenuOpen, accountM
           />)}
     </div>}
     <DesktopUpdateCard compact={compact} />
-    <button ref={triggerRef} type="button" data-settings-focus-return onClick={onToggle} title={compact ? (user.name || t('settings.account')) : undefined} aria-label={user.name || t('settings.account')} aria-expanded={accountMenuOpen} className={`flex h-11 w-full items-center rounded-control text-left transition-colors hover:bg-paper-2 ${compact ? 'justify-center px-0' : 'gap-2.5 px-2'}`}>
+    <button ref={triggerRef} type="button" data-settings-focus-return onClick={onToggle} title={compact ? label : undefined} aria-label={label} aria-expanded={accountMenuOpen} className={`flex h-11 w-full items-center rounded-control text-left transition-colors hover:bg-paper-2 ${compact ? 'justify-center px-0' : 'gap-2.5 px-2'}`}>
       <BrandMark className="h-8 w-8 shrink-0 text-accent-ink" />
-      {!compact && <><span className="min-w-0 flex-1"><span className="block truncate text-ui font-medium text-ink">{user.name || t('settings.account')}</span>{user.email && <span className="block truncate text-xs text-ink-fade">{user.email}</span>}</span><ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} /></>}
+      {!compact && <><span className="min-w-0 flex-1"><span className="block truncate text-ui font-medium text-ink">{label}</span>{sublabel && <span className="block truncate text-xs text-ink-fade">{sublabel}</span>}</span><ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} /></>}
     </button>
   </div>
 }

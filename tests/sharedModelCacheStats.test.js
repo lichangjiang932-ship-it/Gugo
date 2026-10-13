@@ -65,6 +65,19 @@ test('a provider that never reports caching never produces a miss', () => {
   assert.equal(miss, undefined)
 })
 
+test('a request that reported no cache usage at all is unknown, not a total miss', () => {
+  const previous = { promptTokens: 40_000, modelKey: 'p/m', timestamp: 1, reportedCache: true }
+  const silent = (usage) => ({ providerId: 'p', modelName: 'm', timestamp: 2, usage })
+  // The answer simply did not say. Reading that silence as a hit count of zero
+  // would bill the whole previous prompt as waste the reader never caused.
+  assert.equal(detectCacheMiss(previous, silent({ promptTokens: 40_000 })), undefined)
+  // An explicit zero is a measured full miss, and stays counted.
+  const measured = detectCacheMiss(previous, silent({
+    promptTokens: 40_000, cacheHitTokens: 0, cacheCreationTokens: 0,
+  }))
+  assert.equal(measured.missedTokens, 40_000)
+})
+
 test('compaction resets the baseline — new content is not re-billed content', () => {
   const records = [
     request({ timestamp: 1_000, usage: { promptTokens: 40_000, cacheHitTokens: 0, cacheCreationTokens: 40_000 } }),

@@ -32,6 +32,7 @@ test('compact session history hides branch details while keeping fork in the con
       onPinToggle={() => {}}
       onArchiveToggle={() => {}}
       onDelete={() => {}}
+      onRename={() => {}}
       t={(key) => key}
     />))
 
@@ -41,7 +42,7 @@ test('compact session history hides branch details while keeping fork in the con
     assert.doesNotMatch(row.textContent, /parent-1|Experiment/)
     assert.deepEqual(
       [...rootElement.querySelectorAll('[role="menuitem"]')].map((button) => button.textContent.trim()),
-      ['nav.pinSession', 'nav.archiveSession', 'nav.forkSession', 'nav.deleteSession'],
+      ['nav.pinSession', 'nav.archiveSession', 'nav.forkSession', 'nav.renameSession', 'nav.deleteSession'],
     )
     const forkButton = [...rootElement.querySelectorAll('[role="menuitem"]')]
       .find((button) => button.textContent.includes('nav.forkSession'))

@@ -72,8 +72,7 @@ export default function MemoryView() {
     try { await deleteMemoryApi(id); if (editing?.id === id) setEditing(null); await reload() } catch (caught) { setError(caught.message || t('memory.deleteFailed')) }
   }
   return (
-    <AppLayout className="flex h-screen overflow-hidden bg-paper">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <AppLayout className="flex h-screen overflow-hidden bg-paper" mainAs="main" mainClassName="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-3 border-b border-ink/10 px-6 py-4">
           <BookOpen className="h-5 w-5 text-accent-ink" />
           <div className="flex-1">
@@ -92,7 +91,6 @@ export default function MemoryView() {
             <MemoryEditor activeAgentId={activeAgentId} agents={agents} editing={editing} onChange={setEditing} onClose={() => setEditing(null)} onDelete={handleDelete} onInstallSkill={handleInstallSkill} onSave={handleSave} saving={saving} skillInstallError={skillInstallError} skillInstalling={skillInstalling} t={t} types={types} />
           </div>
         </div>
-      </div>
     </AppLayout>
   )
 }

@@ -7,6 +7,7 @@ import {
   getSessionSnapshot,
   listSessions,
   pinSession,
+  renameSession,
   replaceSessionMessages,
   setSessionWorkspace as persistSessionWorkspace,
   unarchiveSession,
@@ -61,4 +62,5 @@ export const SQLITE_SESSION_ADMIN_PORT = prepareSessionAdminPort({
   unpinSession,
   importLegacySessions,
   setSessionWorkspace,
+  renameSession,
 })

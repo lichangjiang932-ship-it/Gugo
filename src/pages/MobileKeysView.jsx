@@ -102,8 +102,7 @@ export default function MobileKeysView() {
   }
 
   return (
-    <AppLayout className="h-screen flex bg-paper overflow-hidden">
-      <div className="flex-1 flex flex-col min-w-0">
+    <AppLayout className="h-screen flex bg-paper overflow-hidden" mainAs="main" mainClassName="flex-1 flex flex-col min-w-0">
         <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
           <MonitorSmartphone className="w-5 h-5 text-accent-ink" />
           <div className="flex-1">
@@ -253,7 +252,6 @@ export default function MobileKeysView() {
               </div>
           </Modal>
         )}
-      </div>
     </AppLayout>
   )
 }

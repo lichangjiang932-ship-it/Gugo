@@ -26,6 +26,8 @@ export default function ChatMessages({
   onRetryModelFailure,
   onPromptSelect,
   routeHash = '',
+  modelReadinessKind = '',
+  onConfigureModel,
 }) {
   const { t, lang } = useT()
   const viewport = useChatMessageViewport({ messages, routeHash })
@@ -97,6 +99,8 @@ export default function ChatMessages({
           <NewConversationWelcome
             onPromptSelect={onPromptSelect}
             workspacePath={workspacePath}
+            modelReadinessKind={modelReadinessKind}
+            onConfigureModel={onConfigureModel}
           />
         )}
         </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { MIN_CHAT_WIDTH, MIN_REGION_WIDTH, useRegionOpen } from '../../lib/chatLayoutBudget.js'
 
 /**
  * The left rail's width: adaptive until the reader drags it, theirs after.
@@ -14,8 +15,6 @@ import { useCallback, useEffect, useState } from 'react'
 export const RAIL_WIDTH_STORAGE_KEY = 'gugo:left-rail-width'
 export const MIN_RAIL_WIDTH = 220
 export const MAX_RAIL_WIDTH = 480
-/** What the rail keeps before it starts eating the conversation. */
-const MIN_CHAT_WIDTH = 400
 
 export function viewportWidth() {
   return typeof window === 'undefined' ? 1440 : window.innerWidth
@@ -26,14 +25,23 @@ export function adaptiveRailWidth(viewport = viewportWidth()) {
   return Math.min(320, Math.max(280, Math.round(Number(viewport) * 0.2)))
 }
 
-export function railMaxWidth(viewport = viewportWidth()) {
-  return Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, Number(viewport) - MIN_CHAT_WIDTH))
+/**
+ * The rail's share of the window.
+ *
+ * The rail sits outside the chat area, so the window is the only thing it can
+ * measure against — but it must not spend the conversation's reserve and the
+ * region's reserve out of the same pixels. With the region open, both come out
+ * of this number.
+ */
+export function railMaxWidth(viewport = viewportWidth(), { regionOpen = false } = {}) {
+  const reserve = MIN_CHAT_WIDTH + (regionOpen ? MIN_REGION_WIDTH : 0)
+  return Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, Number(viewport) - reserve))
 }
 
-export function clampRailWidth(value, viewport = viewportWidth()) {
+export function clampRailWidth(value, viewport = viewportWidth(), { regionOpen = false } = {}) {
   const numeric = Number(value)
   const wanted = Number.isFinite(numeric) && numeric > 0 ? numeric : adaptiveRailWidth(viewport)
-  return Math.min(railMaxWidth(viewport), Math.max(MIN_RAIL_WIDTH, wanted))
+  return Math.min(railMaxWidth(viewport, { regionOpen }), Math.max(MIN_RAIL_WIDTH, wanted))
 }
 
 /** The reader's width, or 0 for "never dragged". Kept unclamped so a narrow
@@ -50,9 +58,10 @@ export function readStoredRailWidth() {
 export function useLeftRailWidth() {
   const [preferred, setPreferred] = useState(readStoredRailWidth)
   const [resizing, setResizing] = useState(false)
+  const regionOpen = useRegionOpen()
   // Clamped on the way out rather than on the way in: the preference is what the
   // reader asked for, the width is what this window can give it.
-  const width = clampRailWidth(preferred || adaptiveRailWidth())
+  const width = clampRailWidth(preferred || adaptiveRailWidth(), viewportWidth(), { regionOpen })
 
   useEffect(() => {
     if (!preferred) return

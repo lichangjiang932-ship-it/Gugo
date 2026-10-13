@@ -13,8 +13,22 @@
  * comparable between the two, and theirs have already been thought about.
  */
 
+import { normalizeOptionalUsageNumber } from './modelUsage.js'
+
 /** Anthropic's default cache TTL: an idle gap past this explains a miss. */
 export const CACHE_TTL_MS = 5 * 60 * 1000
+
+/**
+ * Whether the answer itself stated a cache reading, rather than staying silent.
+ *
+ * An absent field and an explicit zero are not the same claim, and only one of
+ * them is a measurement. `normalizeOptionalUsageNumber` is the project's own
+ * reading of that difference; reuse it rather than re-deciding what counts.
+ */
+function reportsCacheUsage(usage) {
+  return normalizeOptionalUsageNumber(usage?.cacheHitTokens) !== null
+    || normalizeOptionalUsageNumber(usage?.cacheCreationTokens) !== null
+}
 
 /**
  * A miss at or below this is cache-breakpoint granularity, not waste: the
@@ -76,6 +90,10 @@ export function detectCacheMiss(previous, record, { resolvePrice } = {}) {
   const cacheWrite = tokenCount(usage.cacheCreationTokens)
   if (!previous || promptTokens <= 0) return undefined
   if (isContextRewrite(previous, promptTokens)) return undefined
+  // A record that states no cache reading is unknown, not a miss. Counting its
+  // silence as a hit count of zero would bill the entire previous prompt as
+  // waste — the loudest possible number, from the least information.
+  if (!reportsCacheUsage(usage)) return undefined
   // Nothing read *and* nothing written only counts as a miss when this session
   // has reported cache activity before. On a provider that never reports caching
   // a zero here means nothing at all.

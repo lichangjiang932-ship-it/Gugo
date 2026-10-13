@@ -126,8 +126,7 @@ export default function HistoryView() {
   }
 
   return (
-    <AppLayout className="h-screen flex bg-paper overflow-hidden">
-      <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-8">
+    <AppLayout className="h-screen flex bg-paper overflow-hidden" mainAs="main" mainClassName="flex-1 overflow-y-auto px-5 py-6 sm:px-8">
         {/* Header */}
         <div className="mx-auto mb-5 flex max-w-5xl flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -195,7 +194,6 @@ export default function HistoryView() {
           retryingId={retryingId}
           t={t}
         />
-      </div>
     </AppLayout>
   )
 }

@@ -223,9 +223,7 @@ export default function ApprovalsInbox() {
   }), [approvals])
 
   return (
-    <AppLayout className="h-screen flex bg-paper overflow-hidden">
-
-      <div className="flex-1 p-8 overflow-y-auto">
+    <AppLayout className="h-screen flex bg-paper overflow-hidden" mainAs="main" mainClassName="flex-1 p-8 overflow-y-auto">
         <div className="flex items-end justify-between mb-6">
           <div>
             <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">APPROVALS</span>
@@ -278,7 +276,6 @@ export default function ApprovalsInbox() {
             ))}
           </div>
         )}
-      </div>
     </AppLayout>
   )
 }

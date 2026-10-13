@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { getUsageReportApi } from '../../lib/usageClient.js'
 
@@ -73,13 +73,23 @@ export default function SettingsUsagePanel({ t }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
+  // Which request the reader is waiting for. Switching the window starts a new
+  // one while the previous answer may still be in flight; without this the older
+  // response lands last and the panel shows seven days of data under an "all
+  // time" button — and clears the newer request's error on its way through.
+  const requestVersionRef = useRef(0)
+
   const load = useCallback(async (key) => {
     const preset = WINDOWS.find((entry) => entry.key === key) || WINDOWS[1]
+    const requestVersion = requestVersionRef.current + 1
+    requestVersionRef.current = requestVersion
     try {
       const next = await getUsageReportApi({ since: preset.days > 0 ? localDateDaysAgo(preset.days) : '' })
+      if (requestVersionRef.current !== requestVersion) return
       setReport(next)
       setError('')
     } catch (failure) {
+      if (requestVersionRef.current !== requestVersion) return
       setReport(null)
       setError(failure?.message || String(failure))
     }
@@ -99,6 +109,7 @@ export default function SettingsUsagePanel({ t }) {
   const modelRows = (report?.byModel || []).map((entry) => ({ ...entry, count: entry.modelPhases }))
   const sessionRows = (report?.bySession || []).map((entry) => ({ ...entry, count: entry.turns }))
   const phaseTotal = Number(report?.phaseTotals?.totalTokens) || 0
+  const waste = report?.cacheWaste || {}
   const turnTotal = Number(totals.totalTokens) || 0
   const empty = report && report.turns?.total === 0 && report.perModelPhases === 0
 
@@ -167,6 +178,14 @@ export default function SettingsUsagePanel({ t }) {
               completion: formatNumber(totals.completionTokens),
             })}
           </p>
+          {Number(waste.missCount) > 0 && (
+            <p className="text-xs text-ink-soft" data-testid="settings-usage-cache-waste">
+              {t('usage.cacheWaste', {
+                tokens: formatNumber(waste.missedTokens),
+                count: formatNumber(waste.missCount),
+              })}
+            </p>
+          )}
           <UsageTable title={t('usage.byModel')} nameLabel={t('usage.model')} rows={modelRows} t={t} />
           <UsageTable title={t('usage.bySession')} nameLabel={t('usage.session')} rows={sessionRows} t={t} />
           {report.window?.truncated && <p className="text-xs text-ink-fade">{t('usage.truncated')}</p>}

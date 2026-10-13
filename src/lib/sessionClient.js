@@ -390,6 +390,15 @@ export async function unpinSessionRemote(sessionId, { fetchImpl = fetch } = {}) 
   return parseResponse(response)
 }
 
+export async function renameSessionRemote(sessionId, title, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/rename`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  return parseResponse(response)
+}
+
 export async function setSessionWorkspaceRemote(
   sessionId,
   workspacePath,

@@ -287,6 +287,26 @@ export function pinSession({ userId, sessionId, now = Date.now() }) {
   return getSession({ userId, sessionId })
 }
 
+/**
+ * Replace a conversation's title with the reader's own.
+ *
+ * The reducer has carried an `UPDATE_SESSION_TITLE_FOR` action with an
+ * `onlyIfMatches` guard since the AI title backfill was added — it exists so an
+ * async backfill cannot overwrite a name the reader chose — but nothing ever
+ * dispatched it, because there was no way to persist the name. This is that way.
+ */
+export function renameSession({ userId, sessionId, title, now = Date.now() }) {
+  const normalized = typeof title === 'string' ? title.trim() : ''
+  if (!userId || !sessionId || !normalized) return null
+  const result = getDb().prepare(`
+    UPDATE sessions
+    SET title = ?, updated_at = ?, revision = revision + 1
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+  `).run(normalized, now, userId, sessionId)
+  if (!result.changes) return null
+  return getSession({ userId, sessionId })
+}
+
 export function unpinSession({ userId, sessionId }) {
   if (!userId || !sessionId) return null
   const result = getDb().prepare(`
