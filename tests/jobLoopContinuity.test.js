@@ -688,3 +688,69 @@ test('运行时保留滚动窗口重复调用的不可重试证据', async () =>
   assert.equal(finalCheckpoint.retryable, false)
   assert.equal(finalCheckpoint.hint, result.hint)
 })
+
+/* ------------------------------------------------------------------ *
+ * 一段并行读:一个成功就撤销连败判词,全部失败才如实停下
+ * ------------------------------------------------------------------ */
+
+const batchReadCall = (id, file) => ({
+  id,
+  type: 'function',
+  function: { name: 'read_file', arguments: JSON.stringify({ path: file }) },
+})
+
+/**
+ * Twenty failures because that is the consecutive-error limit the loop installs
+ * on the guard (`maxConsecutiveErrors: 20`, not the module's own default of six),
+ * and each needs its own path because two identical calls trip the repeat guard
+ * first — which is a different fuse, decided before the call runs.
+ */
+const failingReads = (count = 20) => Array.from(
+  { length: count },
+  (_, index) => batchReadCall(`miss-${index}`, `missing-${index}.txt`),
+)
+
+function runOneReadBatch({ toolCalls, executeTool }) {
+  let modelCalls = 0
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  return runToolsLoop({
+    job: { id: 'job-batch-sibling', userId: null, origin: 'chat', prompt: '读这几个文件' },
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
+    step: { id: 'step-batch-sibling', kind: 'chat' },
+    messages: [{ role: 'user', content: '读这几个文件' }],
+    toolSpecs: [readFile],
+    maxIters: 10,
+    enableToolHooks: false,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls > 1) return { content: '读到了。', toolCalls: [] }
+      return { content: '', toolCalls }
+    },
+    executeTool,
+  }).then((result) => ({ result, calls: modelCalls }))
+}
+
+test('同一个读批次里有一个读回来了,连败判词就不该留下', async () => {
+  // The guard zeroes its consecutive-failure count on any success, so a verdict
+  // it no longer agrees with has to go with it — otherwise this round stops even
+  // though one of its reads came back, and the model never gets to use it.
+  const { result, calls } = await runOneReadBatch({
+    toolCalls: [...failingReads(), batchReadCall('hit', 'present.txt')],
+    executeTool: async ({ args }) => (String(args.path).startsWith('missing-')
+      ? { ok: false, code: 'ENOENT', error: 'not found' }
+      : { ok: true, path: args.path, content: 'here' }),
+  })
+  assert.equal(calls, 2, 'the round reached a second model call instead of stopping')
+  assert.notEqual(result.incomplete, true)
+})
+
+test('一段读全军覆没才停下,而且判词是连败而不是别的', async () => {
+  const { result, calls } = await runOneReadBatch({
+    toolCalls: failingReads(),
+    executeTool: async ({ args }) => ({ ok: false, code: 'ENOENT', error: `${args.path} not found` }),
+  })
+  assert.equal(calls, 2, 'the wrap-up call still happens')
+  assert.equal(result.incomplete, true)
+  assert.equal(result.noProgress, true)
+  assert.equal(result.reason, 'tool_no_progress')
+})

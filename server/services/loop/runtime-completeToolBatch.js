@@ -173,9 +173,9 @@ export async function completeToolBatch(s) {
           const hardNoProgressOutcome = outcomes.find((outcome) => outcome.noProgressReason) || null
           for (const outcome of outcomes) await i.recordOutcome(outcome)
           if (batchFailed) throw batchError
-          // A later successful candidate proves progress after ordinary read
-          // failures. It must not, however, erase a pre-execution hard fuse such
-          // as the third identical call in the same segment.
+          // A success in this segment zeroes the guard's consecutive-failure
+          // count, so the verdict follows it; a fuse decided before the calls ran
+          // is a different thing and stands.
           if (hardNoProgressOutcome) {
             i.noProgressReason = hardNoProgressOutcome.noProgressReason
             i.noProgressCode = hardNoProgressOutcome.result?.code || 'tool_no_progress'
