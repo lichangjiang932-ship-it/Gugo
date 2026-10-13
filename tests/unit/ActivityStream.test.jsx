@@ -46,7 +46,7 @@ test('pure reasoning keeps a compact status and never exposes raw text', () => {
   assert.match(markup, /data-testid="live-elapsed"/)
   assert.match(markup, /&lt;1s/)
   assert.doesNotMatch(markup, />0s</)
-  assert.match(markup, /reasoning through the next step/)
+  assert.match(markup, /thinking and drafting/)
   assert.doesNotMatch(markup, /secret chain of thought/)
 })
 
@@ -146,13 +146,32 @@ test('reconnection status overrides a stale running tool state', () => {
   assert.match(markup, /Reconnecting/)
 })
 
+test('a reply the reader has not received yet is not described as arriving', () => {
+  // The model writes its explanation before its first tool call, and that text is
+  // held until the call starts — so nothing has reached the reader. Saying
+  // "receiving model output" there promises text that is not coming yet, and the
+  // reader is left reading it for as long as the model keeps writing.
+  const held = render({
+    content: '',
+    meta: { streaming: true, modelActivity: { kind: 'responding', phase: 'streaming' } },
+  })
+  assert.match(held, /thinking and drafting/)
+  assert.doesNotMatch(held, /Receiving model output/)
+
+  const arrived = render({
+    content: 'Here is what I found.',
+    meta: { streaming: true, modelActivity: { kind: 'responding', phase: 'streaming' } },
+  })
+  assert.match(arrived, /Receiving model output/)
+})
+
 test('activity status follows the supported UI languages and falls back to English', () => {
   const expected = {
-    zh: '模型正在思考下一步…',
-    en: 'Model is reasoning through the next step…',
-    ja: 'Model is reasoning through the next step…',
-    ko: 'Model is reasoning through the next step…',
-    'zh-TW': 'Model is reasoning through the next step…',
+    zh: '模型正在思考并撰写回复，内容就绪后会显示。',
+    en: 'The model is thinking and drafting its reply; it appears when it is ready.',
+    ja: 'The model is thinking and drafting its reply; it appears when it is ready.',
+    ko: 'The model is thinking and drafting its reply; it appears when it is ready.',
+    'zh-TW': 'The model is thinking and drafting its reply; it appears when it is ready.',
   }
   for (const [language, copy] of Object.entries(expected)) {
     const markup = render({ meta: { streaming: true, modelActivity: { kind: 'reasoning' } } }, language)

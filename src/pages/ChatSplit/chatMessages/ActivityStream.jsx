@@ -39,6 +39,10 @@ export default function ActivityStream({ msg }) {
   const fallback = fallbackNotice(meta, t)
   const connectionNeedsAttention = ['reconnecting', 'cancelling'].includes(meta.serverConnectionState)
   const hasReasoningSummary = Boolean(String(meta.reasoning || '').trim())
+  // Whether any of the reply has actually reached the reader. Text the model
+  // writes before its first tool call is held server-side, so the stream can be
+  // long underway while this is still false.
+  const hasAnswerText = Boolean(String(msg?.content || '').trim())
 
   if (running && !connectionNeedsAttention) {
     return fallback
@@ -53,7 +57,7 @@ export default function ActivityStream({ msg }) {
         text={meta.reasoning || ''}
         streaming={!!meta.streaming}
         completed={!meta.streaming && hasReasoningSummary}
-        label={meta.streaming ? activityLabel(meta, toolCalls, t) : t('chatMessages.reasoningCompleted')}
+        label={meta.streaming ? activityLabel(meta, toolCalls, t, hasAnswerText) : t('chatMessages.reasoningCompleted')}
         detail={meta.streaming && !connectionNeedsAttention ? activityDetail(meta.modelActivity, t) : ''}
         startedAt={meta.modelActivity?.startedAt}
         testId="model-activity"
@@ -62,7 +66,7 @@ export default function ActivityStream({ msg }) {
   )
 }
 
-function activityLabel(meta, toolCalls, t) {
+function activityLabel(meta, toolCalls, t, hasAnswerText = false) {
   if (meta?.serverConnectionState === 'reconnecting') return t('chatMessages.reconnectingTask')
   if (meta?.serverConnectionState === 'cancelling') return t('chatMessages.cancellingTask')
   const activity = meta?.modelActivity
@@ -86,7 +90,12 @@ function activityLabel(meta, toolCalls, t) {
   if (activity?.kind === 'model' && activity.phase === 'idle') return t('chatMessages.activityModelPaused')
   if (activity?.kind === 'model' && activity.phase === 'retrying') return t('chatMessages.activityModelRetrying')
   if (activity?.kind === 'model') return t('chatMessages.activityModelWorking')
-  if (activity?.kind === 'responding') return t('chatMessages.activityReceivingOutput')
+  // Only claim output is arriving once some has. Before that the model is
+  // writing text the reader has not been given yet, and the drafting label is
+  // the honest one.
+  if (activity?.kind === 'responding') {
+    return hasAnswerText ? t('chatMessages.activityReceivingOutput') : t('chatMessages.activityReasoning')
+  }
   if (activity?.kind === 'reviewing') return t('chatMessages.reviewingResults')
   // Progress events describe the last completed batch. A newer model/tool
   // activity is the current work and must win, otherwise the UI can remain on
