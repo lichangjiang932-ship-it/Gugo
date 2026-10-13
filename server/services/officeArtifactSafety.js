@@ -223,7 +223,10 @@ export function assertSafeOfficeEntryNames({ entries, format, reject }) {
 export function assertSafeOfficeContentType({ contentType, format, reject }) {
   const normalized = String(contentType || '').trim()
   if (!SAFE_CONTENT_TYPES[format].has(normalized)) {
-    rejectActive(reject, `The ${format.toUpperCase()} package declares a forbidden content type.`)
+    // Name it. The refusal is a policy decision about a feature, not a defect in
+    // the bytes, and a message that does not say which part was refused leaves
+    // the model regenerating the same package to find out.
+    rejectActive(reject, `The ${format.toUpperCase()} package declares a forbidden content type: ${normalized}.`)
   }
 }
 
@@ -298,7 +301,7 @@ export function validateOfficeArtifactSafety({
     for (const relation of relationships.values()) {
       const kind = relationshipKind(relation.type)
       if (relation.external || relation.targetMode || !SAFE_RELATIONSHIP_KINDS[format].has(kind)) {
-        rejectActive(reject, `Relationship part ${relName} contains a forbidden relationship.`)
+        rejectActive(reject, `Relationship part ${relName} contains a forbidden relationship: ${kind}.`)
       }
       if (kind === 'package') {
         validateEmbeddedWorkbookRelation({

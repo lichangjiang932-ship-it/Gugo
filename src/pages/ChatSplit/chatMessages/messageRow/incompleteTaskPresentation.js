@@ -9,6 +9,10 @@ const INCOMPLETE_REASON_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_]{1,95}$/u
 
 const REASON_KEYS = Object.freeze({
   artifact_delivery_not_converged: 'chatMessages.incompleteReasonArtifactDelivery',
+  // The artifact domain, not chatMessages: that module is at its size limit and
+  // this table already reaches into `toolApproval` and `errors` for the same
+  // reason — the message belongs to the thing it is about.
+  artifact_format_policy_blocked: 'artifact.formatPolicyBlocked',
   deliverable_selection_missing: 'chatMessages.incompleteReasonDeliverableSelection',
   directory_resume_not_converged: 'chatMessages.incompleteReasonDirectory',
   empty_model_response: 'chatMessages.incompleteReasonEmptyModelResponse',
@@ -79,6 +83,7 @@ const REQUIREMENT_KEYS = Object.freeze({
 
 const DEFAULT_REQUIREMENTS = Object.freeze({
   artifact_delivery_not_converged: ['deliverable_artifact'],
+  artifact_format_policy_blocked: ['deliverable_artifact'],
   deliverable_selection_missing: ['deliverable_selection'],
   directory_resume_not_converged: ['authorized_directory'],
   empty_model_response: ['model_response'],

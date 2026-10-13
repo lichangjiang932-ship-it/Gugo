@@ -5,6 +5,7 @@ import { recordVerificationObservations } from './runtime-recordVerificationObse
 import { recordPdfLayoutMutation } from './runtime-pdfLayoutCompletion.js'
 import { recordMutationEvidence } from './runtime-recordMutationEvidence.js'
 import { artifactPreviewIdentity } from '../artifactPreviewIdentity.js'
+import { trackPolicyBlockedArtifactRejection } from './artifactFormatRejections.js'
 import { toolStopBoundary } from './runtimeToolStop.js'
 
 function toolSearchScore(spec, query) {
@@ -507,6 +508,18 @@ function recordNoProgressAndSignals(s, outcome, executedCall) {
         retryable: result.retryable === true,
         ...(result.hint ? { hint: String(result.hint) } : {}),
       }
+    }
+  }
+  // An artifact refused twice by the format policy stops the round, whatever
+  // else the batch managed — of which a turn like this one has many, all beside
+  // the artifact it cannot finish.
+  if (!i.noProgressReason) {
+    const rejection = trackPolicyBlockedArtifactRejection(s, outcome.result)
+    if (rejection) {
+      i.noProgressReason = 'artifact_format_policy_blocked'
+      i.noProgressCode = rejection.code
+      i.incompleteReason = 'artifact_format_policy_blocked'
+      i.noProgressFailure = { code: rejection.code, retryable: false }
     }
   }
   if (!i.budgetExceeded && outcome.budgetExceeded) i.budgetExceeded = outcome.budgetExceeded

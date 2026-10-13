@@ -279,6 +279,9 @@ async function finishNoProgress(s) {
     code: i.noProgressCode || 'tool_no_progress',
     retryable: i.noProgressFailure?.retryable === true,
     ...(noProgressHint ? { hint: noProgressHint } : {}),
+    // A specific reason outranks the generic one it is carried alongside, so a
+    // stop that knows why it happened says so instead of "no progress".
+    ...(i.incompleteReason ? { incompleteReason: i.incompleteReason } : {}),
     reason: i.noProgressReason,
     recovery: s.recovery,
   }, {
@@ -288,6 +291,7 @@ async function finishNoProgress(s) {
       code: i.noProgressCode || 'tool_no_progress',
       retryable: i.noProgressFailure?.retryable === true,
       ...(noProgressHint ? { hint: noProgressHint } : {}),
+      ...(i.incompleteReason ? { incompleteReason: i.incompleteReason } : {}),
     },
   })
   return terminal ? { kind: 'return', value: terminal } : { kind: 'continue' }
@@ -321,6 +325,8 @@ export async function completeIteration(s) {
   if (guardOutcome) return guardOutcome
   if (i.budgetExceeded) return finishBudgetExceeded(s)
   if (i.pausedByClarification) return finishClarification(s)
-  if (i.noProgressReason) return finishNoProgress(s)
+  // `incompleteReason` is the narrower stop: a specific, already-understood
+  // reason to finish early that is not the generic no-progress one.
+  if (i.noProgressReason || i.incompleteReason) return finishNoProgress(s)
   return { kind: 'next' }
 }

@@ -139,7 +139,9 @@ function createFinishTerminalResult(s, { formatIncompleteTerminalText, sourceHan
         result.budgetExceeded === true
           ? 'execution_budget_exhausted'
           : result.noProgress === true
-            ? 'tool_no_progress'
+            // A no-progress stop that knows its own reason keeps it; the generic
+            // code is only the fallback for one that does not.
+            ? (result.incompleteReason || 'tool_no_progress')
             : String(result.code || '').trim().toUpperCase() === 'REASONING_RUNAWAY'
               ? 'reasoning_runaway'
               : result.reason,

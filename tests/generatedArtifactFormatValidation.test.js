@@ -24,7 +24,12 @@ const {
   GeneratedArtifactFormatError,
   validateGeneratedArtifactFile,
 } = await import('../server/services/generatedArtifactFormatValidation.js')
-const { closeDb } = await import('../server/db.js')
+const { closeDb, createUser } = await import('../server/db.js')
+const { readFileTool } = await import('../server/adapters/fsFileTools.js')
+const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
+
+let readbackUserSequence = 0
+
 
 test.after(() => {
   closeDb()
@@ -373,4 +378,33 @@ test('invalid artifact cleanup cannot delete a file outside the managed artifact
   assert.equal(fs.existsSync(inside), false)
   assert.equal(discardInvalidGeneratedArtifactFile({ filePath: outside, artifactDirectory }), false)
   assert.equal(fs.readFileSync(outside, 'utf8'), 'outside')
+})
+
+test('a read-back of a policy-refused artifact says which part was refused', async () => {
+  readbackUserSequence += 1
+  const userId = `artifact-format-readback-${readbackUserSequence}`
+  createUser({ id: userId, email: `${userId}@example.invalid` })
+  grantLocalPath({ userId, rootPath: root, accessMode: 'read_only' })
+
+  const source = await xlsxArtifactWithImage()
+  const refused = await rewriteOfficeArtifact(source, 'xlsx-forbidden-relationship.xlsx', async (zip) => {
+    const part = zip.file('xl/drawings/_rels/drawing1.xml.rels')
+    const xml = await part.async('string')
+    zip.file('xl/drawings/_rels/drawing1.xml.rels', xml.replace('/relationships/image"', '/relationships/hyperlink"'))
+  })
+
+  const read = await readFileTool({ userId, path: refused })
+  assert.equal(read.formatValidated, false)
+  assert.equal(read.formatValidationCode, 'ARTIFACT_FORMAT_ACTIVE_CONTENT_FORBIDDEN')
+  assert.equal(read.formatValidationPolicyBlocked, true)
+  // The bare code is what a model actually saw while it spent twenty-four tool
+  // calls regenerating the same document. The message is what names the part.
+  assert.match(read.formatValidationMessage, /hyperlink/)
+
+  // A readable artifact says nothing about validation beyond passing it.
+  const ok = await readFileTool({ userId, path: source.fullPath })
+  assert.equal(ok.formatValidated, true)
+  assert.equal(ok.formatValidationCode, undefined)
+  assert.equal(ok.formatValidationMessage, undefined)
+  assert.equal(ok.formatValidationPolicyBlocked, undefined)
 })

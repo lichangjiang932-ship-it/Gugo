@@ -13,7 +13,8 @@ const translations = {
     "openPanel": "在面板中打开",
     "source": "源内容",
     "copy": "复制",
-    "downloadTitle": "下载 {filename}"
+    "downloadTitle": "下载 {filename}",
+    "formatPolicyBlocked": "这份文件需要一项被安全策略禁止的内容（例如页面背景所需的那个部分），重新生成同类文件也过不了校验，因此没有交付。可以改成不含该效果的版本，或者告诉我这项限制可以放宽到什么程度。"
   },
   "en": {
     "taskPreview": "Task artifact preview",
@@ -29,7 +30,8 @@ const translations = {
     "openPanel": "Open in panel",
     "source": "Source",
     "copy": "Copy",
-    "downloadTitle": "Download {filename}"
+    "downloadTitle": "Download {filename}",
+    "formatPolicyBlocked": "The file needs a part the artifact safety policy forbids — the one a page background requires, for instance — so regenerating the same kind of file cannot pass validation and it was not delivered. Deliver a version without that effect, or tell me how far that limit can move."
   }
 }
 

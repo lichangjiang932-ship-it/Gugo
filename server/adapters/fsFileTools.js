@@ -63,6 +63,8 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
       : null
   let formatValidated = null
   let formatValidationCode = null
+  let formatValidationMessage = null
+  let formatValidationPolicyBlocked = false
   if (isOffice) {
     try {
       await validateGeneratedArtifactFile({
@@ -74,6 +76,12 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
     } catch (error) {
       formatValidated = false
       formatValidationCode = String(error?.code || 'ARTIFACT_FORMAT_INVALID').slice(0, 120)
+      // A bare code says an artifact failed and nothing about why. Carry the
+      // reason and whether the refusal is policy rather than bytes: a reader of
+      // this result — the model, most of all — cannot otherwise tell a package
+      // worth regenerating from one that no regeneration can make valid.
+      formatValidationMessage = String(error?.message || '').slice(0, 400)
+      formatValidationPolicyBlocked = error?.policyBlocked === true
     }
   }
   const all = isPdf
@@ -100,7 +108,11 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
     } : {}),
     ...(isOffice ? {
       formatValidated,
-      ...(formatValidationCode ? { formatValidationCode } : {}),
+      ...(formatValidationCode ? {
+        formatValidationCode,
+        ...(formatValidationMessage ? { formatValidationMessage } : {}),
+        ...(formatValidationPolicyBlocked ? { formatValidationPolicyBlocked: true } : {}),
+      } : {}),
     } : {}),
     totalLines: lines.length,
     offset: o,

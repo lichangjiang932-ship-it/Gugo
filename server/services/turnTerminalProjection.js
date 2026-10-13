@@ -19,6 +19,10 @@ const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
   goal_plan_changed: ['current_goal_plan_review'],
   goal_plan_state_unavailable: ['goal_plan_state_verification'],
   [ARTIFACT_DELIVERY_INCOMPLETE_REASON]: ['deliverable_artifact'],
+  // The artifact was refused by the format policy, not by its bytes, so no
+  // regeneration of the same kind of file clears it. What is missing is a
+  // deliverable that does not need the refused part.
+  artifact_format_policy_blocked: ['deliverable_artifact'],
   deliverable_selection_missing: ['deliverable_selection'],
   directory_resume_not_converged: ['authorized_directory'],
   empty_model_response: ['model_response'],
