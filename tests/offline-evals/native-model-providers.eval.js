@@ -63,6 +63,7 @@ const CASES = [
         tools: [READ_FILE_TOOL],
         toolChoice: 'auto',
         stream: false,
+        env: { MODEL_PROMPT_CACHE_RETENTION: 'short' },
       })
       const body = JSON.parse(request.init.body)
       const toolResult = body.messages
@@ -80,7 +81,15 @@ const CASES = [
       }, 'anthropic')
 
       assert.equal(request.url, 'https://api.anthropic.com/v1/messages')
-      assert.equal(body.system, 'Use workspace evidence before answering.')
+      assert.deepEqual(body.system, [{ type: 'text', text: 'Use workspace evidence before answering.',
+        cache_control: { type: 'ephemeral' } }])
+      assert.deepEqual(body.tools[0].cache_control, { type: 'ephemeral' })
+      const uncached = buildNativeProviderRequest({
+        config: { baseUrl: 'https://api.anthropic.com', modelName: 'claude-offline-eval', apiKey: 'offline-eval-key' },
+        profile: { kind: 'anthropic', supportsTools: true }, messages: toolRoundMessages(), tools: [READ_FILE_TOOL],
+        env: { MODEL_PROMPT_CACHE_RETENTION: 'none' }, stream: false,
+      })
+      assert.equal(JSON.parse(uncached.init.body).system, 'Use workspace evidence before answering.')
       assert.equal(body.tools[0].name, 'read_file')
       assert.equal(JSON.parse(JSON.parse(toolResult.content).content).name, 'gugo')
       assert.deepEqual(parsed, {

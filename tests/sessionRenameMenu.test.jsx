@@ -92,6 +92,31 @@ test('the menu renames in place, and Enter keeps exactly what the reader typed',
   }
 })
 
+test('IME candidate confirmation cannot commit a rename; Enter after composition commits once', async () => {
+  const renamed = []
+  const { dom, root, rootElement } = await renderList({ onRename: (session, title) => renamed.push([session.id, title]) })
+  try {
+    await act(async () => menuItem(rootElement, 'nav.renameSession').click())
+    const input = rootElement.querySelector('[data-session-rename-input]')
+    await act(async () => typeInto(dom, input, 'zhongwen'))
+    for (const event of [
+      new dom.window.KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }),
+      new dom.window.KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true }),
+      new dom.window.KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true }),
+    ]) {
+      await act(async () => input.dispatchEvent(event))
+      assert.equal(rootElement.querySelector('[data-session-rename-input]'), input)
+      assert.deepEqual(renamed, [])
+    }
+    await act(async () => typeInto(dom, input, '中文标题'))
+    await act(async () => press(dom, input, 'Enter'))
+    assert.deepEqual(renamed, [['rename-1', '中文标题']])
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('Escape abandons the edit without renaming', async () => {
   const renamed = []
   const { dom, root, rootElement } = await renderList({

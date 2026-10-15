@@ -126,7 +126,17 @@
   text-align: left;
 }
 
+.left-rail-session-title {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .left-rail-session-time {
+  align-self: flex-start;
+  padding-top: 2px;
   max-width: 70px;
   flex-shrink: 0;
   overflow: hidden;

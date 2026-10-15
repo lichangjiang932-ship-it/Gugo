@@ -52,6 +52,8 @@
     "catalog:validate": "node scripts/generate-model-catalog.mjs --validate",
     "catalog:check": "node scripts/generate-model-catalog.mjs --check",
     "benchmark:checkpoint": "node scripts/benchmark-loop-checkpoint.mjs",
+    "benchmark:ui": "node scripts/benchmark-ui-context.mjs",
+    "benchmark:sidebar": "node scripts/benchmark-sidebar.mjs",
     "licenses": "node scripts/check-licenses.mjs",
     "hooks:install": "git config core.hooksPath .githooks",
     "serve": "node server/start.js",

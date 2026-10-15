@@ -1,4 +1,5 @@
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
+import { publicRequestDiagnostics } from '../../shared/publicRequestDiagnostics.js'
 import { modelAuthoredTurnEvidenceText } from '../../shared/turnEvidenceText.js'
 import {
   canonicalLocalPath,
@@ -337,6 +338,7 @@ export function buildAssistantModelContext({
   compactionRecovery = null,
   usage = null,
   turnModelUsage = null,
+  requestDiagnostics = null,
   estimatedPromptTokens = null,
   turnStartedAt = null,
   turnCompletedAt = null,
@@ -398,6 +400,7 @@ export function buildAssistantModelContext({
     ...(normalizedPluginPromptBlockIds.length
       ? { pluginPromptBlockIds: normalizedPluginPromptBlockIds }
       : {}),
+    ...publicRequestDiagnostics(requestDiagnostics),
     ...(normalizedUsage ? { usage: normalizedUsage } : {}),
     ...(normalizedTurnModelUsage ? { turnModelUsage: normalizedTurnModelUsage } : {}),
     ...(normalizedEstimatedPromptTokens !== null

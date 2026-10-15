@@ -19,11 +19,12 @@ import DiffToolbar from './DiffToolbar.jsx'
 import DiffViewerPane from './DiffViewerPane.jsx'
 import FeedbackComposer from './FeedbackComposer.jsx'
 import FileListOverlay from './FileListOverlay.jsx'
+import DiffReadingControls from './DiffReadingControls.jsx'
 
 const DEFAULT_TARGET = Object.freeze({ mode: 'uncommitted', branch: 'main' })
 const DEFAULT_VIEW = Object.freeze({
   sideBySide: false,
-  wordWrap: true,
+  wordWrap: false,
   highlightWords: true,
   hideWhitespace: false,
   collapseToken: 0,
@@ -191,18 +192,14 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
     <section className="relative flex min-h-0 flex-1 flex-col" data-testid="diff-review-panel" data-target-mode={target.mode} data-status={status}>
       <DiffToolbar
         compact={!panelExpanded}
-        contentMode={contentMode}
         fileListOpen={fileListOpen}
         onClose={onClose}
-        onContentModeChange={setContentMode}
         onExpandToggle={onExpandToggle}
         onRefresh={() => { setDiffs({}); setRefreshToken((token) => token + 1) }}
         onReviewCode={reviewCode}
-        onTargetChange={(next) => { setTarget(next); setDiffs({}); setPendingRefresh(false) }}
         onToggleFileList={() => setFileListOpen((open) => !open)}
         onViewChange={setView}
         t={t}
-        target={target}
         view={view}
       />
       {pendingRefresh && (
@@ -228,7 +225,7 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
             // reached from the folder list need not be in the change set at all,
             // so the path is enough to read it by.
             <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="diff-file-content">
-              <CurrentFileChange className="text-xs" counts={activeFile} file={activeFile || { path: selected }} t={t} wrap={view.wordWrap} />
+              <CurrentFileChange counts={activeFile} file={activeFile || { path: selected }} t={t} wrap={view.wordWrap} />
             </div>
           ) : (
             <DiffViewerPane
@@ -248,6 +245,8 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
         </div>
         {fileListOpen && (
           <FileListOverlay
+            controls={<DiffReadingControls contentMode={contentMode} onContentModeChange={setContentMode} target={target}
+              onTargetChange={next => { setTarget(next); setDiffs({}); setPendingRefresh(false) }} t={t} />}
             changed={source}
             entries={changedEntries}
             onClose={() => setFileListOpen(false)}

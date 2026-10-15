@@ -1,0 +1,8 @@
+{
+  "fixtureSessions": 2000,
+  "renderedRows": 70,
+  "frameMedianMs": 6.099999999999909,
+  "frameP95Ms": 30.09999999999991,
+  "domElements": 898,
+  "scope": "visible paged catalog; not live model or sustained streaming FPS"
+}

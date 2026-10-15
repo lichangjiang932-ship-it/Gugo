@@ -50,6 +50,17 @@ test('pure reasoning keeps a compact status and never exposes raw text', () => {
   assert.doesNotMatch(markup, /secret chain of thought/)
 })
 
+test('observed model progress is distinct from receiving public output, including later tool rounds', () => {
+  const msg = { content: 'Earlier narration', meta: { streaming: true, reasoning: 'PRIVATE_REASONING',
+    modelActivity: { kind: 'responding', phase: 'streaming' },
+    modelTiming: { version: 1, startedAt: 1000, firstProgressAt: 1200, firstPublicAt: null } } }
+  const waiting = render(msg)
+  assert.match(waiting, /Model progress received/)
+  assert.doesNotMatch(waiting, /Receiving model output|PRIVATE_REASONING/)
+  const receiving = render({ ...msg, meta: { ...msg.meta, modelTiming: { ...msg.meta.modelTiming, firstPublicAt: 1600 } } })
+  assert.match(receiving, /Receiving model output/)
+})
+
 test('completed reasoning keeps a compact safe summary without exposing raw text', () => {
   const markup = render({
     content: 'Final answer.',

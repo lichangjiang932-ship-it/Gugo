@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronLeft, ExternalLink, Maximize2, Menu, MoreVertical, RotateCw, X } from 'lucide-react'
-import { COMPARE_MODES, compareLabel, WIRED_COMPARE_MODES } from '../../../../lib/diffReviewModel.js'
+import { Check, ChevronLeft, ExternalLink, Maximize2, Menu, MoreVertical, RotateCw, X } from 'lucide-react'
 
 const BUTTON = 'flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 disabled:cursor-default disabled:opacity-40'
 const MENU = 'absolute right-0 top-8 z-30 w-64 max-w-[calc(100vw-1rem)] rounded-card border border-ink/10 bg-surface p-1 shadow-xl'
@@ -18,24 +17,20 @@ function ViewToggle({ active, children, onClick, testId }) {
 }
 
 /**
- * The reviewer chrome: the file list toggle, the comparison breadcrumb, search,
+ * The reviewer chrome: the file list toggle,
  * the view-options menu, and the panel controls. Every control here does
  * something today — the window button only appears when a desktop shell can
  * actually host a window, so nothing is a decorative icon.
  */
 export default function DiffToolbar({
   compact = false,
-  contentMode = 'diff',
   fileListOpen = false,
   onClose,
-  onContentModeChange,
   onExpandToggle,
   onRefresh,
   onReviewCode,
-  onTargetChange,
   onToggleFileList,
   onViewChange,
-  target,
   t,
   view,
 }) {
@@ -51,10 +46,6 @@ export default function DiffToolbar({
     return () => window.removeEventListener('mousedown', close)
   }, [menu])
 
-  const pick = (mode) => {
-    onTargetChange?.({ ...target, mode })
-    setMenu('')
-  }
   const flip = (key) => { onViewChange?.({ ...view, [key]: !view[key] }); setMenu('') }
 
   return (
@@ -68,64 +59,6 @@ export default function DiffToolbar({
         title={t(fileListOpen ? 'diffReview.hideFiles' : 'diffReview.showFiles')} onClick={() => onToggleFileList?.()}>
         <Menu className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
       </button>
-
-      {/* What the right pane is showing. Beside the list toggle rather than in
-          the options menu: a file the transcript kept no edits for has no diff
-          to show, and a reader looking at an empty pane has to be able to see
-          that the file itself is one press away. */}
-      <div className="inline-flex h-7 shrink-0 items-center rounded-control border border-ink/10 bg-paper-2 p-0.5 text-xs" role="group" aria-label={t('diffReview.modeDiff')}>
-        {[['diff', t('diffReview.modeDiff')], ['file', t('diffReview.modeFile')]].map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            data-testid={`diff-mode-${value}`}
-            aria-pressed={contentMode === value}
-            onClick={() => onContentModeChange?.(value)}
-            className={`h-6 rounded-[6px] px-2 transition-colors ${contentMode === value ? 'bg-paper text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <details className="relative" open={menu === 'target'}>
-        <summary
-          data-testid="diff-breadcrumb"
-          onClick={(event) => { event.preventDefault(); setMenu(menu === 'target' ? '' : 'target') }}
-          className="flex cursor-pointer list-none items-center gap-1 rounded-control px-2 py-1 text-xs text-ink-soft hover:bg-ink/[0.05] [&::-webkit-details-marker]:hidden">
-          <span className="truncate" data-testid="diff-breadcrumb-label">{compareLabel(target, t)}</span>
-          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-        </summary>
-        {/* Opens from the right edge of its own trigger, like the ⋮ beside it:
-            opened the other way it ran off the window whenever the region sat
-            against the right side, and the items a reader came for were the ones
-            cut off. The width cap is the belt to that braces. */}
-        <div role="menu" data-testid="diff-target-menu" className="absolute right-0 top-8 z-30 w-56 max-w-[calc(100vw-1rem)] rounded-card border border-ink/10 bg-surface p-1 shadow-xl">
-          {COMPARE_MODES.map((mode) => (
-            <button key={mode} type="button" role="menuitem" data-testid={`diff-target-${mode}`} className={`${MENU_ITEM} disabled:opacity-50`}
-              disabled={!WIRED_COMPARE_MODES.includes(mode)}
-              title={WIRED_COMPARE_MODES.includes(mode) ? undefined : t('diffReview.notWired')}
-              onClick={() => pick(mode)}>
-              <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center ${target.mode === mode ? 'text-accent' : 'text-transparent'}`}>
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              </span>
-              <span className="min-w-0 flex-1">{mode === 'branch' ? `${t('diffReview.compareAgainst')} ${target.branch}` : t(mode === 'all' ? 'diffReview.allChanges' : 'diffReview.uncommitted')}</span>
-            </button>
-          ))}
-          {target.mode === 'branch' && (
-            <div className="px-2 pb-1 pt-0.5">
-              <input
-                value={target.branch || ''}
-                data-testid="diff-branch-input"
-                aria-label={t('diffReview.compareAgainst')}
-                placeholder="main"
-                onChange={(event) => onTargetChange?.({ ...target, branch: event.target.value })}
-                className="h-7 w-full rounded-control border border-ink/15 bg-paper px-2 text-xs text-ink outline-none focus:border-focus"
-              />
-            </div>
-          )}
-        </div>
-      </details>
 
       <span className="min-w-0 flex-1" />
 

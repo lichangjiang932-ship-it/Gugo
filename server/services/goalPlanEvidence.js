@@ -17,6 +17,7 @@
  * Pure module: no DB, no I/O. The service supplies already-loaded events.
  */
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { parseTaskAcceptanceContract } from '../../shared/taskAcceptanceContract.js'
 import { isSubstantiveToolCall } from '../utils/toolLoopGuard.js'
 
 export const GOAL_EVIDENCE_SCHEMA_VERSION = 2
@@ -35,7 +36,7 @@ export const GOAL_EVIDENCE_CODES = Object.freeze({
 })
 
 export const GOAL_ACCEPTANCE_KINDS = Object.freeze([
-  'tool', 'command', 'file', 'artifact', 'verification', 'manual',
+  'tool', 'command', 'file', 'artifact', 'verification', 'manual', 'contract',
 ])
 
 const MAX_ID = 200
@@ -254,7 +255,9 @@ export function normalizeStepAcceptance(value) {
   const notes = []
   if (normalizedInput && Array.isArray(value.notes)) notes.push(...value.notes.map(cleanText).filter(Boolean))
   const checks = []
-  for (const item of list) {
+  const entries = list.flatMap(item => item?.kind === 'contract'
+    ? parseTaskAcceptanceContract(item).checks.map(check => ({ ...check, contractReceipt: true })) : [item])
+  for (const item of entries) {
     if (typeof item === 'string') {
       const text = cleanText(item)
       if (text) notes.push(text)
@@ -278,6 +281,7 @@ export function normalizeStepAcceptance(value) {
       if (typeof item.path !== 'string' || !item.path.trim()) throw new TypeError('file acceptance requires a path')
       checks.push(Object.freeze({
         kind, path: cleanText(item.path), sha256: cleanId(item.sha256),
+        ...(item.contractReceipt === true ? { contractReceipt: true } : {}),
       }))
       continue
     }
@@ -287,7 +291,8 @@ export function normalizeStepAcceptance(value) {
       }))
       continue
     }
-    checks.push(Object.freeze({ kind }))
+    checks.push(Object.freeze({ kind, ...(kind === 'verification' && item.contractReceipt === true
+      ? { checkKind: item.checkKind, cwd: cleanText(item.cwd), contractReceipt: true } : {}) }))
   }
   return Object.freeze({
     checks: Object.freeze(checks.length > 0 ? checks : [{ kind: 'tool' }]),
@@ -393,12 +398,18 @@ export function verifyStepEvidence({ events = [], evidence = null, sessionId = n
     const payload = payloadOf(terminal)
     const verification = payload.taskVerification
     const passed = isSuccessfulTurnCompletedEvent(terminal) && passingVerification(verification)
+      && (!check.contractReceipt || (Array.isArray(verification?.checks) && verification.checks.some(entry =>
+        entry.kind === check.checkKind && normalizePath(entry.cwd) === normalizePath(check.cwd) && SUCCESS_STATUSES.has(String(entry.status || '').toLowerCase()))))
     const label = checkFor(check).label
     if (passed) satisfied.push({ label, toolCallIds: [] })
     else unsatisfied.push(label)
   }
   for (const predicate of predicates) {
-    const matching = successful.filter((event) => predicate.test(event))
+    const pool = predicate.check.kind === 'file' && predicate.check.contractReceipt
+      ? toolEvents.filter(event => FILE_MUTATION_TOOLS.has(toolNameOf(event))
+        && (resultFileOutputs(event).some(output => normalizePath(output.path) === normalizePath(predicate.check.path))
+          || normalizePath(argsOf(event).path) === normalizePath(predicate.check.path))).slice(-1) : successful
+    const matching = pool.filter((event) => isSuccessfulToolCompletedEvent(event) && predicate.test(event))
     if (matching.length > 0) satisfied.push({ label: predicate.label, toolCallIds: matching.map((event) => cleanId(payloadOf(event).toolCallId)).filter(Boolean) })
     else unsatisfied.push(predicate.label)
   }

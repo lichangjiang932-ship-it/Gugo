@@ -78,6 +78,17 @@ test('a request that reported no cache usage at all is unknown, not a total miss
   assert.equal(measured.missedTokens, 40_000)
 })
 
+test('cache writes do not manufacture a missing cache-read measurement', () => {
+  const previous = request({ usage: { promptTokens: 10_000, cacheHitTokens: 8_000 } })
+  for (const read of [undefined, null, '', {}, []]) {
+    for (const write of [0, 2_000]) {
+      const current = request({ usage: { promptTokens: 10_500, cacheHitTokens: read, cacheCreationTokens: write } })
+      assert.deepEqual(computeCacheWaste([previous, current]), { missedTokens: 0, missedCost: 0, missCount: 0 })
+    }
+  }
+  assert.equal(computeCacheWaste([previous, request({ usage: { promptTokens: 10_500, cacheHitTokens: 0 } })]).missCount, 1)
+})
+
 test('compaction resets the baseline — new content is not re-billed content', () => {
   const records = [
     request({ timestamp: 1_000, usage: { promptTokens: 40_000, cacheHitTokens: 0, cacheCreationTokens: 40_000 } }),
@@ -102,29 +113,33 @@ test('a model switch is counted, and named as the cause', () => {
   assert.equal(described.cause, 'modelChanged')
 })
 
-test('an idle gap past the TTL is named as the cause instead of blaming the content', () => {
+test('expiry is only a possibility when the effective cache TTL is known', () => {
   const records = [
     request({ timestamp: 1_000, usage: { promptTokens: 30_000, cacheHitTokens: 0, cacheCreationTokens: 30_000 } }),
     request({ timestamp: 1_000 + CACHE_TTL_MS + 1, usage: { promptTokens: 30_000, cacheHitTokens: 0, cacheCreationTokens: 30_000 } }),
   ]
   const miss = [...collectCacheMisses(records).values()][0]
-  assert.equal(describeCacheMiss(miss).cause, 'idleExpiry')
+  assert.equal(describeCacheMiss(miss).cause, 'unknown')
+  assert.equal(describeCacheMiss(miss, { cacheTtlMs: CACHE_TTL_MS }).cause, 'possibleExpiry')
+  assert.equal(describeCacheMiss(miss, { cacheTtlMs: 60 * 60 * 1000 }).cause, 'unknown')
 })
 
-test('a miss with neither an idle gap nor a model switch is attributed to the content', () => {
+test('a miss alone cannot prove that content changed', () => {
   const records = [
     request({ timestamp: 1_000, usage: { promptTokens: 30_000, cacheHitTokens: 0, cacheCreationTokens: 30_000 } }),
     request({ timestamp: 2_000, usage: { promptTokens: 30_000, cacheHitTokens: 0, cacheCreationTokens: 30_000 } }),
   ]
   const miss = [...collectCacheMisses(records).values()][0]
-  assert.equal(describeCacheMiss(miss).cause, 'contentChanged')
+  assert.equal(describeCacheMiss(miss).cause, 'unknown')
+  assert.equal(describeCacheMiss(miss, { prefixChanged: true }).cause, 'prefixChanged')
 })
 
 test('cost needs a cache-read rate; without one the token count still stands', () => {
   const previous = { promptTokens: 30_000, modelKey: 'anthropic/claude-sonnet-5-5', timestamp: 1, reportedCache: true }
   const record = request({ usage: { promptTokens: 30_000, cacheHitTokens: 0, cacheCreationTokens: 30_000 } })
 
-  assert.equal(detectCacheMiss(previous, record).missedCost, 0)
+  assert.equal(detectCacheMiss(previous, record).missedCost, null)
+  assert.equal(detectCacheMiss(previous, record, { resolvePrice: () => ({ input: 3, cacheRead: null }) }).missedCost, null)
   const priced = detectCacheMiss(previous, record, {
     resolvePrice: () => ({ input: 3, cacheRead: 0.3 }),
   })

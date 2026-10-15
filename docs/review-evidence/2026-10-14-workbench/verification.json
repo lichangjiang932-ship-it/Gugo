@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-14",
+  "scope": "workbench details only; existing layout and theme preserved",
+  "baseline": {
+    "files": 6,
+    "tests": 42,
+    "status": "PASS"
+  },
+  "targeted": {
+    "files": 9,
+    "tests": 78,
+    "status": "PASS"
+  },
+  "additional": {
+    "files": 5,
+    "tests": 21,
+    "status": "PASS"
+  },
+  "offline": {
+    "tests": 71,
+    "status": "PASS"
+  },
+  "gates": [
+    "lint",
+    "typecheck",
+    "debt:check",
+    "i18n:check",
+    "i18n:keys",
+    "deps:check",
+    "audit:functions",
+    "build"
+  ],
+  "fullRegression": { "files": 1158, "status": "PASS", "exitCode": 0, "seconds": 1271.067 },
+  "browser": {
+    "cases": 8,
+    "themes": [
+      "white",
+      "dark"
+    ],
+    "contentWidths": [
+      860,
+      360
+    ],
+    "markdownFontPx": 14,
+    "markdownLineHeightPx": 24.5,
+    "headingPx": 23.1,
+    "sourceFontPx": 13,
+    "sourceLineHeightPx": 21.45,
+    "sourceDefaultWrap": false,
+    "sourceContentPreserved": true,
+    "filenameExtensionsVisible": true,
+    "scopedTypography": true,
+    "modelCalls": 0,
+    "realFileWrites": 0
+  },
+  "ownedQAProcessesStopped": true,
+  "committed": false,
+  "packaged": false
+}

@@ -52,10 +52,10 @@ function setCachedText(blockType, fingerprint, text) {
 export function cachedBuild(blockType, input, sources, buildText) {
   const fingerprint = fingerprintFor(input)
   const cached = getCachedText(blockType, fingerprint)
-  if (cached != null) return { text: cached, fingerprint, sources }
+  if (cached != null) return { text: cached, fingerprint, sources, cacheObservation: 'hit' }
   const text = buildText()
   setCachedText(blockType, fingerprint, text)
-  return { text, fingerprint, sources }
+  return { text, fingerprint, sources, cacheObservation: 'miss' }
 }
 
 export function getPromptCompilerStats() {

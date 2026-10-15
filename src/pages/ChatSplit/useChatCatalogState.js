@@ -102,6 +102,7 @@ export default function useChatCatalogState({
     runtimeSkills,
     selectedContextWindow,
     selectedContextWindowAuthoritative,
+    selectedConfigRevision: Number.isInteger(selectedModelOption?.configRevision) ? selectedModelOption.configRevision : null,
     selectedModel,
     selectedModelProviderId,
     setSelectedModel,

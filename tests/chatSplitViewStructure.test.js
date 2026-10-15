@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import ts from 'typescript'
 
 const read = (path) => fs.readFileSync(new URL(path, import.meta.url), 'utf8')
 const lineCount = (source) => source.trimEnd().split(/\r?\n/).length
@@ -18,26 +19,13 @@ test('chat split view and extracted right panels stay within the component size 
   assert.ok(lineCount(sessionHeader) <= 100, `ChatSessionHeader.jsx has ${lineCount(sessionHeader)} lines`)
 })
 
-test('the header opens the checklist instead of the branch navigator', () => {
-  assert.match(headerBar, /data-testid="header-plan-toggle"/)
-  assert.match(headerBar, /aria-pressed=\{planVisible \|\| undefined\}/)
-  assert.doesNotMatch(headerBar, /SessionBranchNavigator/)
-  // The view mounts that bar and nothing else of its presentation.
-  assert.match(view, /<ChatSessionHeaderBar/)
-  assert.doesNotMatch(view, /SessionBranchNavigator/)
-})
-
-test('chat split view delegates header presentation while keeping its controls and selectors', () => {
-  assert.match(view, /import ChatSessionHeaderBar from '\.\/chatSplitView\/ChatSessionHeaderBar\.jsx'/)
-  assert.match(headerBar, /import \{ ChatPreviewButton, ChatSessionHeading, ChatWorkbenchToggle \} from '\.\/ChatSessionHeader\.jsx'/)
-  assert.match(headerBar, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)
-  assert.match(headerBar, /data-testid="chat-session-title"/)
-  assert.match(headerBar, /<ChatWorkbenchToggle[\s\S]*?open=\{workbenchOpen\}/)
-  assert.match(headerBar, /onClick=\{onWorkbenchToggle\}/)
-  assert.match(headerBar, /aria-controls="right-workbench"/)
-  assert.match(headerBar, /aria-expanded=\{workbenchOpen\}/)
-  assert.match(sessionHeader, /<h1[\s\S]*?\{\.\.\.headingAttributes\}/)
-  assert.match(sessionHeader, /<button[\s\S]*?\{\.\.\.buttonAttributes\}/)
+// Behavior lives in unit/ChatHeaderContract.test.jsx. Keep only actual ownership constraints here.
+const imports = text => ts.createSourceFile('view.jsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JSX).statements
+  .filter(ts.isImportDeclaration).map(node => node.moduleSpecifier.text)
+test('header presentation stays owned by the header bar rather than duplicated in the view', () => {
+  assert.ok(imports(view).includes('./chatSplitView/ChatSessionHeaderBar.jsx'))
+  assert.ok(imports(headerBar).includes('./ChatSessionHeader.jsx'))
+  assert.ok(!imports(view).some(name => name.includes('SessionBranchNavigator')))
 })
 
 test('chat split view delegates the right region without changing its API', () => {

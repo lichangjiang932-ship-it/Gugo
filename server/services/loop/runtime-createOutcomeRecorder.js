@@ -514,7 +514,7 @@ function recordNoProgressAndSignals(s, outcome, executedCall) {
   // else the batch managed — of which a turn like this one has many, all beside
   // the artifact it cannot finish.
   if (!i.noProgressReason) {
-    const rejection = trackPolicyBlockedArtifactRejection(s, outcome.result)
+    const rejection = trackPolicyBlockedArtifactRejection(s, outcome.result, executedCall)
     if (rejection) {
       i.noProgressReason = 'artifact_format_policy_blocked'
       i.noProgressCode = rejection.code

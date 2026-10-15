@@ -61,7 +61,7 @@ export function optionalWireDiagnostics(value) {
 }
 
 /** Called only after the durable physical-attempt fence has succeeded, before fetch. */
-export async function emitWirePreparation(state, { wireDiagnostics, modelRequestId, physicalAttempt, configRevision } = {}, { warn = logWarn } = {}) {
+export async function emitWirePreparation(state, { wireDiagnostics, modelRequestId, physicalAttempt, configRevision, contextUsage } = {}, { warn = logWarn } = {}) {
   let current = optionalWireDiagnostics(wireDiagnostics)
   if (!current) return
   if (Number.isSafeInteger(configRevision) && configRevision > 0 && current.configFingerprint) {
@@ -81,7 +81,7 @@ export async function emitWirePreparation(state, { wireDiagnostics, modelRequest
   previousWireByState.set(state, current)
   if (typeof state.onModelPhase !== 'function') return
   try {
-    await state.onModelPhase({ phase: 'wire_prepared', iteration: state.iter, modelRequestId, physicalAttempt, wireDiagnostics: observation })
+    await state.onModelPhase({ phase: 'wire_prepared', iteration: state.iter, modelRequestId, physicalAttempt, wireDiagnostics: observation, ...(contextUsage ? { contextUsage } : {}) })
   } catch (error) {
     if (durableObservers.has(state.onModelPhase) || error?.name === 'AbortError') {
       try { error.retryable = false; error.modelRequestOutcome = 'not_sent'; error.unsafeToReplay = true } catch { /* immutable error */ }

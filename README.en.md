@@ -1,5 +1,7 @@
 # Gugo
 
+> Start at [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md) for current engineering status, authoritative contracts, open debt and verification evidence. Dated reports are historical records.
+
 [简体中文](README.md) | **English**
 
 Gugo is a free, open-source, local-first desktop agent for tools, memory, background jobs,

@@ -42,7 +42,8 @@ export default function ActivityStream({ msg }) {
   // Whether any of the reply has actually reached the reader. Text the model
   // writes before its first tool call is held server-side, so the stream can be
   // long underway while this is still false.
-  const hasAnswerText = Boolean(String(msg?.content || '').trim())
+  const hasAnswerText = meta.modelTiming?.version === 1
+    ? Number.isFinite(meta.modelTiming.firstPublicAt) : Boolean(String(msg?.content || '').trim())
 
   if (running && !connectionNeedsAttention) {
     return fallback
@@ -75,6 +76,10 @@ function activityLabel(meta, toolCalls, t, hasAnswerText = false) {
   }
   if (activity?.kind === 'tool_arguments' || activity?.phase === 'tool_arguments') {
     return t('toolActivity.preparingArguments', { name: toolCallLabel(activity.toolName, t) })
+  }
+  if (['reasoning', 'responding'].includes(activity?.kind) && meta.modelTiming?.version === 1
+    && Number.isFinite(meta.modelTiming.firstProgressAt) && !Number.isFinite(meta.modelTiming.firstPublicAt)) {
+    return t('usage.waitingPublicOutput')
   }
   if (activity?.kind === 'reasoning') return t('chatMessages.activityReasoning')
   if (activity?.kind === 'model' && activity.phase === 'compacting') return t('chatMessages.activityCompacting')

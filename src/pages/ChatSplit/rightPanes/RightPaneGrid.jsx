@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
+import RightRegionFrame from './RightRegionFrame.jsx'
 import { setRegionOpen } from '../../../lib/chatLayoutBudget.js'
 import { GUTTER_PX, MIN_PANE_WIDTH, useRightRegionLayout } from './useRightRegionLayout.js'
 
@@ -25,6 +26,7 @@ import { GUTTER_PX, MIN_PANE_WIDTH, useRightRegionLayout } from './useRightRegio
  */
 export default function RightPaneGrid({
   bottoms = [],
+  onClose,
   t,
   top = null,
 }) {
@@ -99,16 +101,16 @@ export default function RightPaneGrid({
     />
   )
 
-  return (
+  const panel = (
     <div
       data-testid="right-pane-grid"
-      className="relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden p-1.5"
-      style={{ width: `${region.width}px` }}
+      className={`relative flex min-h-0 flex-col overflow-hidden p-1.5 ${region.overlay ? 'min-w-0 flex-1' : 'h-full shrink-0'}`}
+      style={{ width: region.overlay ? '100%' : `${region.width}px` }}
     >
       {/* Inside the region, not straddling its edge: the region clips its own
           overflow, so a handle hung on the outside is cut in half and only the
           sliver that happens to be inside can be grabbed. */}
-      <button
+      {!region.overlay && <button
         type="button"
         data-testid="right-region-resize-handle"
         role="separator"
@@ -120,7 +122,7 @@ export default function RightPaneGrid({
         onPointerDown={region.beginWidthDrag}
         onKeyDown={region.resizeWidthWithKeyboard}
         onDoubleClick={region.resetWidth}
-      />
+      />}
 
       {top && (
         <>
@@ -167,4 +169,7 @@ export default function RightPaneGrid({
       )}
     </div>
   )
+  return <RightRegionFrame onClose={onClose} overlay={region.overlay} t={t} width={region.width}>
+    {panel}
+  </RightRegionFrame>
 }

@@ -40,12 +40,12 @@ test('the panel mounts and switching every comparison target keeps rendering', a
 
   // A dependency array is evaluated while rendering, so this is the exact path
   // that used to throw before the panel could mount: switch to every target.
+  await act(async () => { dom.window.document.querySelector('[data-testid="diff-toggle-files"]').click() })
   for (const mode of ['all', 'branch', 'uncommitted', 'session']) {
-    const summary = dom.window.document.querySelector('[data-testid="diff-breadcrumb"]')
-    await act(async () => { summary.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
-    const option = dom.window.document.querySelector(`[data-testid="diff-target-${mode}"]`)
-    assert.ok(option, `${mode} is offered`)
-    await act(async () => { option.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
+    const select = dom.window.document.querySelector('[data-testid="diff-target-select"]')
+    const option = select.querySelector(`[data-testid="diff-target-${mode}"]`)
+    assert.ok(option && !option.disabled, `${mode} is offered`)
+    await act(async () => { select.value = mode; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })) })
     assert.equal(
       dom.window.document.querySelector('[data-testid="diff-review-panel"]').getAttribute('data-target-mode'),
       mode,

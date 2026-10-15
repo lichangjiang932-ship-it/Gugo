@@ -1,7 +1,7 @@
 import { Pause, Plus, Send, Square } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useId, useRef } from 'react'
 import PermissionModeSwitcher from '../../../components/PermissionModeSwitcher.jsx'
-import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
+import { formatContextPercent, resolveContextMeter } from '../../../lib/contextMeter.js'
 import ModelPicker from '../ModelPicker.jsx'
 import ContextUsagePanel from '../chatMessages/ContextUsagePanel.jsx'
 import { modelReadinessMessageKey } from '../chatModelReadiness.js'
@@ -10,16 +10,14 @@ import { modelReadinessMessageKey } from '../chatModelReadiness.js'
  * 上下文用量圆环:满环 = 上下文窗口用满。颜色随用量变化:
  * 绿 < 60% · 琥珀 60-80% · 红 ≥ 80%。点击展开/收起详情面板。
  */
-function ContextRing({ percent }) {
+function ContextRing({ percent, known = true }) {
   const radius = 7
   const circumference = 2 * Math.PI * radius
   const clamped = Math.max(0, Math.min(100, Number(percent) || 0))
-  // A real but small use (1% of a large window) drew an arc thinner than its
-  // own round caps, so the ring read as empty — as if it were broken. Any use
-  // shows at least a sliver; the exact figure stays in the tooltip.
-  const shown = clamped > 0 ? Math.max(clamped, 4) : 0
+  // Keep the actual arc proportion. Tiny non-zero values remain explicit in the tooltip.
+  const shown = clamped
   const offset = circumference * (1 - shown / 100)
-  const color = clamped >= 80
+  const color = !known ? 'currentColor' : clamped >= 80
     ? 'rgb(var(--color-danger-rgb))'
     : clamped >= 60
       ? 'rgb(var(--color-warning-rgb))'
@@ -27,7 +25,7 @@ function ContextRing({ percent }) {
   return (
     <svg width="16" height="16" viewBox="0 0 18 18" className="block" aria-hidden="true">
       <circle cx="9" cy="9" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2" />
-      <circle cx="9" cy="9" r={radius} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} transform="rotate(-90 9 9)" />
+      <circle cx="9" cy="9" r={radius} fill="none" stroke={color} strokeWidth="2" strokeLinecap="butt" strokeDasharray={circumference} strokeDashoffset={offset} transform="rotate(-90 9 9)" />
     </svg>
   )
 }
@@ -60,6 +58,20 @@ export default function ComposerActions({
   t,
 }) {
   const contextPopoverRef = useRef(null)
+  const contextTriggerRef = useRef(null)
+  const contextClosingRef = useRef(false)
+  const contextPanelId = useId()
+  const closeContext = useCallback((restoreFocus = false) => {
+    if (!contextPanelOpen || contextClosingRef.current) return
+    contextClosingRef.current = true
+    onToggleContext?.()
+    if (restoreFocus) contextTriggerRef.current?.focus({ preventScroll: true })
+  }, [contextPanelOpen, onToggleContext])
+  useEffect(() => {
+    if (!contextPanelOpen) return
+    contextClosingRef.current = false
+    contextPopoverRef.current?.querySelector('[role="dialog"]')?.focus({ preventScroll: true })
+  }, [contextPanelOpen])
   const readinessMessageKey = modelReadinessMessageKey(modelReadiness)
   // A ready or pending attachment is draft content: the product rule is that an
   // attachment never turns send into pause, so a stray tap cannot freeze a turn
@@ -75,34 +87,21 @@ export default function ComposerActions({
       ? t(readinessMessageKey)
       : t('chatComposer.send')
   const usage = contextUsage || {}
-  const measuredTokens = normalizeOptionalTokenCount(usage.actualPromptTokens)
-  const hasMeasuredTokens = measuredTokens !== null
-  const serverEstimatedTokens = normalizeOptionalTokenCount(usage.serverEstimatedPromptTokens)
-  const usedTokens = measuredTokens
-    ?? serverEstimatedTokens
-    ?? Number(usage.estimatedTokens || 0)
-  const contextWindowAuthoritative = usage.contextWindowAuthoritative !== false
-  const contextWindow = contextWindowAuthoritative
-    ? Math.max(1, Number(usage.contextWindow || 0))
-    : null
-  const measuredPercent = contextWindowAuthoritative
-    ? (hasMeasuredTokens || serverEstimatedTokens !== null
-        ? (usedTokens / contextWindow) * 100
-        : Number(usage.percent))
-    : 0
-  const percent = Number.isFinite(measuredPercent) ? Math.max(0, Math.min(100, measuredPercent)) : 0
-  const tokenSummary = `${hasMeasuredTokens ? '' : '~'}${usedTokens.toLocaleString()} tokens`
-  const ringTitle = contextWindowAuthoritative
-    ? `${Math.round(percent)}% · ${tokenSummary.replace(' tokens', '')} / ${Number(usage.contextWindow || 0).toLocaleString()} tokens`
-    : tokenSummary
+  const meter = resolveContextMeter(usage)
+  const percent = meter.percent === null ? 0 : Math.max(0, Math.min(100, meter.percent))
+  const tokenSummary = `~${Math.ceil(meter.usedTokens).toLocaleString()} tokens`
+  const ringTitle = [t('chat.contextUsage.pendingContext'), formatContextPercent(meter.percent), tokenSummary,
+    meter.contextWindow ? `/ ${meter.contextWindow.toLocaleString()} tokens` : t('chat.contextUsage.windowUnknown')].filter(Boolean).join(' · ')
 
   useEffect(() => {
     if (!contextPanelOpen) return undefined
     const closeOnOutsidePointer = (event) => {
-      if (!contextPopoverRef.current?.contains(event.target)) onToggleContext?.()
+      if (!contextPopoverRef.current?.contains(event.target)) closeContext()
     }
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape') onToggleContext?.()
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault(); event.stopPropagation(); closeContext(true)
+      }
     }
     window.addEventListener('pointerdown', closeOnOutsidePointer)
     window.addEventListener('keydown', closeOnEscape)
@@ -110,7 +109,7 @@ export default function ComposerActions({
       window.removeEventListener('pointerdown', closeOnOutsidePointer)
       window.removeEventListener('keydown', closeOnEscape)
     }
-  }, [contextPanelOpen, onToggleContext])
+  }, [closeContext, contextPanelOpen])
 
   return (
     <div data-testid="chat-composer-actions" className="mt-2.5 flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
@@ -141,15 +140,21 @@ export default function ComposerActions({
           onManage={onManageModels}
           onRetry={onModelRetry}
         />
-        <div ref={contextPopoverRef} className="relative shrink-0">
+        <div ref={contextPopoverRef} className="relative shrink-0"
+          onBlurCapture={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) closeContext() }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeContext(true) }
+          }}>
           {contextPanelOpen && (
             <div className="fixed bottom-24 right-3 z-50 max-h-[min(60dvh,28rem)] w-[min(19rem,calc(100vw-1.5rem))] max-w-[calc(100%-1.5rem)] overflow-y-auto lg:absolute lg:bottom-[calc(100%+8px)] lg:right-0 lg:max-w-none" data-testid="context-usage-popover">
-              <ContextUsagePanel contextUsage={usage} contextWindow={usage.contextWindow} t={t} />
+              <ContextUsagePanel id={contextPanelId} contextUsage={usage} contextWindow={usage.contextWindow} t={t} />
             </div>
           )}
           <button
             type="button"
             data-testid="context-ring"
+            ref={contextTriggerRef}
+            aria-controls={contextPanelOpen ? contextPanelId : undefined}
             onClick={onToggleContext}
             aria-expanded={!!contextPanelOpen}
             aria-haspopup="dialog"
@@ -157,7 +162,7 @@ export default function ComposerActions({
             title={ringTitle}
             className={`chat-composer-action-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${contextPanelOpen ? 'bg-paper-2 text-ink' : 'text-ink-fade hover:bg-ink/[0.045] hover:text-ink'}`}
           >
-            <ContextRing percent={percent} />
+            <ContextRing percent={percent} known={meter.percent !== null} />
           </button>
         </div>
         {isGenerating && hasDraftText && (

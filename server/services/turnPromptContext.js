@@ -268,6 +268,8 @@ export function prepareTurnPromptContext({
       memoryIds: memory.memoryIds,
       ...(memory.diagnostics ? { memoryDiagnostics: memoryDiagnosticSummary(memory.diagnostics) } : {}),
       promptFingerprints,
+      compilerDiagnostics: { version: 1, source: 'turn_preparation', blocks: Object.fromEntries(
+        Object.entries({ identity, ishiki, skills, sessions: resolvedSessions }).map(([key, block]) => [key, block?.cacheObservation || 'not_observed'])) },
       pluginPromptBlockIds: (runtimePrompts.blocks || []).map((block) => `${block.pluginId}:${block.id}`),
       compactionArchiveId: resolvedSessions?.sources?.archiveId || null,
       compactionBoundary: resolvedSessions?.sources?.compactionBoundary || null,

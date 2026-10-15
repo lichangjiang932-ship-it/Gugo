@@ -1,0 +1,49 @@
+{
+  "tasks": [
+    {
+      "id": "ledger-snapshot-repair",
+      "prompt": "Repair aggregate(events, {since=null}) in src/ledger.js. Events have userId/sessionId/turnId/type/sequence/at/promptTokens. Without since, count each scoped turn once and use its latest cumulative boundary by sequence, not the sum of paused/completed snapshots. With since, sum only valid completed model.phase counters at or after since. Count distinct boundary turns in that window. Ignore non-numeric, negative and non-finite counters. Do not mutate input.",
+      "workspace": "./fixtures/ledger-snapshot-repair",
+      "mode": "acceptEdits",
+      "timeoutMs": 600000,
+      "verify": [
+        {
+          "script": "./verifiers/reliability.mjs",
+          "args": [
+            "ledger-snapshot-repair"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rename-order-repair",
+      "prompt": "Repair createRenamer(write) in src/rename.js. Return a function rename(id,title) that serializes writes for the same id while different ids can progress independently. Return each write result or rejection. A rejected write must never be replayed and must not poison later explicit operations. Preserve this API and do not add dependencies.",
+      "workspace": "./fixtures/rename-order-repair",
+      "mode": "acceptEdits",
+      "timeoutMs": 600000,
+      "verify": [
+        {
+          "script": "./verifiers/reliability.mjs",
+          "args": [
+            "rename-order-repair"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cache-unknown-repair",
+      "prompt": "Repair classify(usage) in src/cache.js. Return {readReported,writeReported,hitRate}. Require finite non-negative numeric promptTokens plus a valid read count partition; derive one missing hit/miss count from promptTokens, and reject inconsistent partitions. Missing/invalid reads are unknown, never zero. cacheCreationTokens is independent: explicit zero is reported, absence/invalid is unknown. hitRate is a percentage or null for unknown/zero-input. Do not mutate input.",
+      "workspace": "./fixtures/cache-unknown-repair",
+      "mode": "acceptEdits",
+      "timeoutMs": 600000,
+      "verify": [
+        {
+          "script": "./verifiers/reliability.mjs",
+          "args": [
+            "cache-unknown-repair"
+          ]
+        }
+      ]
+    }
+  ]
+}

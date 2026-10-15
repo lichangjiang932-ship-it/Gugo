@@ -6,7 +6,7 @@ import { useUiContributions } from '../../../plugins/uiContributionRegistry.js'
 import { previewDrawsInApp } from '../preview/previewDrawsInApp.js'
 import usePreviewElementPicker from '../rightWorkbench/usePreviewElementPicker.js'
 import DockHost from '../dock/DockHost.jsx'
-import { readDockState, subscribeDock } from '../dock/dockStore.js'
+import { closeDock, readDockState, subscribeDock } from '../dock/dockStore.js'
 import RightPaneGrid from '../rightPanes/RightPaneGrid.jsx'
 import RightPreviewPane from '../RightPreviewPane.jsx'
 import RightWorkbench from '../RightWorkbench.jsx'
@@ -94,6 +94,7 @@ export default function ChatRightPanels({
   return (
     <RightPaneGrid
       t={t}
+      onClose={() => { onCloseWorkbench?.(); onClosePreview?.(); closeDock() }}
       top={showWorkbench ? (
         <RightWorkbench
           embedded

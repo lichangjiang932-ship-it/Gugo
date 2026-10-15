@@ -1,5 +1,8 @@
 import { normalizeModelPhaseProgress } from '../../shared/modelPhaseProgress.js'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
+import { compilerReuse, promptCompilerDiagnosticsSchema } from '../../shared/promptCompilerDiagnostics.js'
+import { publicRequestDiagnostics } from '../../shared/publicRequestDiagnostics.js'
+import { modelContextUsageSchema } from '../../shared/modelContextUsage.js'
 import {
   checkpointMessagesForTurn,
 } from './turnRecoveryProjection.js'
@@ -84,6 +87,7 @@ function createCheckpointWriter({
       turnMessages: state.checkpointMessages,
       // Host-produced display evidence overrides any loop/plugin checkpoint field.
       publicTimeline: copyPublicTimelineCheckpoint(state.publicTimeline, scope),
+      requestDiagnostics: publicRequestDiagnostics(state.requestDiagnostics),
       ...(state.latestModelUsage ? { latestModelUsage: state.latestModelUsage } : {}),
       ...(state.turnModelUsage ? { turnModelUsage: state.turnModelUsage } : {}),
       ...(state.latestEstimatedPromptTokens !== null
@@ -161,10 +165,11 @@ function toolFailure(result) {
   }
 }
 
-function createTurnLoopEventCallbacks({ emitter, state, memoryDiagnostics = null }) {
+function createTurnLoopEventCallbacks({ emitter, state, memoryDiagnostics = null, compilerDiagnostics = null }) {
   let memoryReported = false
+  let compilerReported = false
   return {
-    onModelPhase: requireContextDiagnosticDurability(async ({ phase, iteration, usage, modelName, error, contextDiagnostics, wireDiagnostics, modelRequestId, physicalAttempt, ...progress }) => {
+    onModelPhase: requireContextDiagnosticDurability(async ({ phase, iteration, usage, modelName, error, contextDiagnostics, wireDiagnostics, modelSource, modelRequestId, physicalAttempt, contextUsage, ...progress }) => {
       const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
       if (normalizedUsage) {
         state.latestModelUsage = normalizedUsage
@@ -173,13 +178,24 @@ function createTurnLoopEventCallbacks({ emitter, state, memoryDiagnostics = null
       const diagnostics = contextDiagnostics ? optionalContextDiagnostics({ ...contextDiagnostics,
         ...(memoryDiagnostics && !memoryReported ? { memory: memoryDiagnostics } : {}) }) : null
       const wire = wireDiagnostics ? optionalWireDiagnostics(wireDiagnostics) : null
+      if (diagnostics) state.requestDiagnostics = { modelContextDiagnostics: diagnostics }
+      if (wire) state.requestDiagnostics = { ...state.requestDiagnostics, modelWireDiagnostics: wire }
+      const contextObservation = modelContextUsageSchema.safeParse(contextUsage)
+      if (contextObservation.success) state.requestDiagnostics = { ...state.requestDiagnostics, modelContextUsage: contextObservation.data }
+      const compiler = promptCompilerDiagnosticsSchema.safeParse(compilerReported ? compilerReuse('turn_reuse') : compilerDiagnostics)
+      if (diagnostics && compiler.success) state.requestDiagnostics.modelCompilerDiagnostics = compiler.data
       await emitter('model.phase', {
         phase, iteration, usage: normalizedUsage || usage, modelName, error,
-        ...(diagnostics ? { contextDiagnostics: diagnostics } : {}),
-        ...(wire ? { wireDiagnostics: wire, modelRequestId, physicalAttempt } : {}),
+        ...(diagnostics ? { contextDiagnostics: diagnostics, ...(compiler.success ? { compilerDiagnostics: compiler.data } : {}) } : {}),
+        ...(wire ? { wireDiagnostics: wire } : {}),
+        ...(modelRequestId ? { modelRequestId } : {}),
+        ...(physicalAttempt ? { physicalAttempt } : {}),
+        ...(modelSource ? { modelSource } : {}),
+        ...(contextObservation.success ? { contextUsage: contextObservation.data } : {}),
         ...normalizeModelPhaseProgress(progress),
       })
       if (diagnostics && memoryDiagnostics) memoryReported = true
+      if (diagnostics) compilerReported = true
     }),
     onModelDelta: async ({ text, iteration, modelName }) => {
       state.streamedAssistantText += String(text || '')
@@ -356,7 +372,7 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       state,
     })
     const eventCallbacks = createTurnLoopEventCallbacks({ emitter, state,
-      memoryDiagnostics: promptContext?.memoryDiagnostics || null })
+      memoryDiagnostics: promptContext?.memoryDiagnostics || null, compilerDiagnostics: promptContext?.compilerDiagnostics || null })
     const steeringOptions = createTurnSteeringOptions({
       deps, scope, steeringOwnerId, steeringScope,
     })

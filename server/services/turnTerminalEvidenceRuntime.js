@@ -116,6 +116,7 @@ function projectEvidence(runtime, options = {}) {
     pluginPromptBlockIds: state.promptContextSnapshot?.pluginPromptBlockIds,
     checkpointRecovery: state.checkpointRecovery,
     latestModelUsage: state.latestModelUsage,
+    requestDiagnostics: state.requestDiagnostics,
     turnModelUsage: state.turnModelUsage,
     latestEstimatedPromptTokens: state.latestEstimatedPromptTokens,
     effectiveTurnStartedAt: state.effectiveTurnStartedAt,

@@ -62,7 +62,7 @@ test('direct files open in reading view with a path, a source toggle and an "Ope
     const open = element.querySelector('[data-testid="preview-open-menu"]')
     assert.equal(open.tagName, 'SUMMARY')
     // The chip is the file itself: its icon and name, not a generic "Open".
-    assert.match(open.textContent, /^report$/)
+    assert.match(open.textContent, /^report\.md$/)
     assert.doesNotMatch(open.closest('details').textContent, /chatPreview.openPreview/, 'no redundant "preview here" entry')
     // The menu names the file it acts on before listing the actions, so a reader
     // who has several previews open can tell which one this is.

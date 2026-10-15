@@ -252,7 +252,7 @@ export default function SettingsDiagnosticsPanel({
         </SettingsGroup>
       ) : null}
 
-      {authMode !== 'local' ? (
+      {authMode === 'multi_user' ? (
         <SettingsGroup title={t('settings.emailLogin')}>
           <SettingsRow title={t('settings.smtpService')} description={mail?.server || t('modelProviders.notConfigured')}>
             <StatusDot ok={mail?.configured} />

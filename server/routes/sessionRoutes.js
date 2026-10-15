@@ -125,9 +125,11 @@ async function handleSessionMetadataAction(req, res, { admin, parts, userId }) {
     })
   }
   let title
+  let expectedRevision
   if (SESSION_ACTIONS_WITH_BODY.has(action)) {
     const body = await readJson(req).catch(() => ({}))
     title = typeof body?.title === 'string' ? body.title.trim() : ''
+    expectedRevision = body.expectedRevision
     if (!title) {
       return sendJson(res, 400, {
         error: { code: 'SESSION_TITLE_REQUIRED', message: 'title is required' },
@@ -138,6 +140,7 @@ async function handleSessionMetadataAction(req, res, { admin, parts, userId }) {
     userId,
     sessionId: decodeURIComponent(parts[2]),
     ...(title === undefined ? {} : { title }),
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
   })
   return session
     ? sendJson(res, 200, { ok: true, session })

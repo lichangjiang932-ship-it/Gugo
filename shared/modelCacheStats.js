@@ -1,11 +1,12 @@
 /**
- * Prompt-cache waste, attributed per model request.
+ * Potential prompt-cache waste, estimated per model request.
  *
- * A hit rate tells you that something was missed but not why. This says how many
- * tokens were in the previous prompt and were billed again anyway, how much that
- * extra cost, how long the gap was before the request, and whether the model
- * changed underneath it — which between them cover the causes worth acting on:
- * an idle gap past the TTL, a model switch, or content that genuinely moved.
+ * Request-size overlap is a heuristic, not proof of identical prefixes, cache
+ * eligibility or billing. Samples without a measured cache read are excluded.
+ *
+ * The estimated input overlap, a rate-based cost estimate, the idle gap and
+ * model changes are diagnostic clues. They do not establish why the provider
+ * missed its cache; the caller must retain that distinction when presenting them.
  *
  * Modelled on pi's `packages/coding-agent/src/core/cache-stats.ts`; the shape and
  * the thresholds are theirs, adapted to this project's usage records. The point
@@ -15,7 +16,7 @@
 
 import { normalizeOptionalUsageNumber } from './modelUsage.js'
 
-/** Anthropic's default cache TTL: an idle gap past this explains a miss. */
+/** Anthropic's short TTL, for callers with explicit policy knowledge; never a cross-provider default. */
 export const CACHE_TTL_MS = 5 * 60 * 1000
 
 /**
@@ -26,8 +27,8 @@ export const CACHE_TTL_MS = 5 * 60 * 1000
  * reading of that difference; reuse it rather than re-deciding what counts.
  */
 function reportsCacheUsage(usage) {
+  // A measured write says nothing about whether cache reads were reported.
   return normalizeOptionalUsageNumber(usage?.cacheHitTokens) !== null
-    || normalizeOptionalUsageNumber(usage?.cacheCreationTokens) !== null
 }
 
 /**
@@ -63,10 +64,9 @@ function priceFor(record, resolvePrice) {
 /**
  * The waste on one request relative to the previous one.
  *
- * `missedTokens` is the part worth reading: tokens that were already in the
- * previous prompt and therefore should have been a cache read. A request that
- * simply grew (new tool output, a new turn) is not waste — only the overlap that
- * was re-billed is.
+ * `missedTokens` estimates the overlap of input counts not covered by reported
+ * reads. Growing input is not itself waste; neither this count nor the rate-based
+ * cost estimate establishes that the provider could or should have cached it.
  */
 /**
  * A prompt that came back noticeably smaller was rewritten, not drifted: context
@@ -104,14 +104,14 @@ export function detectCacheMiss(previous, record, { resolvePrice } = {}) {
 
   // Only the difference between what was paid and what a cache read would have
   // cost. Both rates come from the deployment's own price table; when it names
-  // no cache-read rate the cost is reported as unknown (0) rather than guessed,
+  // no cache-read rate the cost is reported as unknown (null) rather than guessed,
   // and the token count still stands on its own.
   const price = priceFor(record, resolvePrice)
-  const paidRate = Number(price?.input)
-  const readRate = Number(price?.cacheRead)
-  const missedCost = Number.isFinite(paidRate) && Number.isFinite(readRate)
+  const paidRate = normalizeOptionalUsageNumber(price?.input)
+  const readRate = normalizeOptionalUsageNumber(price?.cacheRead)
+  const missedCost = paidRate !== null && readRate !== null
     ? (missedTokens * Math.max(0, paidRate - readRate)) / 1_000_000
-    : 0
+    : null
 
   const timestamp = Number(record?.timestamp) || 0
   const previousTimestamp = Number(previous.timestamp) || 0
@@ -152,7 +152,7 @@ function scan(records, { resolvePrice } = {}) {
     const miss = detectCacheMiss(previous, record, { resolvePrice })
     if (miss) {
       totals.missedTokens += miss.missedTokens
-      totals.missedCost += miss.missedCost
+      totals.missedCost = totals.missedCost === null || miss.missedCost === null ? null : totals.missedCost + miss.missedCost
       totals.missCount += 1
       misses.set(record, miss)
     }
@@ -161,7 +161,7 @@ function scan(records, { resolvePrice } = {}) {
   return { totals, misses }
 }
 
-/** Session totals: tokens that should have been cache reads but were re-billed. */
+/** Session totals of potentially repeated input, not provider billing facts. */
 export function computeCacheWaste(records, options) {
   return scan(records, options).totals
 }
@@ -176,11 +176,12 @@ export function collectCacheMisses(records, options) {
  * cache expired on its own) or a model switch is not something they did wrong,
  * but content that moved is, and the two are indistinguishable without saying so.
  */
-export function describeCacheMiss(miss) {
+export function describeCacheMiss(miss, { cacheTtlMs = null, prefixChanged = null } = {}) {
   if (!miss) return null
-  const cause = miss.modelChanged
-    ? 'modelChanged'
-    : miss.idleMs > CACHE_TTL_MS ? 'idleExpiry' : 'contentChanged'
+  const ttl = normalizeOptionalUsageNumber(cacheTtlMs)
+  const cause = miss.modelChanged ? 'modelChanged'
+    : prefixChanged === true ? 'prefixChanged'
+      : ttl !== null && ttl > 0 && miss.idleMs > ttl ? 'possibleExpiry' : 'unknown'
   return { ...miss, cause }
 }
 

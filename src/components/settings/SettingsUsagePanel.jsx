@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import ActionButton from '../ui/ActionButton.jsx'
 import { getUsageReportApi } from '../../lib/usageClient.js'
 
 // Presets are sent as local calendar dates; the server parses them in local time
@@ -11,7 +11,8 @@ const WINDOWS = Object.freeze([
 ])
 
 function localDateDaysAgo(days) {
-  const date = new Date(Date.now() - days * 86_400_000)
+  const date = new Date()
+  date.setDate(date.getDate() - days)
   const pad = (value) => String(value).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
@@ -21,13 +22,17 @@ function formatNumber(value) {
   return Number.isFinite(numeric) ? numeric.toLocaleString() : '0'
 }
 
+function measuredRate(entry) {
+  return entry.cacheCoverage ? entry.cacheCoverage.hitRatePercent : entry.cacheHitRatePercent
+}
+
 function formatRate(value, t) {
   return value == null ? t('usage.cacheNotReported') : `${value}%`
 }
 
 function Stat({ label, value }) {
   return (
-    <div className="min-w-0 rounded-xl border border-ink/10 bg-paper px-4 py-3">
+    <div className="min-w-0 rounded-card border border-ink/10 bg-paper px-4 py-3">
       <p className="text-xs text-ink-fade">{label}</p>
       <p className="mt-1 truncate text-xl font-semibold leading-tight text-ink">{value}</p>
     </div>
@@ -37,7 +42,7 @@ function Stat({ label, value }) {
 function UsageTable({ title, nameLabel, rows, t }) {
   if (!rows.length) return null
   return (
-    <div className="min-w-0 rounded-xl border border-ink/10 bg-paper p-4" data-testid="settings-usage-table">
+    <div className="min-w-0 rounded-card border border-ink/10 bg-paper p-4" data-testid="settings-usage-table">
       <h2 className="text-base font-medium text-ink">{title}</h2>
       <div className="mt-3 min-w-0 overflow-x-auto">
         <table className="w-full min-w-0 border-collapse text-xs">
@@ -53,11 +58,11 @@ function UsageTable({ title, nameLabel, rows, t }) {
           <tbody>
             {rows.map((row) => (
               <tr key={row.key} className="border-t border-ink/10 text-ink">
-                <td className="max-w-[22rem] truncate py-1.5 pr-3 font-mono" title={row.key}>{row.key}</td>
+                <td className="max-w-[22rem] truncate py-1.5 pr-3 font-mono" title={row.modelName || row.key}>{row.modelName || row.key}{row.providerId && ` · ${row.providerId}`}{row.modelName && row.key !== row.modelName && ` #${row.sourceIndex}`}</td>
                 <td className="py-1.5 pr-3 text-right">{formatNumber(row.count)}</td>
                 <td className="py-1.5 pr-3 text-right">{formatNumber(row.usage?.promptTokens)}</td>
                 <td className="py-1.5 pr-3 text-right">{formatNumber(row.usage?.completionTokens)}</td>
-                <td className="py-1.5 text-right">{formatRate(row.cacheHitRatePercent, t)}</td>
+                <td className="py-1.5 text-right">{formatRate(measuredRate(row), t)}</td>
               </tr>
             ))}
           </tbody>
@@ -106,10 +111,11 @@ export default function SettingsUsagePanel({ t }) {
   }, [load, windowKey])
 
   const totals = report?.totals || {}
-  const modelRows = (report?.byModel || []).map((entry) => ({ ...entry, count: entry.modelPhases }))
+  const modelRows = (report?.byModel || []).map((entry, index) => ({ ...entry, sourceIndex: index + 1, count: entry.modelPhases }))
   const sessionRows = (report?.bySession || []).map((entry) => ({ ...entry, count: entry.turns }))
   const phaseTotal = Number(report?.phaseTotals?.totalTokens) || 0
   const waste = report?.cacheWaste || {}
+  const coverage = report?.cacheCoverage
   const turnTotal = Number(totals.totalTokens) || 0
   const empty = report && report.turns?.total === 0 && report.perModelPhases === 0
 
@@ -121,30 +127,27 @@ export default function SettingsUsagePanel({ t }) {
           <h1 className="mt-1 text-[22px] font-semibold leading-tight text-ink">{t('usage.title')}</h1>
           <p className="mt-1 text-sm text-ink-soft">{t('usage.subtitle')}</p>
         </div>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          disabled={busy}
-          data-testid="settings-usage-refresh"
-          className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-ink/15 bg-paper px-3.5 text-xs text-ink transition-colors hover:bg-paper-2 disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+        <ActionButton onClick={() => void refresh()} busy={busy || (!report && !error)} data-testid="settings-usage-refresh">
           {t('usage.refresh')}
-        </button>
+        </ActionButton>
       </div>
 
       <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2" role="group" aria-label={t('usage.window')}>
         {WINDOWS.map((entry) => (
-          <button
+          <ActionButton
             key={entry.key}
-            type="button"
+            size="sm"
+            selected={windowKey === entry.key}
             data-testid={`settings-usage-window-${entry.key}`}
             aria-pressed={windowKey === entry.key}
-            onClick={() => setWindowKey(entry.key)}
-            className={`h-8 rounded-lg border px-3 text-xs transition-colors ${windowKey === entry.key ? 'border-focus bg-paper-2 text-focus' : 'border-ink/15 bg-paper text-ink-soft hover:bg-paper-2'}`}
+            onClick={() => {
+              if (windowKey === entry.key) return
+              requestVersionRef.current += 1
+              setReport(null); setError(''); setWindowKey(entry.key)
+            }}
           >
             {t(entry.labelKey)}
-          </button>
+          </ActionButton>
         ))}
       </div>
 
@@ -164,7 +167,7 @@ export default function SettingsUsagePanel({ t }) {
             <Stat label={t('usage.turns')} value={formatNumber(report.turns?.total)} />
             <Stat label={t('usage.modelCalls')} value={formatNumber(report.perModelPhases)} />
             <Stat label={t('usage.totalTokens')} value={formatNumber(totals.totalTokens)} />
-            <Stat label={t('usage.cacheHitRate')} value={formatRate(report.cacheHitRatePercent, t)} />
+            <Stat label={t('usage.cacheHitRate')} value={formatRate(measuredRate(report), t)} />
           </div>
           <p className="text-xs text-ink-fade" data-testid="settings-usage-summary">
             {t('usage.turnsDetail', {
@@ -178,6 +181,17 @@ export default function SettingsUsagePanel({ t }) {
               completion: formatNumber(totals.completionTokens),
             })}
           </p>
+          {report.accounting?.basis === 'latest_turn_snapshots' && <p className="text-xs text-ink-fade">{t('usage.cumulativeBasis')}</p>}
+          {report.accounting?.basis === 'responses_in_window' && <p className="text-xs text-ink-fade" data-testid="usage-accounting-basis">{t('usage.periodBasis')}</p>}
+          {coverage && <section data-testid="settings-usage-cache-coverage" className="border-t border-ink/10 pt-3 text-xs text-ink-soft">
+            <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="flex justify-between gap-3"><dt>{t('usage.cacheReadCoverage')}</dt>
+                <dd className="font-mono text-ink">{formatNumber(coverage.readReported)} / {formatNumber(coverage.requests)}</dd></div>
+              <div className="flex justify-between gap-3"><dt>{t('usage.cacheWriteTokens')}</dt>
+                <dd className="font-mono text-ink">{coverage.cacheCreationTokens == null ? t('usage.cacheNotReported') : formatNumber(coverage.cacheCreationTokens)}</dd></div>
+            </dl>
+            <p className="mt-2 text-ink-fade">{t('usage.cacheCoverageHint', { count: formatNumber(coverage.readUnknown) })}</p>
+          </section>}
           {Number(waste.missCount) > 0 && (
             <p className="text-xs text-ink-soft" data-testid="settings-usage-cache-waste">
               {t('usage.cacheWaste', {

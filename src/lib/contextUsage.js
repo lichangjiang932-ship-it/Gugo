@@ -172,14 +172,25 @@ function contextPayload(message) {
   }
 }
 
-export function estimateClientContextUsage({
+function estimateMessagePayload(message) {
+  const payload = contextPayload(message)
+  const messageEstimate = estimateContextValue({ role: payload.role, content: payload.content })
+  const toolCallEstimate = estimateContextValue(payload.toolCalls)
+  const attachmentEstimate = estimateContextValue(payload.attachments)
+  return { visibleCharacters: payload.visibleText.length,
+    messageTokens: MESSAGE_OVERHEAD_TOKENS + messageEstimate.tokens,
+    toolCallTokens: toolCallEstimate.tokens, attachmentTokens: attachmentEstimate.tokens,
+    imageTokens: messageEstimate.imageTokens + toolCallEstimate.imageTokens + attachmentEstimate.imageTokens }
+}
+
+function buildContextUsage({
   messages = [],
   tools = [],
   systemPrompt = '',
   contextWindow = DEFAULT_MODEL_CONTEXT_WINDOW,
   actualPromptTokens = null,
   serverEstimatedPromptTokens = null,
-} = {}) {
+} = {}, prepared = null) {
   const safeMessages = Array.isArray(messages) ? messages : []
   let messageTokens = 0
   let toolCallTokens = 0
@@ -188,22 +199,16 @@ export function estimateClientContextUsage({
   let visibleCharacters = 0
 
   for (const message of safeMessages) {
-    const payload = contextPayload(message)
-    const messageEstimate = estimateContextValue({ role: payload.role, content: payload.content })
-    const toolCallEstimate = estimateContextValue(payload.toolCalls)
-    const attachmentEstimate = estimateContextValue(payload.attachments)
-    visibleCharacters += payload.visibleText.length
-    messageTokens += MESSAGE_OVERHEAD_TOKENS
-      + messageEstimate.tokens
-    toolCallTokens += toolCallEstimate.tokens
-    attachmentTokens += attachmentEstimate.tokens
-    imageTokens += messageEstimate.imageTokens
-      + toolCallEstimate.imageTokens
-      + attachmentEstimate.imageTokens
+    const estimate = prepared ? prepared.message(message) : estimateMessagePayload(message)
+    visibleCharacters += estimate.visibleCharacters
+    messageTokens += estimate.messageTokens
+    toolCallTokens += estimate.toolCallTokens
+    attachmentTokens += estimate.attachmentTokens
+    imageTokens += estimate.imageTokens
   }
 
-  const toolSpecTokens = estimateContextValue(Array.isArray(tools) ? tools : []).tokens
-  const systemTokens = FIXED_CONTEXT_OVERHEAD_TOKENS + estimateTextTokens(systemPrompt)
+  const toolSpecTokens = prepared ? prepared.tools(tools) : estimateContextValue(Array.isArray(tools) ? tools : []).tokens
+  const systemTokens = FIXED_CONTEXT_OVERHEAD_TOKENS + (prepared ? prepared.system(systemPrompt) : estimateTextTokens(systemPrompt))
   const estimatedTokens = messageTokens + toolCallTokens + attachmentTokens + toolSpecTokens + systemTokens
   const safeWindow = normalizeContextWindow(contextWindow)
   const percent = Math.min(100, Math.round((estimatedTokens / safeWindow) * 100))
@@ -228,4 +233,37 @@ export function estimateClientContextUsage({
       ? { serverEstimatedPromptTokens: Math.floor(serverPromptEstimate) }
       : {}),
   }
+}
+
+export function estimateClientContextUsage(options) {
+  return buildContextUsage(options)
+}
+
+/** React state is immutable. Cache only numeric estimates, using weak keys so old sessions can be collected. */
+export function createContextUsageEstimator() {
+  const messages = new WeakMap()
+  const tools = new WeakMap()
+  const stats = { messagesComputed: 0, toolsComputed: 0, systemComputed: 0 }
+  let systemKey, systemTokens
+  const memo = (cache, key, compute, counter) => {
+    const cacheable = key !== null && typeof key === 'object'
+    if (cacheable && cache.has(key)) return cache.get(key)
+    const result = compute(key)
+    stats[counter] += 1
+    if (cacheable) cache.set(key, result)
+    return result
+  }
+  const prepared = {
+    message: (value) => memo(messages, value, estimateMessagePayload, 'messagesComputed'),
+    tools: (value) => memo(tools, value, (list) => estimateContextValue(Array.isArray(list) ? list : []).tokens, 'toolsComputed'),
+    system: (value) => {
+      if (systemTokens === undefined || systemKey !== value) {
+        systemKey = value
+        systemTokens = estimateTextTokens(value)
+        stats.systemComputed += 1
+      }
+      return systemTokens
+    },
+  }
+  return Object.assign((options) => buildContextUsage(options, prepared), { stats: () => ({ ...stats }) })
 }

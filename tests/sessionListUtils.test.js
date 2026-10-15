@@ -11,6 +11,15 @@ import {
   workspacePathKey,
 } from '../src/components/leftRail/sessionListUtils.js'
 
+test('sorting reads activity and pin timestamps once per item, not once per comparison', () => {
+  let reads = 0
+  const sessions = Array.from({ length: 200 }, (_, index) => ({ id: String(index), get updatedAt() { reads += 1; return ((index * 97) % 199 + 1) * 1000 } }))
+  const sorted = sortSessions(sessions)
+  assert.equal(reads, sessions.length)
+  assert.equal(sorted.length, sessions.length)
+  assert.equal(sessions[0].id, '0')
+})
+
 const sessionListSource = fs.readFileSync(
   new URL('../src/components/leftRail/SessionList.jsx', import.meta.url),
   'utf8',
@@ -35,9 +44,10 @@ test('session history is one continuous newest-first list', () => {
   assert.deepEqual(sortSessions([]), [])
 })
 
-test('session rows stay single-line and keep quiet selection while project groups retain disclosure controls', () => {
-  assert.match(sessionListSource, /orderedSessions\.map\(\(session, index\) => renderSession\(session, index\)\)/)
-  assert.match(sessionListSource, /truncate text-ui leading-5/)
+test('session rows stay bounded and readable while project groups retain disclosure controls', () => {
+  assert.match(sessionListSource, /renderSessionPage\(orderedSessions, 'recent'\)/)
+  assert.match(sessionListSource, /left-rail-session-title min-w-0 flex-1 text-ui leading-5/)
+  assert.match(leftRailStyles, /-webkit-line-clamp: 2/)
   assert.match(sessionListSource, /title=\{sessionTooltip\(title, time\)\}/)
   assert.doesNotMatch(sessionListSource, /formatSessionRelativeTime|Intl\.RelativeTimeFormat|bg-accent/)
   assert.match(leftRailStyles, /\.left-rail-session-row\s*\{[^}]*min-height: 38px;/)
@@ -80,9 +90,12 @@ test('workspace sessions group by normalized path while plain sessions remain in
   assert.deepEqual(grouped.projects[1].sessions, [])
 })
 
-test('the production session rail derives project groups only from visible sessions', () => {
+test('the production rail adds saved empty projects only through the local-profile boundary', () => {
   assert.doesNotMatch(leftRailSource, /readStoredChatProjects|CHAT_PROJECTS_STORAGE_KEY/)
-  assert.doesNotMatch(leftRailSource, /storedProjects=/)
+  assert.match(leftRailSource, /useStoredChatProjects\(state\.authMode === 'local'\)/)
+  assert.match(leftRailSource, /storedProjects=\{storedProjects\}/)
+  const store = fs.readFileSync(new URL('../src/lib/useStoredChatProjects.js', import.meta.url), 'utf8')
+  assert.match(store, /enabled \? snapshot\(\) : EMPTY/)
 })
 
 test('timestampOf accepts message timestamps and rejects invalid values', () => {

@@ -9,9 +9,10 @@
  *
  * Two facts come from two event types, deliberately:
  *   · a turn terminal carries the turn's cumulative usage, which survives
- *     context compaction and is therefore the authoritative total;
+ *     context compaction; use only the latest recorded cumulative snapshot per Turn;
  *   · a `model.phase` names the model, so only it can break usage down per
- *     model.
+ *     model and attribute completed responses to a date window.
+ * Date windows never assign a whole cross-window Turn to the completion date.
  * The two can disagree, and the report says which way instead of presenting a
  * partial figure as complete: compaction can drop phases from an old turn (the
  * breakdown is smaller), while a turn that stopped without persisting cumulative
@@ -22,24 +23,11 @@ import { mapPersistedTurnEventRow } from './turnEventStore.js'
 import { withLocalTurnTraceReader } from './localTurnTraceReader.js'
 import { USAGE_REPORT_LIMITS } from '../../shared/usageReportLimits.js'
 import { computeCacheWaste, createRateResolver } from '../../shared/modelCacheStats.js'
+import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { createUsageCoverage, observeUsageCoverage, summarizeUsageCoverage } from '../../shared/modelUsageCoverage.js'
+import { latestUsageBoundaries, physicalUsageKey, usageModelIdentity, USAGE_TOTAL_FIELDS as USAGE_FIELDS } from './usageLedger.js'
 
-const USAGE_FIELDS = Object.freeze([
-  'promptTokens',
-  'completionTokens',
-  'cacheHitTokens',
-  'cacheMissTokens',
-])
 const { DEFAULT_EVENTS, MAX_EVENTS, MAX_MODELS, MAX_SESSIONS } = USAGE_REPORT_LIMITS
-// Every type that ends a turn, matching the runtime's stop set. A deny, a pause
-// or a cancellation still spent tokens, so none of them may be omitted here.
-const TERMINAL_TURN_EVENT_TYPES = new Set([
-  'turn.completed',
-  'turn.failed',
-  'turn.blocked',
-  'turn.cancelled',
-  'turn.paused',
-  'turn.interrupted',
-])
 
 function emptyTotals() {
   return { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0 }
@@ -85,9 +73,9 @@ function addUsage(target, usage) {
   if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return false
   let added = false
   for (const field of USAGE_FIELDS) {
-    const value = Number(usage[field])
-    if (Number.isFinite(value) && value >= 0) {
-      target[field] += value
+    const value = normalizeOptionalUsageNumber(usage[field])
+    if (value !== null) {
+      target[field] = (target[field] || 0) + value
       if (value > 0) added = true
     }
   }
@@ -118,13 +106,17 @@ function boundedEntries(map, limit) {
  *   perModelPhases: number
  * }}
  */
-export function summarizeUsageEvents(events = [], { truncated = false, env = process.env } = {}) {
+export function summarizeUsageEvents(events = [], { truncated = false, env = process.env, since = null } = {}) {
   const totals = emptyTotals()
   const models = new Map()
   const sessions = new Map()
   const turns = { total: 0, completed: 0, stopped: 0, byType: {} }
   const phaseTotals = emptyTotals()
+  const coverage = createUsageCoverage()
   let perModelPhases = 0
+  const boundedWindow = Number(since) > 0
+  const seenRequests = new Set()
+  const orderedEvents = (Array.isArray(events) ? events : []).filter(event => !boundedWindow || Number(event?.createdAt) >= Number(since))
   // Per-request records, in order, grouped by the conversation they belong to.
   // Cache continuity is per conversation — the same prefix in another session is
   // a different prefix — so waste is measured within a session, never across.
@@ -133,39 +125,48 @@ export function summarizeUsageEvents(events = [], { truncated = false, env = pro
   const sessionEntry = (sessionId) => {
     const key = String(sessionId || '(none)')
     if (!sessions.has(key)) {
-      sessions.set(key, { turns: 0, modelPhases: 0, totalTokens: 0, usage: emptyTotals() })
+      sessions.set(key, { turns: 0, modelPhases: 0, totalTokens: 0, usage: emptyTotals(), cacheCoverage: createUsageCoverage() })
     }
     return sessions.get(key)
   }
 
-  for (const event of Array.isArray(events) ? events : []) {
+  for (const event of orderedEvents) {
     const session = sessionEntry(event?.sessionId)
     if (event?.type === 'model.phase') {
       const payload = event.payload || {}
       if (payload.phase !== 'completed') continue
-      const name = String(payload.modelName || '(unknown model)')
+      const requestKey = physicalUsageKey(event)
+      if (requestKey && seenRequests.has(requestKey)) continue
+      if (requestKey) seenRequests.add(requestKey)
+      const identity = usageModelIdentity(payload)
+      const name = identity.key
       if (!models.has(name)) {
-        models.set(name, { modelPhases: 0, totalTokens: 0, usage: emptyTotals() })
+        models.set(name, { modelName: identity.modelName, providerId: identity.providerId,
+          modelPhases: 0, totalTokens: 0, usage: emptyTotals(), cacheCoverage: createUsageCoverage() })
       }
       const model = models.get(name)
       model.modelPhases += 1
       session.modelPhases += 1
       perModelPhases += 1
+      for (const target of [coverage, model.cacheCoverage, session.cacheCoverage]) observeUsageCoverage(target, payload.usage)
       if (addUsage(model.usage, payload.usage)) {
         model.totalTokens = model.usage.promptTokens + model.usage.completionTokens
       }
       addUsage(phaseTotals, payload.usage)
       // Events arrive newest first; the scan needs them the way they happened.
-      if (!phasesBySession.has(session)) phasesBySession.set(session, [])
-      phasesBySession.get(session).unshift({
+      const continuityKey = JSON.stringify([event.userId ?? null, event.sessionId, name])
+      if (!phasesBySession.has(continuityKey)) phasesBySession.set(continuityKey, [])
+      phasesBySession.get(continuityKey).push({
         usage: payload.usage,
         modelName: payload.modelName,
-        providerId: payload.providerId,
+        providerId: identity.providerId,
         timestamp: Number(event.createdAt) || 0,
       })
       continue
     }
-    if (!TERMINAL_TURN_EVENT_TYPES.has(event?.type)) continue
+  }
+  for (const { event, usage: turnUsage } of latestUsageBoundaries(orderedEvents)) {
+    const session = sessionEntry(event.sessionId)
     turns.total += 1
     session.turns += 1
     const outcome = event.type === 'turn.completed' ? 'completed' : 'stopped'
@@ -173,19 +174,28 @@ export function summarizeUsageEvents(events = [], { truncated = false, env = pro
     turns.byType[event.type] = (turns.byType[event.type] || 0) + 1
     // `turnModelUsage` is the whole turn; a turn terminal that omits it (a
     // failure before any model call) contributes nothing rather than zeroes.
-    const payload = event.payload || {}
-    const turnUsage = payload.turnModelUsage || payload.usage
     if (addUsage(totals, turnUsage)) {
       session.totalTokens += (Number(turnUsage.promptTokens) || 0) + (Number(turnUsage.completionTokens) || 0)
     }
     addUsage(session.usage, turnUsage)
   }
 
-  for (const entry of models.values()) {
-    entry.cacheHitRatePercent = cacheHitRatePercent(entry.usage)
+  const turnCumulativeTotals = { ...totals, totalTokens: totals.promptTokens + totals.completionTokens }
+  if (boundedWindow) {
+    Object.assign(totals, phaseTotals)
+    for (const session of sessions.values()) { session.usage = emptyTotals(); session.totalTokens = 0 }
+    for (const event of orderedEvents) {
+      if (event?.type !== 'model.phase' || event.payload?.phase !== 'completed') continue
+      const key = physicalUsageKey(event)
+      if (key && !seenRequests.delete(key)) continue
+      const session = sessionEntry(event.sessionId)
+      addUsage(session.usage, event.payload.usage)
+      session.totalTokens = session.usage.promptTokens + session.usage.completionTokens
+    }
   }
-  for (const entry of sessions.values()) {
+  for (const entry of [...models.values(), ...sessions.values()]) {
     entry.cacheHitRatePercent = cacheHitRatePercent(entry.usage)
+    entry.cacheCoverage = summarizeUsageCoverage(entry.cacheCoverage)
   }
 
   // A hit rate says a miss happened; this says how much it cost and what likely
@@ -193,9 +203,9 @@ export function summarizeUsageEvents(events = [], { truncated = false, env = pro
   const cacheWaste = { missedTokens: 0, missedCost: 0, missCount: 0 }
   const resolvePrice = createRateResolver(env)
   for (const records of phasesBySession.values()) {
-    const waste = computeCacheWaste(records, { resolvePrice })
+    const waste = computeCacheWaste(records.sort((a, b) => a.timestamp - b.timestamp), { resolvePrice })
     cacheWaste.missedTokens += waste.missedTokens
-    cacheWaste.missedCost += waste.missedCost
+    cacheWaste.missedCost = cacheWaste.missedCost === null || waste.missedCost === null ? null : cacheWaste.missedCost + waste.missedCost
     cacheWaste.missCount += waste.missCount
   }
   return {
@@ -206,6 +216,8 @@ export function summarizeUsageEvents(events = [], { truncated = false, env = pro
       eventCount: Array.isArray(events) ? events.length : 0,
     },
     turns,
+    accounting: { basis: boundedWindow ? 'responses_in_window' : 'latest_turn_snapshots', coverage: 'recorded_only' },
+    turnCumulativeTotals,
     totals: { ...totals, totalTokens: totals.promptTokens + totals.completionTokens },
     phaseTotals: {
       ...phaseTotals,
@@ -213,6 +225,7 @@ export function summarizeUsageEvents(events = [], { truncated = false, env = pro
     },
     cacheHitRatePercent: cacheHitRatePercent(totals),
     cacheWaste,
+    cacheCoverage: summarizeUsageCoverage(coverage),
     byModel: boundedEntries(models, MAX_MODELS),
     bySession: boundedEntries(sessions, MAX_SESSIONS),
     perModelPhases,
@@ -232,7 +245,7 @@ export function readUsageReport({
   limit = DEFAULT_EVENTS,
 } = {}) {
   const events = listTurnUsageEvents({ userId, sessionId, since, limit })
-  const report = summarizeUsageEvents(events, { truncated: events.length >= limit })
+  const report = summarizeUsageEvents(events, { truncated: events.length >= limit, since })
   report.window.since = Number.isFinite(Number(since)) && Number(since) > 0 ? Math.floor(Number(since)) : null
   report.window.sessionId = String(sessionId || '')
   return report

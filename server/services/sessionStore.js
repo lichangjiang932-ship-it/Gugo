@@ -295,15 +295,21 @@ export function pinSession({ userId, sessionId, now = Date.now() }) {
  * async backfill cannot overwrite a name the reader chose — but nothing ever
  * dispatched it, because there was no way to persist the name. This is that way.
  */
-export function renameSession({ userId, sessionId, title, now = Date.now() }) {
+export function renameSession({ userId, sessionId, title, expectedRevision, now = Date.now() }) {
   const normalized = typeof title === 'string' ? title.trim() : ''
   if (!userId || !sessionId || !normalized) return null
+  const revision = expectedRevision === undefined ? null : normalizeSessionExpectedRevision(expectedRevision)
   const result = getDb().prepare(`
     UPDATE sessions
     SET title = ?, updated_at = ?, revision = revision + 1
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-  `).run(normalized, now, userId, sessionId)
-  if (!result.changes) return null
+      AND (? IS NULL OR revision = ?)
+  `).run(normalized, now, userId, sessionId, revision, revision)
+  if (!result.changes) {
+    const current = getSession({ userId, sessionId })
+    if (current && revision !== null) throw new SessionRevisionConflictError(current.revision)
+    return null
+  }
   return getSession({ userId, sessionId })
 }
 

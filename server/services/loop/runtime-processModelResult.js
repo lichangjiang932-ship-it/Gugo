@@ -1,5 +1,6 @@
 import { processOutputContinuation } from './outputContinuation.js'
 import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
+import { publishContextUsage } from './contextUsageObservation.js'
 import { restoreCompactionCheckpoint } from './compactionCheckpoint.js'
 import { scheduleMutationVerificationRecovery } from './mutationVerificationRecovery.js'
 
@@ -292,6 +293,7 @@ async function handleDeliveryAndFinalAnswer(s) {
   if (!completion.closed) return { kind: 'continue' }
   s.finalText = acceptedContent
   if (!completion.prepared) s.convo.push(assistantMessage)
+  await publishContextUsage(s, { stage: 'retained' })
   try {
     const hasFinalText = Boolean(s.finalText.trim())
     await s.persistTurn(hasFinalText

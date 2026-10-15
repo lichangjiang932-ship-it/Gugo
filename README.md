@@ -1,5 +1,7 @@
 # Gugo
 
+> 工程当前状态、权威契约、开放债务和验收入口统一见 [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)。日期报告只保留历史证据。
+
 **简体中文** | [English](README.en.md)
 
 > 开源、免费、本地优先的 Windows 桌面 Agent — Agent · Skill · Memory · Tool · Subagent · Job

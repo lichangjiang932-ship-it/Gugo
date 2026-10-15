@@ -2189,16 +2189,20 @@ test('TurnEngine owns a text turn and persists the final assistant message', asy
 
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-text' })).status, 'completed')
   assert.deepEqual(events('turn-text').map((event) => event.type), [
-    'turn.started', 'model.phase', 'model.phase', 'model.phase', 'model.phase', 'assistant.delta', 'turn.checkpoint', 'turn.completed',
+    'turn.started', 'model.phase', 'model.phase', 'model.phase', 'model.phase', 'assistant.delta', 'model.phase', 'turn.checkpoint', 'turn.completed',
   ])
   assert.deepEqual(
     events('turn-text').filter((event) => event.type === 'model.phase').map((event) => event.payload.phase),
-    ['context_prepared', 'started', 'waiting_first_token', 'completed'],
+    ['context_prepared', 'started', 'waiting_first_token', 'completed', 'context_usage'],
   )
   const contextEvent = events('turn-text').find((event) => event.payload.phase === 'context_prepared')
   assert.equal(contextEvent.payload.contextDiagnostics.stage, 'pre_compaction')
   assert.equal(contextEvent.payload.contextDiagnostics.version, 1)
-  assert.equal(listMessages({ userId, sessionId: 'turn-engine-session' }).at(-1).content, '服务端完成。')
+  const saved = listMessages({ userId, sessionId: 'turn-engine-session' }).at(-1)
+  assert.equal(saved.content, '服务端完成。')
+  assert.equal(saved.modelContext.modelContextUsage.stage, 'retained')
+  assert.equal(saved.modelContext.modelContextUsage.version, 1)
+  assert.ok(saved.modelContext.modelContextUsage.retainedEstimatedTokens > 0)
 })
 
 test('TurnEngine exposes early tool readiness without creating a durable tool call', async () => {

@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-14",
+  "baseHead": "b5698be",
+  "worktreeUncommitted": true,
+  "fullRegression": {
+    "files": 1151,
+    "status": "PASS",
+    "exitCode": 0
+  },
+  "offlineEvaluation": {
+    "tests": 71,
+    "status": "PASS",
+    "liveModel": false
+  },
+  "targeted": {
+    "files": 13,
+    "tests": 38,
+    "status": "PASS"
+  },
+  "mobileBilingualRepetitions": 5,
+  "gates": [
+    "lint",
+    "debt:check",
+    "i18n:check",
+    "i18n:keys",
+    "deps:check",
+    "typecheck",
+    "audit:functions",
+    "build"
+  ],
+  "ui": {
+    "modelTraffic": "owned loopback fixture only",
+    "realKeysUsed": false,
+    "wireUsageValuesAreFixtures": true,
+    "noLogin": true,
+    "escapeDoesNotCancelModel": true,
+    "viewports": [
+      {
+        "width": 1024,
+        "chat": 400,
+        "overlay": false
+      },
+      {
+        "width": 640,
+        "chat": 580,
+        "overlay": true
+      },
+      {
+        "width": 390,
+        "chat": 330,
+        "overlay": true
+      }
+    ]
+  },
+  "benchmark": {
+    "scope": "client numeric estimates, not UI FPS or provider KV cache",
+    "messages": 2000,
+    "tools": 60,
+    "updates": 30,
+    "resultsIdentical": true,
+    "baselineMedianMs": 13.9,
+    "memoizedMedianMs": 0.108,
+    "baselineP95Ms": 15.886,
+    "memoizedP95Ms": 0.266
+  },
+  "electronPackageSmoke": false,
+  "initialFailuresRetained": true
+}

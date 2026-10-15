@@ -1,5 +1,8 @@
+import { applyModelTimingSignal } from '../lib/modelRequestTiming.js'
+
 /** Token deltas change the activity kind, not the identity of its model request. */
-export function preserveModelActivityTiming(previousMeta = {}, nextMeta = {}) {
+export function preserveModelActivityTiming(previousMeta = {}, incomingMeta = {}) {
+  const nextMeta = applyModelTimingSignal(previousMeta, incomingMeta)
   const previous = previousMeta.modelActivity
   const next = nextMeta.modelActivity
   if (!previous || !next || !['responding', 'reasoning'].includes(next.kind)

@@ -4,6 +4,7 @@ import { classifyDirectFile, withArtifactPreviewMode } from '../../../lib/direct
 import { withDownloadToken } from '../../../lib/jobClient.js'
 import CurrentFileChange from '../../../components/CurrentFileChange.jsx'
 import FileIdentity from '../preview/FileIdentity.jsx'
+import FileNameLabel from '../../../components/FileNameLabel.jsx'
 import FileListOverlay from './diffReview/FileListOverlay.jsx'
 
 function FileVisual({ artifact }) {
@@ -35,7 +36,7 @@ function FileRow({ artifact, onOpenArtifact, onSelect, selected = false, t }) {
         className={`flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left ${selected ? 'bg-[var(--color-selected)] rounded-control' : ''}`}>
         <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-control bg-ink/5 text-ink-fade"><FileVisual artifact={artifact} /></span>
         <span className="min-w-0 flex-1">
-          <span className={`block truncate text-sm font-medium ${selected ? 'text-accent-ink' : 'text-ink'}`}>{filename}</span>
+          <FileNameLabel value={filename} className={`w-full text-sm font-medium ${selected ? 'text-accent-ink' : 'text-ink'}`} />
           <span className="mt-0.5 block truncate text-xs uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span>
           {artifact.path && <span className="mt-0.5 block truncate text-xs text-ink-fade" title={artifact.path}>{artifact.path}</span>}
           {snapshot && <span className="block text-xs text-ink-fade">{t('workbench.fileSnapshot')}</span>}
@@ -94,7 +95,7 @@ export default function WorkbenchFiles({ artifacts, onOpenArtifact, t, workspace
       </div>
       {openPath ? (
         <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="workbench-file-content">
-          <CurrentFileChange className="text-xs" file={{ path: openPath }} t={t} wrap />
+          <CurrentFileChange file={{ path: openPath }} t={t} />
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">

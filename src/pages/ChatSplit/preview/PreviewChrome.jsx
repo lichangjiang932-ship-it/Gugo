@@ -17,6 +17,7 @@ import { canViewDirectFileSource } from '../../../lib/directFileSource.js'
 import FileIdentity from './FileIdentity.jsx'
 import FileActions from './FileActions.jsx'
 import FileTypeGlyph from '../../../components/FileTypeGlyph.jsx'
+import FileNameLabel from '../../../components/FileNameLabel.jsx'
 import { classifyDirectFile } from '../../../lib/directFilePreview.js'
 import { ZoomControl } from './PreviewZoom.jsx'
 import { ZOOMABLE_KINDS } from './previewZoomState.js'
@@ -73,7 +74,7 @@ export function PreviewHeader({ tabs, activeId, maximized, focused = false, setM
                 title={tab.preview.filename}
               >
                 <span className={`shrink-0 ${active ? 'text-ink-soft' : 'text-ink-fade'}`}><ArtifactIcon type={tab.preview.type} filename={tab.preview.filename} /></span>
-                <span className="min-w-0 truncate text-xs font-medium">{tab.preview.filename}</span>
+                <FileNameLabel value={tab.preview.filename} className="flex-1 text-xs font-medium" />
               </button>
               <button
                 type="button"

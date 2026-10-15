@@ -1,5 +1,6 @@
 import { isToolFreeResponseRequest, normalizeChatTurnIntentMode } from '../../utils/executionIntent.js'
 import { restoreCompletionPolicyState } from './completionPolicy.js'
+import { restoreArtifactFormatRejections } from './artifactFormatRejections.js'
 import { initializeGoalToolVisibility } from './runtime-initializeGoalTools.js'
 import { userMessageText } from './userMessageText.js'
 import { getSubagentExecutionPolicy } from '../subagentExecutionPolicy.js'
@@ -21,6 +22,7 @@ function initializeArtifactContracts(s) {
   // checkpoints (no version) upgrade with explicit zero defaults; an unknown
   // future version fails closed instead of silently resetting retry counts.
   s.completionPolicyState = restoreCompletionPolicyState(s.restoredState?.completionGuards)
+  s.artifactFormatRejections = restoreArtifactFormatRejections(s.restoredState?.completionGuards?.artifactFormatRejections)
   s.successfulExpectedPathWriteObserved = Boolean(
     s.restoredState?.completionGuards?.successfulExpectedPathWriteObserved,
   )

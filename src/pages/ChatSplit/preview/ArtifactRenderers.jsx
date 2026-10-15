@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react'
 import { buildHtmlPreview } from '../../../lib/presentationExport.js'
 import { buildHtmlDocument, isHtmlDeckLike } from '../../../lib/artifactPreview.js'
 import { useT } from '../../../i18n/I18nProvider.jsx'
+import './previewReading.css'
 
 function currentDocumentNonce() {
   if (typeof document === 'undefined') return ''
@@ -43,6 +44,6 @@ export function XlsxPreview({ rows }) {
   return <div className="h-full overflow-auto bg-paper"><table className="min-w-full border-collapse text-xs"><thead><tr><th className="sticky left-0 top-0 z-20 border-b border-r border-ink-fade/30 bg-paper-2 px-2 py-2 font-mono text-[10px] text-ink-fade">#</th>{header.map((cell, index) => <th key={`${index}-${cell}`} className="sticky top-0 z-10 whitespace-nowrap border-b border-r border-ink-fade/30 bg-paper-2 px-3 py-2 text-left font-semibold text-ink shadow-[0_1px_0_rgb(var(--color-ink-rgb)/0.04)]">{cell || `Column ${index + 1}`}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={`${rowIndex}-${row.join('|')}`} className={rowIndex % 2 ? 'bg-paper-2/30' : 'bg-paper'}><td className="sticky left-0 z-10 border-b border-r border-ink-fade/30 bg-paper-2/90 px-2 py-2 text-right font-mono text-[10px] text-ink-fade">{rowIndex + 1}</td>{header.map((_, cellIndex) => <td key={cellIndex} className="max-w-[260px] truncate border-b border-r border-ink-fade/20 px-3 py-2 text-ink-soft" title={row[cellIndex] || ''}>{row[cellIndex] || ''}</td>)}</tr>)}</tbody></table></div>
 }
 
-export function SourceView({ content }) {
-  return <pre className="h-full overflow-auto bg-paper p-4 text-xs leading-relaxed text-ink-soft whitespace-pre-wrap font-mono">{content}</pre>
+export function SourceView({ content, wrap = false }) {
+  return <pre data-testid="workbench-source-reader" data-wrap={String(wrap)} className="workbench-source-reader font-mono">{content}</pre>
 }

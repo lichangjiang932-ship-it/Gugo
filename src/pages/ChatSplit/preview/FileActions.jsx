@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { AppWindow, ChevronDown, Copy, FolderOpen } from 'lucide-react'
 import FileTypeGlyph from '../../../components/FileTypeGlyph.jsx'
+import FileNameLabel from '../../../components/FileNameLabel.jsx'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { desktopFileCapabilities, desktopFileErrorKey, openDesktopFile } from '../../../lib/desktopFileClient.js'
 import { CHIP_CLASS } from './previewChipStyles.js'
@@ -8,11 +9,6 @@ import useDetailsDismiss from './useDetailsDismiss.js'
 
 const ITEM_CLASS = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-ink hover:bg-ink/[0.05] disabled:opacity-50'
 const PANEL_CLASS = 'rounded-xl border border-ink/10 bg-paper p-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.22)]'
-
-function stem(filename) {
-  const index = filename.lastIndexOf('.')
-  return index > 0 ? filename.slice(0, index) : filename
-}
 
 /**
  * The file chip at the head of a previewed file, as the reference desktop apps
@@ -70,8 +66,8 @@ export default function FileActions({ file, t }) {
         <summary data-testid="preview-open-menu" aria-label={t('chatPreview.fileActions')}
           title={filePath || filename} className={`${CHIP_CLASS} max-w-full cursor-pointer list-none`}>
           <FileTypeGlyph name={filename} type={file?.type} size={15} />
-          <span data-testid="preview-file-path" title={filePath || filename} className="min-w-0 truncate">
-            {busy ? t('chatPreview.fileOpening') : stem(filename)}
+          <span data-testid="preview-file-path" title={filePath || filename} className="min-w-0 flex-1">
+            {busy ? t('chatPreview.fileOpening') : <FileNameLabel value={filename} />}
           </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-fade transition-transform group-open:rotate-180" aria-hidden="true" />
         </summary>
@@ -80,7 +76,7 @@ export default function FileActions({ file, t }) {
           {filename && (
             <p data-testid="preview-open-menu-title" className="flex items-center gap-2.5 px-2.5 py-2 text-[13px] text-ink" title={filename}>
               <FileTypeGlyph name={filename} type={file?.type} size={16} />
-              <span className="min-w-0 truncate">{filename}</span>
+              <FileNameLabel value={filename} />
             </p>
           )}
           <div className="mx-1.5 my-1 border-t border-ink/10" />

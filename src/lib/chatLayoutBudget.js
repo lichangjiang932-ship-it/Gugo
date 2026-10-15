@@ -83,6 +83,15 @@ export function clampRegionWidth(value, chatAreaWidth) {
   return Math.min(regionMaxWidth(chatAreaWidth), Math.max(MIN_REGION_WIDTH, wanted))
 }
 
+/** Narrow views keep the conversation's space; the region becomes a modal instead. */
+export function resolveRightRegionLayout(value, chatAreaWidth, viewport = viewportWidth()) {
+  const overlay = Number(chatAreaWidth) < MIN_CHAT_WIDTH + MIN_REGION_WIDTH
+  const width = overlay
+    ? Math.min(clampRegionWidth(value, MAX_REGION_WIDTH + MIN_CHAT_WIDTH), Math.max(1, Number(viewport) - 24))
+    : clampRegionWidth(value, chatAreaWidth)
+  return { overlay, width }
+}
+
 /**
  * Whether the right region is on screen.
  *

@@ -23,9 +23,8 @@ test('chat split container keeps catalog and recovery boundaries below 300 lines
   assert.match(entrySource, /import useChatTurnRecovery from/)
   // The panel opens on its entry page, and the plan card's state lives in its
   // own hook rather than inline here.
-  assert.match(entrySource, /useState\('entry'\)/)
   assert.match(entrySource, /import usePlanCardState from/)
-  assert.match(entrySource, /onClosePlan=\{\(\) => \{ setPlanVisible\(false\); setDismissedPlanSignature\(planSignature\) \}\}/)
+  // Initial view and plan-close behavior are covered by actual component/hook tests, not callback spelling.
   assert.match(source(modulePaths[1]), /useChatRuntimeCatalog/)
   assert.match(source(modulePaths[2]), /useServerTurnResume/)
 })

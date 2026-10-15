@@ -5,6 +5,34 @@ as `A3`, `S4`, or `M3.5` found in old comments describe delivery milestones and
 must not be reused as debt identifiers. New entries use `DEBT-<AREA>-NNN`, link
 to reproducible evidence, and define an observable exit condition.
 
+## DEBT-COUPLING-001 — Shared Loop dependency/state surface
+
+**Status:** Open
+**Priority:** P2
+**Area:** Loop architecture
+
+**Evidence / reproduction:** The bundled runtime still declares 241 dependencies and most phases consume shared mutable state. File-size compliance does not prove capability isolation.
+
+**Progress:** Verification observation now plans immutable effects through four declared ports and a strictly checked production consumer. The compatibility wrapper still owns state application/PDF handling; other phases remain unmigrated.
+
+**Exit criteria:** Phase-specific ports and writable-state surfaces replace unrestricted bag access, production consumers are checked, and independent phase tests plus complete recovery/permission regression demonstrate preserved behavior. No whole-kernel rewrite or lower call budget can substitute.
+
+**Verification:** tests/verificationObservationStage.test.js, tests/taskVerificationRepair.test.js and tests/loopDependencyBag.test.js.
+
+## DEBT-ACCEPT-001 — Goal-level acceptance coverage
+
+**Status:** Open
+**Priority:** P1
+**Area:** Task acceptance
+
+**Evidence / reproduction:** Command recognition and successful tool execution do not prove arbitrary user objectives. Legacy generic-tool acceptance and heuristic verification scope remain.
+
+**Progress:** Explicit contract v1 binds command/cwd, final file digest, artifact ID, scoped host verification and manual confirmation using the existing Goal evidence path. Custom package checks retain distinct families and existing authorization. A task-level invoice evaluator validates actual artifacts.
+
+**Exit criteria:** Required workflows declare sufficient independent goal outcomes, cannot weaken requirements or cite stale/foreign/unknown evidence, and representative real-provider tasks demonstrate results. Strict contract support alone does not close natural-language goal coverage or live-evaluation debt.
+
+**Verification:** tests/taskAcceptanceContract.test.js, tests/customVerificationEntry.test.js, tests/goalAcceptanceAuthority.test.js and tests/taskOutcomesEval.test.js. See TASK_ACCEPTANCE.md for current semantics.
+
 ## DEBT-ARCH-001 — Turn execution compatibility shell
 
 **Status:** Closed
@@ -268,7 +296,7 @@ calls and negative compile fixtures; unsafe port inference and uncovered callers
 must remain explicitly tracked before this debt can close.
 
 **Progress:** `tsconfig.protocol-pilot.json` enables `checkJs: true`, `strict` and
-`noEmit` for nine real runtime modules: inline-skill bounds, Turn Activity, Turn
+`noEmit` for an explicit, growing set of runtime modules (the configuration is authoritative): inline-skill bounds, Turn Activity, Turn
 Events, SSE transport, WebSocket protocol, the server WebSocket frame codec,
 the managed-attachment governance port, the Loop host capability handshake and
 durable Agent Event consumer host support. Protocol JSDoc imports use
@@ -289,8 +317,8 @@ for migrating these implementations; the debt is deliberately open rather than
 claiming whole-repo type safety.
 
 **Verification:** The existing unconditional CI `npm run typecheck` now runs the
-original index, the strict implementation pilot and 14 registered negative call
-fixtures. Every negative fixture must fail with its intended TypeScript error;
+original index, the strict implementation pilot and registered negative call
+fixtures; the fixture registry is authoritative. Every negative fixture must fail with its intended TypeScript error;
 unresolved imports or unrelated errors cannot count as a successful check.
 `tests/protocolTypecheck.test.js` also injects a wrong protocol version into the
 real codec in an in-memory compiler host and requires an implementation error,

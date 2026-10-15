@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-14",
+  "fullRegression": {
+    "files": 1161,
+    "status": "PASS",
+    "exitCode": 0,
+    "seconds": 963.559
+  },
+  "targeted": {
+    "files": 11,
+    "tests": 244,
+    "status": "PASS"
+  },
+  "related": {
+    "files": 6,
+    "tests": 23,
+    "status": "PASS"
+  },
+  "offline": {
+    "tests": 71,
+    "status": "PASS"
+  },
+  "gates": [
+    "lint",
+    "typecheck",
+    "debt:check",
+    "i18n:check",
+    "i18n:keys",
+    "deps:check",
+    "audit:functions",
+    "build"
+  ],
+  "browser": {
+    "traffic": "owned loopback fixture only",
+    "realCredentialsUsed": false,
+    "additionalMeterModelCalls": 0,
+    "providerInputTokensAreFixture": true,
+    "providerInputTokens": 10000,
+    "afterResponsePendingEstimate": 10043,
+    "afterDraftPendingEstimate": 16059,
+    "privateReasoningExposed": false,
+    "unknownWindowNotShownAsExact": true
+  },
+  "scope": "pending estimates, historical measured input and cumulative consumption separated",
+  "ownedQAProcessesStopped": true,
+  "committed": false,
+  "packaged": false
+}

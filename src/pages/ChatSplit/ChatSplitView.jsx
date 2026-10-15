@@ -11,7 +11,7 @@ import { revealTurnInConversation } from '../../lib/chatMessageSignals.js'
 import ChatSessionHeaderBar from './chatSplitView/ChatSessionHeaderBar.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import ChatNoticeDocks from './chatSplitView/ChatNoticeDocks.jsx'
-import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
+import useChatContextUsage from './useChatContextUsage.js'
 
 export { ChatRightPanels }
 export default function ChatSplitView({
@@ -25,6 +25,7 @@ export default function ChatSplitView({
   contextToolSpecs,
   contextWindow,
   contextWindowAuthoritative,
+  selectedConfigRevision = null,
   desktopPetVisible,
   directoryApproval,
   input,
@@ -99,22 +100,7 @@ export default function ChatSplitView({
   workspaceBusy,
   workspaceError,
 }) {
-  const latestAssistantMessage = [...messages].reverse().find((message) => message?.role === 'assistant')
-  const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens, serverEstimatedPromptTokens = latestAssistantMessage?.meta?.serverEstimatedPromptTokens
-  // 优先显示服务端真实 usage；缺失时用服务端最终请求估算，避免压缩后按完整 UI 历史高估。
-  const contextUsage = {
-    ...estimateClientContextUsage({
-      messages,
-      tools: contextToolSpecs,
-      systemPrompt: contextSystemPrompt,
-      contextWindow,
-      actualPromptTokens,
-      serverEstimatedPromptTokens,
-    }),
-    cumulativeTokens: sumSessionModelUsage(messages),
-    modelUsage: latestAssistantMessage?.meta?.modelUsage,
-    contextWindowAuthoritative,
-  }
+  const contextUsage = useChatContextUsage({ messages, contextToolSpecs, contextSystemPrompt, contextWindow, contextWindowAuthoritative, recoveryOwnerScope, activeSessionId, input, attachments, selectedModel, selectedModelProviderId, selectedConfigRevision })
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
   const hasWorkspace = Boolean(selectedWorkspacePath || activeSession?.workspacePath)
 

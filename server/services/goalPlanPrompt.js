@@ -15,6 +15,7 @@ const MAX_ACCEPTANCE_IN_PROMPT = 4
 function renderAcceptance(item) {
   if (typeof item === 'string') return item.trim()
   if (!item || typeof item !== 'object') return ''
+  if (item.kind === 'contract') return `required contract v${item.version}: ${(Array.isArray(item.checks) ? item.checks : []).map(renderAcceptance).join(' AND ')}`
   if (item.kind === 'command') return `command ${item.command || (item.tools || []).join('/') || 'execution'}${item.cwd ? ` in ${item.cwd}` : ''}; successful final exit`
   if (item.kind === 'file') return `written file ${item.path || '(path required)'}${item.sha256 ? ` sha256=${item.sha256}` : ''}`
   if (item.kind === 'artifact') return `artifact ${item.artifactId || item.type || 'required'}`

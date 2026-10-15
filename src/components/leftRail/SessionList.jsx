@@ -1,11 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, Folder, FolderOpen, GitFork, MoreHorizontal, PenLine, Pin, PinOff, Search, X } from 'lucide-react'
 import NewChatGlyph from './NewChatGlyph.jsx'
-import { groupSessionsByProject, pinnedTimestampOf, sessionTimePresentation } from './sessionListUtils.js'
+import ActionButton from '../ui/ActionButton.jsx'
+import { isCompositionEvent } from '../../lib/compositionEvent.js'
+import { groupSessionsByProject, pinnedTimestampOf, sessionTimePresentation, workspacePathKey } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
 const CONTEXT_MENU_HEIGHT = 160
 const VIEWPORT_MARGIN = 8
+const PROJECT_PAGE_SIZE = 12
+const SESSION_PAGE_SIZE = 30
 
 function clampMenuPosition(desiredLeft, desiredTop, measured = {}) {
   const width = Math.min(measured.width || CONTEXT_MENU_WIDTH, window.innerWidth - VIEWPORT_MARGIN * 2)
@@ -51,6 +55,7 @@ function moveMenuFocus(event) {
 export default function SessionList({
   sessions,
   activeSessionId,
+  activeWorkspacePath = '',
   openMenuId,
   onMenuOpen,
   onMenuToggle,
@@ -71,6 +76,8 @@ export default function SessionList({
   t,
 }) {
   const listRef = useRef(null)
+  const [projectLimit, setProjectLimit] = useState(PROJECT_PAGE_SIZE)
+  const [sessionLimits, setSessionLimits] = useState(() => new Map())
   const menuRef = useRef(null)
   // Which row is being renamed, and what has been typed into it. Editing in
   // place rather than in a dialog: the title is one line in a list the reader is
@@ -120,7 +127,7 @@ export default function SessionList({
       onMenuClose()
     }
     const closeOnEscape = (event) => {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || isCompositionEvent(event)) return
       event.preventDefault()
       event.stopPropagation()
       onMenuClose()
@@ -223,6 +230,7 @@ export default function SessionList({
           aria-label={t('nav.renameSessionFor', { title })}
           onChange={(event) => setRenameDraft(event.target.value)}
           onKeyDown={(event) => {
+            if (isCompositionEvent(event)) { event.stopPropagation(); return }
             if (event.key === 'Enter') {
               event.preventDefault()
               commitRename(session, title)
@@ -257,7 +265,7 @@ export default function SessionList({
         className="left-rail-session-open"
       >
         {isPinned && <span title={t('nav.pinnedSession')} className="left-rail-session-pin" aria-hidden="true"><Pin data-session-pinned className="h-3 w-3" strokeWidth={1.65} /></span>}
-        <span data-session-title className={`block min-w-0 flex-1 truncate text-ui leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{title}</span>
+        <span data-session-title className={`left-rail-session-title min-w-0 flex-1 text-ui leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{title}</span>
         {time && <time className="left-rail-session-time" dateTime={time.dateTime} aria-hidden="true">{time.compact}</time>}
       </button>)}
       <button
@@ -312,7 +320,29 @@ export default function SessionList({
     </div>
   }
 
-  const projectSections = projects.map((project) => {
+  const renderSessionPage = (items, key) => {
+    const limit = sessionLimits.get(key) || SESSION_PAGE_SIZE
+    const visible = items.slice(0, limit)
+    const active = items.find((session) => session.id === activeSessionId)
+    if (active && !visible.includes(active)) visible.push(active)
+    const remaining = items.length - visible.length
+    return <>
+      {visible.map((session, index) => renderSession(session, index))}
+      {remaining > 0 && <ActionButton size="sm" variant="ghost" data-session-more={key}
+        onClick={() => { onMenuClose(); setSessionLimits((current) => new Map(current).set(key, limit + SESSION_PAGE_SIZE)) }}
+        className="my-1">
+        {t('nav.moreConversations', { count: remaining })}
+      </ActionButton>}
+    </>
+  }
+  const visibleProjects = projects.slice(0, projectLimit)
+  const activeProject = projects.find((project) => project.sessions.some((session) => session.id === activeSessionId)
+    || (activeWorkspacePath && project.key === workspacePathKey(activeWorkspacePath)))
+  if (activeProject && !visibleProjects.includes(activeProject)) visibleProjects.push(activeProject)
+  const remainingProjects = projects.length - visibleProjects.length
+  const projectNameCounts = new Map()
+  for (const project of projects) projectNameCounts.set(project.name, (projectNameCounts.get(project.name) || 0) + 1)
+  const projectSections = visibleProjects.map((project) => {
     const isCollapsed = collapsedProjectKeys.has(project.key)
     const ProjectIcon = isCollapsed ? Folder : FolderOpen
     const regionId = `session-project-${encodeURIComponent(project.key)}`
@@ -338,7 +368,10 @@ export default function SessionList({
           data-project-toggle={project.path}
         >
           <ProjectIcon data-project-state-icon={isCollapsed ? 'collapsed' : 'expanded'} className="left-rail-folder-icon h-4 w-4 shrink-0 text-ink-fade" strokeWidth={1.45} fill="currentColor" fillOpacity={0.1} aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-ui font-medium leading-5 text-ink" title={project.path}>{project.name}</span>
+          <span className="min-w-0 flex-1" title={project.path}>
+            <span className="block truncate text-ui font-medium leading-5 text-ink">{project.name}</span>
+            {projectNameCounts.get(project.name) > 1 && <span className="block truncate text-xs text-ink-fade">{project.path}</span>}
+          </span>
         </button>
         <button
           type="button"
@@ -352,8 +385,8 @@ export default function SessionList({
         </button>
       </div>
       <div id={regionId} hidden={isCollapsed} className="left-rail-project-sessions" data-project-sessions={project.path}>
-        {project.sessions.length ? project.sessions.map((session, index) => renderSession(session, index))
-          : <p className="px-2 py-2 text-xs text-ink-fade">{t('nav.emptyProject')}</p>}
+        {!isCollapsed && (project.sessions.length ? renderSessionPage(project.sessions, `project:${project.key}`)
+          : <p className="px-2 py-2 text-xs text-ink-fade">{t('nav.emptyProject')}</p>)}
       </div>
     </section>
   })
@@ -364,6 +397,11 @@ export default function SessionList({
         {t('chatMessages.workspaceProjects')}
       </div>
       {projectSections}
+      {remainingProjects > 0 && <ActionButton size="sm" variant="ghost" data-projects-more
+        onClick={() => setProjectLimit((current) => current + PROJECT_PAGE_SIZE)}
+        className="mt-1">
+        {t('nav.moreProjects', { count: remainingProjects })}
+      </ActionButton>}
     </section>}
     <section aria-label={t('chatMessages.workspaceRecent')}>
       <div className="left-rail-section-heading left-rail-action-scope">
@@ -378,7 +416,7 @@ export default function SessionList({
         </button>
       </div>
       {orderedSessions.length
-        ? <div>{orderedSessions.map((session, index) => renderSession(session, index))}</div>
+        ? <div>{renderSessionPage(orderedSessions, 'recent')}</div>
         : <div className="px-2 py-1 text-ui leading-5 text-ink-fade">{t('nav.emptyTitle')}</div>}
     </section>
   </div>

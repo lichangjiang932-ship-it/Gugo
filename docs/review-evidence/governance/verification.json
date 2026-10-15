@@ -1,0 +1,67 @@
+{
+  "kind": "engineering-governance-verification",
+  "base": "b5698be",
+  "full": {
+    "files": 1167,
+    "exitCode": 0,
+    "seconds": 995.738,
+    "frozenChangedSources": true,
+    "log": "gugo-contracts-9kILeD/full-tests-closure.log"
+  },
+  "targeted": {
+    "files": 16,
+    "tests": 88
+  },
+  "supplemental": {
+    "files": 4,
+    "tests": 40
+  },
+  "isolatedArtifactGroup": {
+    "base": "b5698be",
+    "overlaidFiles": 8,
+    "testFiles": 4,
+    "tests": 10
+  },
+  "negativeTypeFixtures": 18,
+  "offline": {
+    "tests": 71,
+    "liveProvider": false
+  },
+  "gates": [
+    "lint",
+    "typecheck",
+    "debt:check",
+    "audit:functions -- --check",
+    "i18n:check",
+    "i18n:keys",
+    "deps:check",
+    "isolated frontend build",
+    "git diff --check"
+  ],
+  "history": [
+    {
+      "log": "full-tests.log",
+      "result": "stopped after residual exact callback assertion"
+    },
+    {
+      "log": "full-tests-final.log",
+      "result": "1167 PASS; in-run final kind normalization led to frozen rerun"
+    },
+    {
+      "log": "full-tests-closure.log",
+      "result": "frozen 1167 PASS"
+    }
+  ],
+  "notProven": [
+    "independent commits for all candidate groups",
+    "all Loop phases isolated",
+    "all repository implementations strictly typed",
+    "real-provider task success rate",
+    "Electron/native package acceptance"
+  ],
+  "git": {
+    "stage": false,
+    "commit": false,
+    "push": false
+  }
+}

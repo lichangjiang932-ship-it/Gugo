@@ -32,7 +32,7 @@ test('the file chip is the file itself, and the menu carries no redundant "previ
   const h = await mount(<DirectFileToolbar file={file} filename={file.filename} type="docx" zoom={zoom} t={t} />)
   try {
     const chip = h.container.querySelector('[data-testid="preview-open-menu"]')
-    assert.equal(chip.querySelector('[data-testid="preview-file-path"]').textContent, '表2_已填写')
+    assert.equal(chip.querySelector('[data-testid="preview-file-path"]').textContent, '表2_已填写.docx')
     assert.ok(chip.querySelector('[data-file-family="word"]'), 'a Word file wears the Word glyph')
     assert.doesNotMatch(chip.closest('details').textContent, /openPreview/)
     // The zoom shows the scale fitting produced, like "70%" in the reference app.

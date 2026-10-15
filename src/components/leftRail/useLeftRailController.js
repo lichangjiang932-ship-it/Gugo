@@ -51,7 +51,7 @@ export default function useLeftRailController({ authMode, dispatch, location, na
 
   useEffect(() => {
     const openLogin = (event) => {
-      if (authMode === 'local') return
+      if (authMode !== 'multi_user') return
       updateLogin({ open: true, target: event.detail?.path || null, message: event.detail?.message || t('errors.loginRequired') })
     }
     window.addEventListener('auth:required', openLogin)
@@ -77,7 +77,11 @@ export default function useLeftRailController({ authMode, dispatch, location, na
   const navigateItem = (item) => {
     closeSessionMenu()
     setAccountMenuOpen(false)
-    if (item.requiresLogin && !getAuthToken() && authMode !== 'local') { updateLogin({ open: true, target: item.path, message: t('errors.loginRequired') }); return }
+    if (item.requiresLogin && !getAuthToken() && authMode !== 'local') {
+      if (authMode === 'multi_user') updateLogin({ open: true, target: item.path, message: t('errors.loginRequired') })
+      else toast.error(t('nav.localServiceReconnect'))
+      return
+    }
     navigate(item.path)
   }
 

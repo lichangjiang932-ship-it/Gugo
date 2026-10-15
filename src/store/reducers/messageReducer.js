@@ -260,7 +260,7 @@ export function reduceMessageState(state, action) {
           if (last.role !== 'assistant') return s
           const cursor = applyStreamCursor(last, action)
           if (cursor.ignored) return s
-          const finalizedMeta = finalizeRunningToolCalls({ ...cursor.meta, ...meta }, finalizer)
+          const finalizedMeta = finalizeRunningToolCalls({ ...cursor.meta, ...preserveModelActivityTiming(cursor.meta, meta) }, finalizer)
           const nextMeta = Object.hasOwn(finalizedMeta, 'retainedLocalFiles')
             ? {
                 ...finalizedMeta,

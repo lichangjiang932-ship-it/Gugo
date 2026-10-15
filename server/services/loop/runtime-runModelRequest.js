@@ -1,5 +1,7 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
 import { emitContextPreparation } from './runtimeContextDiagnostics.js'
+import { modelRequestAttribution } from './modelRequestAttribution.js'
+import { contextUsageObservation } from './contextUsageObservation.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
 import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
 import { MODEL_PROVIDER_STOP_REASON_ERROR_CODE } from '../../../shared/modelProviderStopDiagnostic.js'
@@ -231,6 +233,8 @@ async function executeModelRequestRound(s, context) {
       toolCalls: i.modelResult?.toolCalls || [],
       usage: modelPhaseUsage(i.modelResult),
       modelName: i.modelResult?.modelName || null,
+      ...modelRequestAttribution(s),
+      contextUsage: contextUsageObservation(s, { stage: 'completed', inputTokens: i.modelResult?.usage?.promptTokens }),
     })
   }
   const bufferedTextIsSafe = !s.requiresSourceHandoffProtection
@@ -335,6 +339,7 @@ async function handleModelRequestFailure(s, error, context) {
         toolCalls: i.modelResult?.toolCalls || [],
         usage: modelPhaseUsage(i.modelResult),
         modelName: i.modelResult?.modelName || null,
+        ...modelRequestAttribution(s),
         budgetExceeded: true,
         budgetReason: error?.message || String(error),
       })

@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { I18nProvider, useT } from '../../src/i18n/I18nProvider.jsx'
 import ComposerActions from '../../src/pages/ChatSplit/chatComposer/ComposerActions.jsx'
 import ContextUsagePanel from '../../src/pages/ChatSplit/chatMessages/ContextUsagePanel.jsx'
+import { buildPendingContextUsage } from '../../src/lib/contextMeter.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -57,6 +58,53 @@ function ComposerHarness({ contextUsage }) {
   />
 }
 
+test('request diagnostics show public observations and host timing, never raw wire data', async () => {
+  const dom = setupDom()
+  const root = createRoot(document.getElementById('root'))
+  try {
+    await act(async () => root.render(<I18nProvider><Harness contextUsage={{
+      modelWireDiagnostics: { version: 1, stage: 'wire', available: true, identityComparable: true,
+        prefixComparable: true, prefixChanged: false, toolsChanged: true, toolCount: 12, secret: 'PRIVATE_DIAGNOSTIC' },
+      modelTiming: { version: 1, startedAt: 1000, firstProgressAt: 1500, firstPublicAt: 2500 },
+    }} /></I18nProvider>))
+    const details = document.querySelector('[data-testid="request-diagnostics"]')
+    assert.ok(details)
+    assert.equal(details.dataset.prefix, 'same')
+    assert.equal(details.dataset.tools, 'changed')
+    assert.match(details.textContent, /0.5 s/)
+    assert.match(details.textContent, /1.5 s/)
+    assert.match(details.textContent, /12/)
+    assert.doesNotMatch(details.textContent, /PRIVATE_DIAGNOSTIC/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('the context popover receives keyboard focus and Escape returns it without propagating', async () => {
+  const dom = setupDom()
+  const root = createRoot(document.getElementById('root'))
+  try {
+    await act(async () => root.render(<I18nProvider><ComposerHarness contextUsage={{ estimatedTokens: 100, contextWindow: 128000 }} /></I18nProvider>))
+    const ring = document.querySelector('[data-testid="context-ring"]')
+    ring.focus()
+    await act(async () => ring.click())
+    const dialog = document.querySelector('[data-testid="context-usage-panel"]')
+    assert.equal(document.activeElement === dialog, true)
+    let escaped = 0
+    const listener = () => { escaped += 1 }
+    dom.window.addEventListener('keydown', listener)
+    await act(async () => dialog.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+    dom.window.removeEventListener('keydown', listener)
+    assert.equal(document.querySelector('[data-testid="context-usage-panel"]'), null)
+    assert.equal(document.activeElement === ring, true)
+    assert.equal(escaped, 0)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('context panel shows compact total plus system, tools, and conversation breakdown', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
@@ -81,7 +129,7 @@ test('context panel shows compact total plus system, tools, and conversation bre
     ))
     assert.ok(rootElement.querySelector('[data-testid="context-usage-panel"]'))
     const text = rootElement.textContent
-    assert.match(text, /当前有效上下文/)
+    assert.match(text, /待发送上下文（估算）/)
     assert.match(text, /会话累计 Token/)
     assert.match(text, /279M/)
     assert.match(text, /~30K \/ 128K/)
@@ -98,7 +146,7 @@ test('context panel shows compact total plus system, tools, and conversation bre
   }
 })
 
-test('context panel prefers measured prompt tokens and matches the model-circle summary', async () => {
+test('context panel keeps historical measured input separate from pending occupancy', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
@@ -109,8 +157,9 @@ test('context panel prefers measured prompt tokens and matches the model-circle 
         <Harness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    assert.match(rootElement.textContent, /33%/)
-    assert.match(rootElement.textContent, /331K \/ 1M/)
+    assert.match(rootElement.textContent, /0\.1%/)
+    assert.match(rootElement.textContent, /~1K \/ 1M/)
+    assert.match(rootElement.querySelector('[data-testid=context-last-request]').textContent, /331K/)
     assert.doesNotMatch(rootElement.textContent, /~331K \/ 1M/)
     assert.equal(rootElement.querySelector('[data-testid="context-usage-panel"]')?.getAttribute('role'), 'dialog')
   } finally {
@@ -139,8 +188,8 @@ test('context panel treats measured zero as real usage', async () => {
         <Harness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    assert.match(rootElement.textContent, /0 \/ 128K/)
-    assert.doesNotMatch(rootElement.textContent, /~5K \/ 128K/)
+    assert.match(rootElement.textContent, /~5K \/ 128K/)
+    assert.match(rootElement.querySelector('[data-testid=context-last-request]').textContent, /0/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -169,7 +218,7 @@ test('context panel and model circle fall back to estimates when measured usage 
       </I18nProvider>,
     ))
     const ring = rootElement.querySelector('[data-testid="context-ring"]')
-    assert.match(ring?.getAttribute('aria-label') || '', /4% · ~5,000 \/ 128,000 tokens/)
+    assert.match(ring?.getAttribute('aria-label') || '', /3\.9% · ~5,000 tokens · \/ 128,000 tokens/)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.match(rootElement.textContent, /~5K \/ 128K/)
@@ -201,7 +250,7 @@ test('estimated model windows never appear as exact capacity in the composer or 
       </I18nProvider>,
     ))
     const ring = rootElement.querySelector('[data-testid="context-ring"]')
-    assert.equal(ring?.getAttribute('aria-label'), '~22,917 tokens')
+    assert.match(ring?.getAttribute('aria-label'), /~22,917 tokens.*有效窗口未知/)
     assert.doesNotMatch(ring?.getAttribute('aria-label') || '', /128,000|%/)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
@@ -213,11 +262,11 @@ test('estimated model windows never appear as exact capacity in the composer or 
   }
 })
 
-test('server request estimate wins over uncompressed client history without pretending to be measured', async () => {
+test('correlated retained context avoids recounting uncompressed UI history', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
-  const contextUsage = {
+  const localUsage = {
     actualPromptTokens: null,
     serverEstimatedPromptTokens: 16000,
     estimatedTokens: 96000,
@@ -229,6 +278,8 @@ test('server request estimate wins over uncompressed client history without pret
     attachmentTokens: 0,
     toolSpecTokens: 0,
   }
+  const contextUsage = buildPendingContextUsage({ messages: [], estimate: () => localUsage, selectedModel: 'm', selectedModelProviderId: 'p', contextWindow: 128000, contextWindowAuthoritative: true, allowServerBaseline: true,
+    observation: { version: 1, stage: 'retained', requestId: 'r', physicalAttempt: 1, modelName: 'm', providerId: 'p', configuredModelName: 'm', configuredProviderId: 'p', configRevision: null, contextWindow: 128000, inputEstimatedTokens: 16000, inputTokens: null, retainedEstimatedTokens: 16000 } })
   try {
     await act(async () => root.render(
       <I18nProvider>
@@ -236,7 +287,7 @@ test('server request estimate wins over uncompressed client history without pret
       </I18nProvider>,
     ))
     const ring = rootElement.querySelector('[data-testid="context-ring"]')
-    assert.match(ring?.getAttribute('aria-label') || '', /13% · ~16,000 \/ 128,000 tokens/)
+    assert.match(ring?.getAttribute('aria-label') || '', /13% · ~16,000 tokens · \/ 128,000 tokens/)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.match(rootElement.textContent, /~16K \/ 128K/)
@@ -260,7 +311,7 @@ test('model context circle toggles the usage popover and closes it with Escape',
     ))
     const ring = rootElement.querySelector('[data-testid="context-ring"]')
     assert.ok(ring)
-    assert.match(ring.getAttribute('aria-label') || '', /33% · 331,000 \/ 1,000,000 tokens/)
+    assert.match(ring.getAttribute('aria-label') || '', /0\.1% · ~1,000 tokens · \/ 1,000,000 tokens/)
     assert.equal(rootElement.querySelector('[data-testid="context-usage-popover"]'), null)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))

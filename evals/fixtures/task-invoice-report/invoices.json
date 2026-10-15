@@ -1,0 +1,26 @@
+[
+  {
+    "id": "INV-001",
+    "customer": "甲方,北京",
+    "amount_cents": 1200,
+    "paid": false
+  },
+  {
+    "id": "INV-002",
+    "customer": "甲方,北京",
+    "amount_cents": 600,
+    "paid": true
+  },
+  {
+    "id": "INV-003",
+    "customer": "甲方,北京",
+    "amount_cents": -200,
+    "paid": false
+  },
+  {
+    "id": "INV-004",
+    "customer": "乙公司",
+    "amount_cents": 400,
+    "paid": false
+  }
+]

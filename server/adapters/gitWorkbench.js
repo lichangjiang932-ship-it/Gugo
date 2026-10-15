@@ -13,6 +13,7 @@ import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 import { assertGitToolPermitted, runAuditedProjectCheckHttp } from './gitWorkbenchPolicy.js'
 import { runProjectCheckTool } from './gitWorkbenchProjectCheck.js'
+import { PROJECT_CHECK_NAME_PATTERN } from '../../shared/projectCheckNames.js'
 import { gitDiffFailure } from './gitWorkbenchDiagnostics.js'
 import {
   changedPathsBetweenGitRevisions,
@@ -528,7 +529,7 @@ export const GIT_TOOL_SPECS = [
       parameters: {
         type: 'object',
         properties: {
-          check: { type: 'string', enum: ['lint', 'test', 'build'] },
+          check: { type: 'string', pattern: PROJECT_CHECK_NAME_PATTERN, description: 'Configured package check, for example test, typecheck, check:all or test:integration. Script execution still crosses tool and directory authorization.' },
           cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
         },
         required: ['check'],

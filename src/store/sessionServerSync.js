@@ -1,3 +1,4 @@
+import { normalizeSessionMutationFailure } from '../lib/sessionMutationFailure.js'
 export { mergeServerSessionMessages } from './sessionMessageSnapshotMerge.js'
 
 const SERVER_MUTATION_TYPES = new Set([
@@ -156,6 +157,13 @@ export function createSessionMutationDispatcher({
   resolveSessionMetadata = null,
   onError = () => {},
 }) {
+  const reportFailure = (error, context, options) => {
+    try { onError(error, context) } catch { /* diagnostic observers do not own the mutation */ }
+    try {
+      const pending = options?.onFailure?.(normalizeSessionMutationFailure(error))
+      pending?.catch?.(() => {})
+    } catch { /* a UI observer cannot replace the operation result */ }
+  }
   const queues = new Map()
   const snapshotRequests = new Map()
   const hydratedRevisions = new Map()
@@ -179,7 +187,7 @@ export function createSessionMutationDispatcher({
     return snapshot
   }
 
-  const hydrateSessionSnapshot = (session, action) => {
+  const hydrateSessionSnapshot = (session, action, options) => {
     if (typeof fetchSessionSnapshot !== 'function' || !canFetchSessionSnapshot()) return undefined
     const sessionId = session?.id
     const watermark = getServerSessionSnapshotWatermark(session)
@@ -211,7 +219,7 @@ export function createSessionMutationDispatcher({
         return true
       })
       .catch((error) => {
-        onError(error, { action, sessionId })
+        reportFailure(error, { action, sessionId }, options)
         return false
       })
 
@@ -222,7 +230,7 @@ export function createSessionMutationDispatcher({
     return tracked
   }
 
-  return function dispatchWithSessionSync(action) {
+  return function dispatchWithSessionSync(action, options = {}) {
     if (action?.type === 'SWITCH_SESSION' || action?.type === 'HYDRATE_SERVER_SESSION') {
       const sessionId = typeof action.payload === 'string' ? action.payload : action.payload?.sessionId
       const storedSession = getState()?.sessions?.find((candidate) => candidate.id === sessionId)
@@ -238,7 +246,7 @@ export function createSessionMutationDispatcher({
           }
         : storedSession
       if (action.type === 'SWITCH_SESSION') dispatchImmediate(action)
-      return session ? hydrateSessionSnapshot(session, action) : undefined
+      return session ? hydrateSessionSnapshot(session, action, options) : undefined
     }
 
     if (!isServerSessionMutation(action)) {
@@ -359,7 +367,7 @@ export function createSessionMutationDispatcher({
         })
         return true
       } catch (error) {
-        onError(error, { action, sessionId })
+        reportFailure(error, { action, sessionId }, options)
         return false
       }
     })

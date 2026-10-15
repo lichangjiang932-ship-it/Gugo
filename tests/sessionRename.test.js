@@ -30,6 +30,15 @@ test('a renamed conversation keeps the name the reader chose', async () => {
   assert.equal(getSession({ userId, sessionId }).title, 'A name the reader chose')
 })
 
+test('conditional rename refuses stale revision without modifying the newer name', async () => {
+  const scope = seed()
+  const before = getSession(scope)
+  await SQLITE_SESSION_ADMIN_PORT.renameSession({ ...scope, title: 'New', expectedRevision: before.revision })
+  const error = await rejectionFrom(() => SQLITE_SESSION_ADMIN_PORT.renameSession({ ...scope, title: 'Stale', expectedRevision: before.revision }))
+  assert.equal(error.code, 'SESSION_REVISION_CONFLICT')
+  assert.equal(getSession(scope).title, 'New')
+})
+
 test('renaming leaves the conversation itself alone', async () => {
   const { userId, sessionId } = seed()
   const before = getSession({ userId, sessionId })

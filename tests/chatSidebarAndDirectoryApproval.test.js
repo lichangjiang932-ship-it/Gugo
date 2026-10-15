@@ -147,7 +147,9 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   assert.doesNotMatch(budget, /regionMaxWidth\(viewport/)
   const region = read('../src/pages/ChatSplit/rightPanes/useRightRegionLayout.js')
   assert.match(region, /const chatAreaWidth = useChatAreaWidth\(\)/)
-  assert.match(region, /const width = clampRegionWidth\(preferredWidth, chatAreaWidth\)/)
+  assert.match(region, /const \{ overlay, width \} = resolveRightRegionLayout\(preferredWidth, chatAreaWidth\)/)
+  assert.match(budget, /Number\(chatAreaWidth\) < MIN_CHAT_WIDTH \+ MIN_REGION_WIDTH/)
+  assert.match(read('../src/pages/ChatSplit/rightPanes/RightPaneGrid.jsx'), /overlay=\{region\.overlay\}/)
   // The rail reserves the region's floor too, but only while the region is open:
   // closed, that room belongs to the conversation.
   const railWidth = read('../src/components/leftRail/useLeftRailWidth.js')
@@ -312,7 +314,7 @@ test('the tool panel and the plan card are controlled by two independent switche
   assert.doesNotMatch(index, /planVisible[\s\S]{0,60}writeWorkbenchOpen/)
 
   // And the reverse: the card's own close only writes the card.
-  assert.match(index, /onClosePlan=\{\(\) => \{ setPlanVisible\(false\); setDismissedPlanSignature\(planSignature\) \}\}/)
+  // Plan-close effects and independent switches are exercised through the production hook in unit/ChatHeaderContract.test.jsx.
 
   // The card floats over the conversation, driven straight from `planVisible`,
   // and is anchored inside the conversation column rather than over the window —
@@ -338,10 +340,12 @@ test('the conversation menu renames in place, asks before deleting, and says wha
   // server rather than living only in this browser.
   assert.match(rail, /toast\.success\(t\('nav\.deletedSession'/)
   assert.match(rail, /archived \? t\('nav\.unarchivedSession'\) : t\('nav\.archivedSession'\)/)
-  assert.match(rail, /renameSessionRemote\(session\.id, title\)/)
+  assert.match(rail, /useSessionRename\(\{ state, dispatch, toast, t \}\)/)
+  const rename = read('../src/components/leftRail/useSessionRename.js')
+  assert.match(rename, /write: renameSessionRemote/)
   // The rename carries `onlyIfMatches`, so the async AI title backfill cannot
   // land on top of a name the reader chose.
-  assert.match(rail, /onlyIfMatches: session\.title/)
+  assert.match(rename, /onlyIfMatches: target\.title/)
   assert.match(list, /data-session-rename-input/)
   assert.match(list, /t\('nav\.renameSession'\)/)
 })

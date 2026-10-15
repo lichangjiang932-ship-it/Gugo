@@ -22,6 +22,8 @@ export const PROTOCOL_NEGATIVE_FIXTURES = Object.freeze({
   'subscribe-cursor.ts': 2322,
   'typed-field.ts': 2322,
   'validation-narrowing.ts': 2339,
+  'verification-readonly.ts': 2540,
+  'verification-port.ts': 2322,
 })
 
 export function readProtocolPilotConfig(configPath = PROTOCOL_PILOT_CONFIG) {

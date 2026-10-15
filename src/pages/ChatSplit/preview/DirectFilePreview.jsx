@@ -194,7 +194,7 @@ function CsvFileRenderer({ preview }) {
 }
 
 function MarkdownFileRenderer({ preview }) {
-  return <div className="h-full overflow-auto bg-paper px-6 py-5"><MarkdownRenderer>{preview.text}</MarkdownRenderer></div>
+  return <div data-testid="workbench-markdown-reader" className="workbench-markdown-reader"><MarkdownRenderer>{preview.text}</MarkdownRenderer></div>
 }
 
 function SourceFileRenderer({ preview }) {

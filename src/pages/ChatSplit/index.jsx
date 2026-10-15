@@ -66,7 +66,7 @@ export default function ChatSplit() {
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,
-    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow, selectedContextWindowAuthoritative,
+    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow, selectedContextWindowAuthoritative, selectedConfigRevision,
     selectedModel, selectedModelProviderId, setSelectedModel, slashRegistry,
   } = useChatCatalogState({
     authoritativeModelFailure, globalActiveAgentId, lang, state, t,
@@ -237,7 +237,7 @@ export default function ChatSplit() {
     { activeSessionId, dispatch, isGenerating, navigate, stateRef, t, toast },
   )
   const {
-    onOpenPlan, planCardVisible, planSignature, setDismissedPlanSignature, setPlanVisible,
+    onOpenPlan, onClosePlan, planCardVisible,
   } = usePlanCardState({ activeSession })
 
   const { openPreview, sessionChangesReview } = useChatOverlays({
@@ -248,10 +248,10 @@ export default function ChatSplit() {
       activeSession={activeSession} activeSessionId={activeSessionId} approvalMode={approvals.approvalSettings?.mode || 'normal'}
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
-      contextWindowAuthoritative={selectedContextWindowAuthoritative}
+      contextWindowAuthoritative={selectedContextWindowAuthoritative} selectedConfigRevision={selectedConfigRevision}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
       sessionChangesReview={sessionChangesReview} planVisible={planCardVisible} onOpenPlan={() => { sessionChangesReview.close(); onOpenPlan() }}
-      onClosePlan={() => { setPlanVisible(false); setDismissedPlanSignature(planSignature) }}
+      onClosePlan={onClosePlan}
       modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onPause={handlePause} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
       onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}

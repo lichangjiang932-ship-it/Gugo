@@ -1,4 +1,5 @@
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { publicRequestDiagnostics } from '../../../shared/publicRequestDiagnostics.js'
 import { modelAuthoredTurnEvidenceText } from '../../../shared/turnEvidenceText.js'
 import { normalizePublicTurnTimeline } from '../../../shared/publicTurnTimeline.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
@@ -489,6 +490,7 @@ export function normalizeServerSessionSnapshot(snapshot) {
             streaming: false,
             serverAuthoritative: true,
             toolCalls,
+            ...publicRequestDiagnostics(message.modelContext),
             ...(publicTimeline ? { publicTimeline } : {}),
             ...(toolTrace.length ? { toolTrace } : {}),
             ...(hasAuthoritativeArtifactCollection || serverArtifacts.length

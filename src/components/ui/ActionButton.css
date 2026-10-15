@@ -1,0 +1,9 @@
+.gugo-action-button {
+  touch-action: manipulation;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .gugo-action-button {
+    min-height: 44px;
+  }
+}

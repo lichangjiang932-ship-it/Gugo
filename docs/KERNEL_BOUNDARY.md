@@ -83,6 +83,10 @@ does not expose it fails with `TURN_SESSION_LOOKUP_UNSUPPORTED`. The Headless
 host must not query a concrete event table or authorize lookup by backend
 provenance.
 
+## Phase capability convergence
+
+Verification observation is the first narrow-stage migration: `verificationObservationStage.js` receives readonly input/four ports, returns immutable effects, and `verificationObservationConsumer.js` applies only explicit host operations. The old wrapper retains PDF handling. This does not remove the 241-entry global bag or imply other phases are isolated; remaining scope is tracked by `DEBT-COUPLING-001` in DEBT.md.
+
 ## Current transition debt
 
 No active compatibility-host transition rows remain.

@@ -1,0 +1,1 @@
+export function aggregate(events) { const done = events.filter(event => event.type === 'turn.completed'); return { turns: done.length, promptTokens: done.reduce((sum, event) => sum + (event.promptTokens || 0), 0) } }

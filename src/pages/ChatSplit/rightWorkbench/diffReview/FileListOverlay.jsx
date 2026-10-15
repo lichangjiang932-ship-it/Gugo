@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import FileTypeGlyph from '../../../../components/FileTypeGlyph.jsx'
+import FileNameLabel from '../../../../components/FileNameLabel.jsx'
+import { isCompositionEvent } from '../../../../lib/compositionEvent.js'
 import { getAuthToken } from '../../../../lib/accountClient.js'
 
 /**
@@ -27,7 +29,7 @@ const EXTENSION_OF = (name) => {
   return dot > 0 ? value.slice(dot + 1).toLowerCase() : 'file'
 }
 
-export default function FileListOverlay({ changed = [], entries: given = null, onClose, onPick, rootPath, t }) {
+export default function FileListOverlay({ changed = [], entries: given = null, controls = null, onClose, onPick, rootPath, t }) {
   const [state, setState] = useState({ key: '', entries: [], error: '' })
   const [term, setTerm] = useState('')
   const fieldRef = useRef(null)
@@ -62,7 +64,9 @@ export default function FileListOverlay({ changed = [], entries: given = null, o
   }, [rootPath, supplied])
 
   useEffect(() => {
+    const previous = document.activeElement
     fieldRef.current?.focus?.()
+    return () => { if (previous?.isConnected) previous.focus?.() }
   }, [])
 
   // A file's changed-ness is asked of its full path: the list gives names, the
@@ -86,7 +90,9 @@ export default function FileListOverlay({ changed = [], entries: given = null, o
   const failed = !supplied && Boolean(state.error)
 
   return (
-    <div data-testid="diff-file-list" className="absolute inset-y-0 left-0 z-20 flex w-[min(280px,100%)] flex-col border-r border-ink/10 bg-surface shadow-xl">
+    <div data-testid="diff-file-list" role="dialog" aria-label={t('diffReview.showFiles')} onKeyDown={event => {
+      if (event.key === 'Escape' && !isCompositionEvent(event)) { event.preventDefault(); event.stopPropagation(); onClose?.() }
+    }} className="absolute inset-y-0 left-0 z-20 flex w-[min(280px,100%)] flex-col border-r border-ink/10 bg-surface shadow-xl">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-ink/10 px-2">
         <Search className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" />
         <input
@@ -108,6 +114,7 @@ export default function FileListOverlay({ changed = [], entries: given = null, o
           <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
+      {controls}
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {!supplied && !rootPath && <p className="p-3 text-xs leading-5 text-ink-fade">{t('diffReview.fileListNoFolder')}</p>}
         {!supplied && rootPath && !loaded && <p className="p-3 text-xs leading-5 text-ink-fade">{t('diffReview.loading')}</p>}
@@ -129,7 +136,7 @@ export default function FileListOverlay({ changed = [], entries: given = null, o
               className="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-xs text-ink-soft transition-colors hover:bg-[var(--color-row-hover)] hover:text-ink"
             >
               <FileTypeGlyph name={entry.name} size={14} type={EXTENSION_OF(entry.name)} />
-              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+              <FileNameLabel value={entry.name} className="flex-1" />
               {mark && (Number(mark.additions) > 0 || Number(mark.deletions) > 0) && (
                 <span className="shrink-0 font-mono text-[11px] tabular-nums" aria-hidden="true">
                   <span className="text-success">+{mark.additions ?? 0}</span>

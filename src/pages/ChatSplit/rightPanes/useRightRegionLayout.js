@@ -6,6 +6,7 @@ import {
   MIN_REGION_WIDTH,
   clampRegionWidth,
   regionMaxWidth,
+  resolveRightRegionLayout,
   useChatAreaWidth,
   viewportWidth,
 } from '../../../lib/chatLayoutBudget.js'
@@ -84,7 +85,7 @@ export function useRightRegionLayout() {
   // has left after the navigation rail, worked out during render so a window that
   // grows gets its room back without anyone having to tell the region.
   const chatAreaWidth = useChatAreaWidth()
-  const width = clampRegionWidth(preferredWidth, chatAreaWidth)
+  const { overlay, width } = resolveRightRegionLayout(preferredWidth, chatAreaWidth)
 
   useEffect(() => {
     try {
@@ -183,6 +184,7 @@ export function useRightRegionLayout() {
     beginWidthDrag,
     bottomLeftRatio,
     minWidth: MIN_REGION_WIDTH,
+    overlay,
     resetWidth,
     resizeColumnWithKeyboard,
     resizeRowWithKeyboard,

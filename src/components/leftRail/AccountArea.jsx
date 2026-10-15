@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Brain, ChevronUp, Link2, Settings, Wrench } from 'lucide-react'
+import { Brain, ChevronUp, History, Link2, Settings, Wrench } from 'lucide-react'
 import BrandMark from '../BrandMark.jsx'
 import DesktopUpdateCard from '../DesktopUpdateCard.jsx'
 import { UiContributionRenderer, useUiContributions } from '../../plugins/uiContributionRegistry.js'
@@ -25,9 +25,10 @@ export default function AccountArea({ compact = false, accountMenuOpen, accountM
       event.stopPropagation()
       onToggle()
       triggerRef.current?.focus({ preventScroll: true })
-    }} className={`absolute bottom-full z-30 mb-2 w-56 max-w-[calc(100vw-16px)] overflow-hidden rounded-card border border-ink/15 bg-paper p-1.5 shadow-xl ${compact ? 'left-0' : 'left-0 right-0'}`}>
+    }} className={`absolute bottom-full z-30 mb-2 w-56 max-w-[calc(100vw-16px)] max-h-[calc(100dvh-72px)] overflow-y-auto rounded-card border border-ink/15 bg-paper p-1.5 shadow-xl ${compact ? 'left-0' : 'left-0 right-0'}`}>
       <MenuButton icon={Link2} label={t('access.title')} onClick={() => onNavigate({ path: '/access', requiresLogin: true })} />
       <MenuButton icon={Settings} label={t('nav.settings')} onClick={() => onNavigate({ path: '/settings', requiresLogin: true })} />
+      <MenuButton icon={History} label={t('nav.history')} onClick={() => onNavigate({ path: '/history', requiresLogin: true })} />
       <MenuButton icon={Wrench} label={t('nav.skills')} onClick={() => onNavigate({ path: '/skills' })} />
       {/* Memory is listed here because it has no other entry point: the rail's
           icon row used to reach it, and removing that row would have left the

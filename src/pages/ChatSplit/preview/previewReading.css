@@ -1,0 +1,83 @@
+/* File reading only: do not restyle chat, authored HTML, Office or slide surfaces. */
+.workbench-markdown-reader {
+  height: 100%;
+  min-width: 0;
+  overflow: auto;
+  padding: 1.25rem 1.5rem;
+  background: var(--color-paper);
+  scrollbar-gutter: stable;
+}
+.workbench-markdown-reader > .chat-markdown {
+  max-width: 76ch;
+  margin-inline: auto;
+  font-size: .875rem;
+  line-height: 1.75;
+  overflow-wrap: break-word;
+}
+.workbench-markdown-reader :is(h1, h2, h3, h4) {
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -.015em;
+}
+.workbench-markdown-reader h1 { margin: 0 0 1.2em; font-size: 1.65em; }
+.workbench-markdown-reader h2 { margin: 1.8em 0 .75em; font-size: 1.35em; }
+.workbench-markdown-reader h3 { margin: 1.5em 0 .6em; font-size: 1.15em; }
+.workbench-markdown-reader p { margin-block: .8em; }
+.workbench-markdown-reader :not(pre) > code {
+  padding: .08em .3em;
+  border: 0;
+  border-radius: .25em;
+  background: rgb(var(--color-ink-rgb) / .045);
+  font-size: .9em;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  box-decoration-break: clone;
+}
+.workbench-markdown-reader :not(pre) > code::before,
+.workbench-markdown-reader :not(pre) > code::after { content: none; }
+.workbench-markdown-reader blockquote {
+  margin-block: 1em;
+  padding: .1em 0 .1em .9em;
+  border-left: 2px solid rgb(var(--color-ink-rgb) / .13);
+  border-radius: 0;
+  background: transparent;
+  color: rgb(var(--color-ink-rgb) / .72);
+  font-style: normal;
+}
+.workbench-markdown-reader blockquote p::before,
+.workbench-markdown-reader blockquote p::after { content: none; }
+.workbench-markdown-reader table { min-width: max(100%, 34rem); }
+.workbench-markdown-reader :is(th, td) {
+  padding: .5rem .7rem;
+  border-color: rgb(var(--color-ink-rgb) / .08);
+  font-size: .925em;
+  line-height: 1.65;
+}
+.workbench-markdown-reader th {
+  background: rgb(var(--color-ink-rgb) / .025);
+  font-weight: 500;
+}
+.workbench-markdown-reader hr { margin-block: 1.6em; border-color: rgb(var(--color-ink-rgb) / .1); }
+.workbench-source-reader {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  overflow: auto;
+  padding: 1rem;
+  background: var(--color-paper);
+  color: rgb(var(--color-ink-rgb) / .88);
+  font-size: .8125rem;
+  line-height: 1.65;
+  font-style: normal;
+  tab-size: 4;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-variant-ligatures: none;
+}
+.workbench-source-reader[data-wrap="true"] { white-space: pre-wrap; overflow-wrap: anywhere; }
+@container chat-preview (max-width: 480px) {
+  .workbench-markdown-reader { padding: 1rem; }
+}

@@ -122,6 +122,25 @@ test('the window presets re-read the report and all-time drops the since filter'
   }
 })
 
+test('switching ranges removes old totals while the replacement is still pending', async () => {
+  const originalFetch = globalThis.fetch
+  const dom = setupDom()
+  let rendered
+  let complete
+  try {
+    rendered = await renderPanel({ ok: true, report: makeReport() })
+    globalThis.fetch = () => new Promise((resolve) => { complete = resolve })
+    await act(async () => rendered.rootElement.querySelector('[data-testid="settings-usage-window-7"]').click())
+    assert.equal(Boolean(rendered.rootElement.querySelector('[data-testid="settings-usage-table"]')), false)
+    assert.match(rendered.rootElement.textContent, /usage.loading/)
+    await act(async () => complete(jsonResponse({ ok: true, report: makeReport() })))
+  } finally {
+    if (rendered) await act(async () => rendered.root.unmount())
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('a slow earlier response cannot overwrite the range the reader is looking at', async () => {
   const originalFetch = globalThis.fetch
   const dom = setupDom()
@@ -240,6 +259,31 @@ test('the panel names which way the per-model breakdown disagrees with the turn 
     assert.match(second.rootElement.querySelector('[data-testid="settings-usage-note"]').textContent, /usage.breakdownLarger/)
     await act(async () => second.root.unmount())
   } finally {
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('coverage and writes stay separate, and the displayed rate uses measured inputs only', async () => {
+  const originalFetch = globalThis.fetch
+  const dom = setupDom()
+  let rendered
+  try {
+    rendered = await renderPanel({ ok: true, report: makeReport({ cacheHitRatePercent: 50,
+      cacheCoverage: { requests: 3, readReported: 2, readUnknown: 1, writeReported: 1,
+        cacheCreationTokens: 30, hitRatePercent: 10 } }) })
+    const coverage = rendered.rootElement.querySelector('[data-testid="settings-usage-cache-coverage"]')
+    assert.ok(coverage)
+    assert.match(coverage.textContent, /2 \/ 3/)
+    assert.match(coverage.textContent, /30/)
+    assert.match(rendered.rootElement.textContent, /10%/)
+    assert.doesNotMatch(rendered.rootElement.textContent, /50%/)
+    await act(async () => rendered.root.unmount())
+    rendered = await renderPanel({ ok: true, report: makeReport({ cacheHitRatePercent: 100,
+      cacheCoverage: { requests: 0, readReported: 0, readUnknown: 0, cacheCreationTokens: null, hitRatePercent: null } }) })
+    assert.doesNotMatch(rendered.rootElement.textContent, /100%/, 'legacy aggregate rates cannot masquerade as request observations')
+  } finally {
+    if (rendered) await act(async () => rendered.root.unmount())
     dom.window.close()
     globalThis.fetch = originalFetch
   }

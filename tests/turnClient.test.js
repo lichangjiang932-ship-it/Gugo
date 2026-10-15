@@ -1893,7 +1893,8 @@ test('assistant delta appends text and publishes responding activity in one stat
   assert.deepEqual(actions, [{
     type: 'APPEND_TO_LAST_MESSAGE',
     payload: 'hello',
-    meta: { progress: null, modelActivity: { kind: 'responding' } },
+    meta: { progress: null, modelActivity: { kind: 'responding' },
+      modelTimingSignal: { phase: 'public', at: 4, elapsedMs: null } },
     serverTurnId: 't',
     serverSequence: 3,
     sessionId: 's',
@@ -2827,6 +2828,7 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
       modelRequestId: null,
       modelPhysicalAttempt: null,
       modelUsage: null,
+      modelTiming: null,
     },
     serverTurnId: 't',
     serverSequence: 9,

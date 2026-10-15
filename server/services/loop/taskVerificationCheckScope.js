@@ -240,13 +240,14 @@ function commandCheckDescriptor(segment) {
       && /(?:^|\s)[/-]t(?:arget)?:(?:clean|restore|pack|publish)(?:\s|$)/iu.test(value))
     || /(?:^|\s)(?:clean|deploy|install|publish)(?:\s|$)/iu.test(value)) return null
   const packageScript = value.match(
-    /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(test|lint|build|check|typecheck)((?:\s+[^\r\n]*)?)$/iu,
+    /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?((?:test|lint|build|check|typecheck)(?::[a-z0-9][a-z0-9:_-]{0,63})?)((?:\s+[^\r\n]*)?)$/iu,
   )
   if (packageScript) {
     if (/(?:^|\s)-v(?:\s|$)/iu.test(packageScript[2])) return null
     return {
-      kind: normalizeCheckKind(packageScript[1]),
+      kind: normalizeCheckKind(packageScript[1].split(':')[0]),
       ...commandArgumentAnalysis(packageScript[2], PACKAGE_SCRIPT_ARGUMENTS),
+      ...(packageScript[1].includes(':') ? { verifierFamily: packageScriptFamily(value.split(/\s/u)[0], packageScript[1]), coverage: 'targeted' } : {}),
     }
   }
   const extended = extendedCommandCheckDescriptor(value)
@@ -481,10 +482,10 @@ export function commandCheckDescriptors(command) {
     const verifierFamily = explicitVerifierFamily || verifierFamilyForCommand(segment, kind)
     if (!verifierFamily) return []
     const packageScript = segment.match(
-      /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(test|lint|build|check|typecheck)\s*$/iu,
+      /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?((?:test|lint|build|check|typecheck)(?::[a-z0-9][a-z0-9:_-]{0,63})?)\s*$/iu,
     )
     const commandScope = packageScript && !environmentPrelude
-      ? `package-script:${kind}`
+      ? `package-script:${packageScript[1]}`
       : normalizeCommand([...preludes, segment].join(' && '))
     descriptors.set(`${kind}\u0000${commandScope}`, {
       kind,
@@ -512,7 +513,7 @@ export function taskVerificationKinds(call, result = null) {
   if (projectCheckWasNotConfigured(call, result)) return []
   if (!isTaskVerificationTool(name)) return []
   if (name === 'run_project_check') {
-    const kind = normalizeCheckKind(result?.check || call?.args?.check)
+    const kind = normalizeCheckKind(String(result?.check || call?.args?.check || '').split(':')[0])
     return kind ? [kind] : []
   }
   if (name === 'run_test') {
@@ -545,12 +546,13 @@ export function taskVerificationScopes(call, result) {
   const cwd = normalizeScopePath(result?.cwd || call?.args?.cwd)
   let descriptors = []
   if (name === 'run_project_check') {
-    const kind = normalizeCheckKind(result?.check || call?.args?.check)
+    const checkName = String(result?.check || call?.args?.check || '')
+    const kind = normalizeCheckKind(checkName.split(':')[0])
     if (kind) descriptors = [{
       kind,
-      commandScope: `package-script:${kind}`,
-      verifierFamily: packageScriptFamily('npm', kind),
-      coverage: 'cwd',
+      commandScope: `package-script:${checkName}`,
+      verifierFamily: packageScriptFamily('npm', checkName),
+      coverage: checkName.includes(':') ? 'targeted' : 'cwd',
     }]
   } else if (name === 'run_test') {
     const command = normalizeCommand(call?.args?.command || result?.command)

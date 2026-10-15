@@ -30,6 +30,14 @@ const translations = {
       "backendDefault": "后端默认",
       "estimatedUsage": "上下文占用",
       "currentContext": "当前有效上下文",
+      "pendingContext": "待发送上下文（估算）",
+      "windowUnknown": "有效窗口未知",
+      "hostRetained": "基于最近服务端保留上下文估算，再加上草稿。仍非上游逐 Token 计量。",
+      "localVisible": "本地可见内容估算，含草稿；服务端尚未编译的指令、动态工具或压缩会使实际组包不同。",
+      "unmeasuredAttachments": "另有 {count} 个附件尚未完整计量，未按零 Token 处理。",
+      "lastMeasuredInput": "最近请求输入（上游上报）",
+      "lastEstimatedInput": "最近请求输入（服务端估算）",
+      "lastRequestHint": "历史参考，不作为当前占用；已缓存内容仍占上下文。",
       "cumulativeUsage": "会话累计 Token",
       "latestRequestCache": "最近请求的缓存",
       "cacheRead": "缓存读取",
@@ -44,7 +52,7 @@ const translations = {
       "attachments": "附件",
       "toolDefinitions": "工具定义",
       "systemPrompt": "系统提示词",
-      "estimateNotice": "这是用于提前预警的近似值；实际 tokenizer、系统提示词和服务端动态工具可能使最终用量不同。"
+      "estimateNotice": "总量是待发送估算；以下分项是本地可见内容估算，服务端校准后不强行相加对账。实际 tokenizer、动态工具或压缩仍可使最终组包不同。"
     },
     "modelPicker": {
       "open": "选择模型",
@@ -143,6 +151,14 @@ const translations = {
       "backendDefault": "Backend default",
       "estimatedUsage": "Context usage",
       "currentContext": "Current effective context",
+      "pendingContext": "Pending context (estimate)",
+      "windowUnknown": "Effective window unknown",
+      "hostRetained": "Estimated from the latest server-retained context plus the draft; not provider token-by-token measurement.",
+      "localVisible": "Visible client content including the draft. Uncompiled instructions, dynamic tools or compaction can change the actual request.",
+      "unmeasuredAttachments": "{count} attachments are not fully measured; they are not treated as zero tokens.",
+      "lastMeasuredInput": "Latest request input (provider reported)",
+      "lastEstimatedInput": "Latest request input (server estimate)",
+      "lastRequestHint": "Historical reference, not current occupancy. Cached content still occupies context.",
       "cumulativeUsage": "Session cumulative tokens",
       "latestRequestCache": "Latest request cache",
       "cacheRead": "Cache read",
@@ -157,7 +173,7 @@ const translations = {
       "attachments": "Attachments",
       "toolDefinitions": "Tool definitions",
       "systemPrompt": "System prompt",
-      "estimateNotice": "This is an early-warning estimate. The model tokenizer, system prompt, and server-side dynamic tools can change the final usage."
+      "estimateNotice": "The total is a pending estimate. The breakdown estimates visible client content and is not forced to sum to a server-calibrated total. Tokenization, dynamic tools or compaction can change the final request."
     },
     "modelPicker": {
       "open": "Choose model",

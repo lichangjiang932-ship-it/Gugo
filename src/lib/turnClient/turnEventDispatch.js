@@ -1,7 +1,10 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
+import { withModelTimingSignal } from '../modelRequestTiming.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { modelContextDiagnosticsSchema } from '../../../shared/modelContextDiagnostics.js'
 import { modelWireDiagnosticsSchema } from '../../../shared/modelWireDiagnostics.js'
+import { promptCompilerDiagnosticsSchema } from '../../../shared/promptCompilerDiagnostics.js'
+import { modelContextUsageSchema } from '../../../shared/modelContextUsage.js'
 import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
 import { announceGoalPlanChanged, inspectGoalPlanSignal } from '../goalPlanSignals.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
@@ -53,7 +56,7 @@ const TERMINAL_TOOL_CALL_STATUS = new Map([
 
 const CLEARED_MODEL_DIAGNOSTICS = Object.freeze({
   modelContextDiagnostics: null, modelWireDiagnostics: null,
-  modelRequestId: null, modelPhysicalAttempt: null, modelUsage: null,
+  modelRequestId: null, modelPhysicalAttempt: null, modelUsage: null, modelTiming: null,
 })
 
 function preparedModelDiagnostics(payload) {
@@ -61,8 +64,10 @@ function preparedModelDiagnostics(payload) {
   const parsed = (context ? modelContextDiagnosticsSchema : modelWireDiagnosticsSchema)
     .safeParse(context ? payload.contextDiagnostics : payload.wireDiagnostics)
   return {
-    ...(context ? CLEARED_MODEL_DIAGNOSTICS : { modelUsage: null }),
+    ...(context ? CLEARED_MODEL_DIAGNOSTICS : { modelUsage: null, modelTiming: null }),
     [context ? 'modelContextDiagnostics' : 'modelWireDiagnostics']: parsed.success ? parsed.data : null,
+    ...(context || payload.contextUsage ? { modelContextUsage: modelContextUsageSchema.safeParse(payload.contextUsage).success ? payload.contextUsage : null } : {}),
+    ...(context ? { modelCompilerDiagnostics: promptCompilerDiagnosticsSchema.safeParse(payload.compilerDiagnostics).success ? payload.compilerDiagnostics : null } : {}),
     modelRequestId: typeof payload.modelRequestId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/u.test(payload.modelRequestId)
       ? payload.modelRequestId : null,
     modelPhysicalAttempt: Number.isSafeInteger(payload.physicalAttempt) && payload.physicalAttempt > 0 ? payload.physicalAttempt : null,
@@ -162,7 +167,7 @@ export async function dispatchTurnEvent(sourceEvent, {
     })
   }
   if (TOOL_OUTPUT_FLUSH_EVENT_TYPES.has(event.type)) await flushToolOutput?.()
-  const dispatchMessage = (action) => dispatch?.({ ...action, ...(messageTarget || {}) })
+  const dispatchMessage = (action) => dispatch?.({ ...withModelTimingSignal(action, event), ...(messageTarget || {}) })
   const streamCursor = { serverTurnId: event.turnId, serverSequence: event.sequence }
   const terminalToolStatus = TERMINAL_TOOL_CALL_STATUS.get(event.type)
   const terminalToolFinalizer = terminalToolStatus ? {
@@ -223,6 +228,11 @@ export async function dispatchTurnEvent(sourceEvent, {
     })
     cursorCommitted = true
   } else if (event.type === 'model.phase') {
+    if (payload.phase === 'context_usage') {
+      const observation = modelContextUsageSchema.safeParse(payload.contextUsage)
+      dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: { modelContextUsage: observation.success ? observation.data : null }, ...streamCursor })
+      return { cursorCommitted: true }
+    }
     if (payload.phase === 'context_prepared' || payload.phase === 'wire_prepared') {
       dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: preparedModelDiagnostics(payload), ...streamCursor })
       return { cursorCommitted: true }
@@ -263,6 +273,7 @@ export async function dispatchTurnEvent(sourceEvent, {
         type: 'UPDATE_LAST_MESSAGE_META',
         payload: {
           modelActivity: null,
+          ...(modelContextUsageSchema.safeParse(payload.contextUsage).success ? { modelContextUsage: payload.contextUsage } : {}),
           ...(modelUsage ? {
             modelUsage,
             actualPromptTokens: modelUsage.promptTokens,

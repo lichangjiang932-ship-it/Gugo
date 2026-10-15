@@ -17,6 +17,8 @@ import {
 } from './turnRecoveryProjection.js'
 import { normalizeArtifactIds, optionalDeliveryArtifactIds } from './turnTerminalProjection.js'
 import { normalizePromptTokenEstimate } from './turnModelUsageProjection.js'
+import { compilerReuse } from '../../shared/promptCompilerDiagnostics.js'
+import { publicRequestDiagnostics } from '../../shared/publicRequestDiagnostics.js'
 import { createTurnTerminalEvidenceRuntime } from './turnTerminalEvidenceRuntime.js'
 import { createTurnLoopExecutionRuntime } from './turnLoopExecutionRuntime.js'
 import {
@@ -121,6 +123,7 @@ async function prepareTurnPromptAndTools(runtime, input, recovery, configuredApp
     compactionArchiveId: null,
     compactionBoundary: null,
     canaryAssignment,
+    compilerDiagnostics: compilerReuse(restoredSnapshot ? 'checkpoint_reuse' : 'turn_preparation'),
   }
   if (!restoredSnapshot) {
     try {
@@ -226,6 +229,7 @@ function createTurnExecutionState(runtime, input, recovery, prepared) {
     latestCheckpointSequence: Number.isInteger(recovery.checkpoint?.sequence)
       ? recovery.checkpoint.sequence
       : null,
+    requestDiagnostics: publicRequestDiagnostics(restored?.requestDiagnostics),
     latestModelUsage: normalizeModelUsage(restored?.latestModelUsage),
     turnModelUsage: normalizeModelUsage(restored?.turnModelUsage)
       || normalizeModelUsage(restored?.latestModelUsage),

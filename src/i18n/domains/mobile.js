@@ -1,7 +1,7 @@
 const translations = {
   zh: {
     title: '手机入口',
-    subtitle: '生成 access key，在手机或局域网浏览器打开 /mobile.html 即可登录使用。',
+    subtitle: '桌面本机直接使用；显式启用局域网入口后，手机可通过访问钥匙配对连接。',
     new: '新建 Key',
     loading: '加载中…',
     empty: '还没有 access key，点“新建 Key”开始',
@@ -32,11 +32,11 @@ const translations = {
     copy: '复制',
     done: '我已保存',
     howToPrefix: '使用方法：手机浏览器打开',
-    howToSuffix: '，粘贴此 key 即可登录。',
+    howToSuffix: '，粘贴此 key 与本机服务配对。',
   },
   en: {
     title: 'Mobile access',
-    subtitle: 'Generate an access key, then open /mobile.html in a mobile or local-network browser to sign in.',
+    subtitle: 'Use the desktop directly. After explicitly enabling LAN access, pair a mobile browser using an access key.',
     new: 'New key',
     loading: 'Loading…',
     empty: 'No access keys yet. Select “New key” to get started.',
@@ -67,7 +67,7 @@ const translations = {
     copy: 'Copy',
     done: 'I saved it',
     howToPrefix: 'To use it, open',
-    howToSuffix: 'in your mobile browser and paste this key to sign in.',
+    howToSuffix: 'in your mobile browser and paste this key to pair with the local service.',
   },
 }
 

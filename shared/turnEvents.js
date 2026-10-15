@@ -4,6 +4,9 @@ import { modelProviderStopDiagnostic } from './modelProviderStopDiagnostic.js'
 import { MODEL_PHASE_PROGRESS_FIELDS } from './modelPhaseProgress.js'
 import { modelContextDiagnosticsSchema } from './modelContextDiagnostics.js'
 import { modelWireDiagnosticsSchema } from './modelWireDiagnostics.js'
+import { modelRequestSourceSchema } from './modelRequestSource.js'
+import { promptCompilerDiagnosticsSchema } from './promptCompilerDiagnostics.js'
+import { modelContextUsageSchema } from './modelContextUsage.js'
 import { toolFailureSchema, terminalReasonSchema, terminalNextActionSchema,
   completionPoliciesSchema, taskVerificationSchema, turnFailureSchema } from './turnFailureSchemas.js'
 import {
@@ -167,6 +170,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     usage: jsonRecord.nullable().optional(), modelName: nullableText, error: nullableText,
     contextDiagnostics: modelContextDiagnosticsSchema.optional(),
     wireDiagnostics: modelWireDiagnosticsSchema.optional(),
+    modelSource: modelRequestSourceSchema.optional(),
+    compilerDiagnostics: promptCompilerDiagnosticsSchema.optional(),
+    contextUsage: modelContextUsageSchema.optional(),
     modelRequestId: z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/u).optional(),
     physicalAttempt: z.number().int().positive().optional(),
   }).strict(),

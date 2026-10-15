@@ -7,6 +7,11 @@
   },
   "files": [
     "shared/inlineSkillDefinitions.js",
+    "shared/taskAcceptanceContract.js",
+    "shared/projectCheckNames.js",
+    "server/services/loop/verificationObservationStage.js",
+    "server/services/loop/verificationObservationConsumer.js",
+    "types/fixtures/verification.valid.ts",
     "shared/turnActivity.js",
     "shared/turnEvents.js",
     "shared/turnEventTransport.js",

@@ -1,3 +1,5 @@
+import { memo, useRef } from 'react'
+import { useRecordBrowserOutput } from '../../../lib/browserOutputTiming.js'
 import CompactionPill from '../../../components/CompactionPill.jsx'
 import { shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
 import {
@@ -33,7 +35,7 @@ import { AssistantMeta, UserMeta } from './messageRow/MetaActions.jsx'
 import { InlineDirectoryRequestCard, UserBubble } from './messageRow/UserBubble.jsx'
 import { isPausedDirectoryMessage } from '../chatDirectoryDecisions.js'
 
-export default function MessageRow({
+function MessageRow({
   msg,
   sessionId,
   workspacePath = '',
@@ -71,6 +73,8 @@ export default function MessageRow({
     || msg.meta?.serverConnectionState === 'blocked'
   const isCurrentStreamingMessage = msg.meta?.streaming === true
     || (msg.meta?.streaming == null && msg.id === generatingMessageId)
+  const outputRef = useRef(null)
+  useRecordBrowserOutput(outputRef, msg, isCurrentStreamingMessage, recoveryOwnerScope, sessionId)
   const isMessageComplete = !isCurrentStreamingMessage
   const isSuspendedTurn = msg.meta?.interrupted === true || msg.meta?.paused === true
   const canPresentManagedDeliverables = isMessageComplete
@@ -163,6 +167,7 @@ export default function MessageRow({
       id={msg.id ? `message-${msg.id}` : undefined}
       data-chat-message-index={turnIndex}
       data-chat-turn-index={msg.role === 'user' ? turnIndex : undefined}
+      ref={outputRef}
       data-message-role={msg.role}
       className={`group/message flex w-full py-0.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
     >
@@ -276,3 +281,5 @@ export default function MessageRow({
     </div>
   )
 }
+
+export default memo(MessageRow)

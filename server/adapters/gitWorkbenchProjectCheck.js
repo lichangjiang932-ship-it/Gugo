@@ -4,10 +4,10 @@ import path from 'node:path'
 import { projectVerificationFields } from '../utils/processExecutionFailure.js'
 import { bashExecTool, resolveForShellCwd } from './fsShellTools.js'
 import { assertGitToolPermitted } from './gitWorkbenchPolicy.js'
+import { projectCheckName } from '../../shared/projectCheckNames.js'
 
 const CHECK_TIMEOUT = 5 * 60_000
 const MAX_OUTPUT = 1024 * 1024
-const ALLOWED_CHECKS = new Set(['lint', 'test', 'build'])
 
 function badRequest(message) {
   const error = new Error(message)
@@ -29,7 +29,7 @@ function availablePackageChecks(root) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return null
     const manifest = JSON.parse(fs.readFileSync(filename, 'utf8'))
     const scripts = manifest?.scripts
-    return [...ALLOWED_CHECKS].filter((name) => scripts && Object.hasOwn(scripts, name)
+    return Object.keys(scripts || {}).filter((name) => projectCheckName(name) && Object.hasOwn(scripts, name)
       && typeof scripts[name] === 'string' && scripts[name].trim())
   } catch (error) {
     return error?.code === 'ENOENT' ? [] : null
@@ -43,8 +43,8 @@ export async function runProjectCheckTool({
   signal = null,
 } = {}) {
   const name = String(check || '').trim()
-  if (!ALLOWED_CHECKS.has(name)) {
-    throw badRequest('run_project_check only supports lint, test, build')
+  if (!projectCheckName(name)) {
+    throw badRequest('run_project_check requires a test/lint/build/check/typecheck name, optionally namespaced')
   }
   assertGitToolPermitted(userId, 'run_project_check')
   const resolvedCwd = resolveForShellCwd(rawCwd, { userId })

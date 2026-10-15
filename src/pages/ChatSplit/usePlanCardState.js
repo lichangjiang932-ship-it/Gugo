@@ -31,6 +31,7 @@ export default function usePlanCardState({ activeSession }) {
     || (planSignature !== '' && planSignature !== initialPlanSignature && planSignature !== dismissedPlanSignature)
   return {
     onOpenPlan: () => setPlanVisible(true),
+    onClosePlan: () => { setPlanVisible(false); setDismissedPlanSignature(planSignature) },
     planCardVisible,
     planSignature,
     setDismissedPlanSignature,

@@ -1,4 +1,5 @@
 import { observeLoopEvent } from './eventIsolation.js'
+import { serializeArtifactFormatRejections } from './artifactFormatRejections.js'
 import { installGoalPlanExecutionGate } from '../goalPlanExecutionPolicy.js'
 import { COMPLETION_POLICY_VERSION } from './completionPolicy.js'
 import { assertRuntimeStage } from './runtimeContract.js'
@@ -307,6 +308,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       artifactContractText: s.activeArtifactContractText,
       artifactOutputPrompt: s.activeArtifactOutputPrompt,
       artifactDeliveryRetries: s.artifactDeliveryRetries,
+      artifactFormatRejections: serializeArtifactFormatRejections(s.artifactFormatRejections),
       successfulExpectedPathWriteObserved: s.successfulExpectedPathWriteObserved,
       forcedArtifactToolName: s.forcedArtifactToolName || null,
       forcedArtifactAttemptPending: s.forcedArtifactAttemptPending,

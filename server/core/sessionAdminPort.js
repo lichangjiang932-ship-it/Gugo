@@ -393,7 +393,9 @@ function normalizeInput(method, input) {
     const title = raw.replace(/\s+/gu, ' ').trim()
     if (!title) throw invalidInput(method, 'title must not be blank')
     if (title.length > 200) throw invalidInput(method, 'title must be at most 200 characters')
-    return { ...sessionInput(method, source), title }
+    const revision = ownDataValue(source, 'expectedRevision', (message) => invalidInput(method, message), { optional: true })
+    return { ...sessionInput(method, source), title,
+      ...(revision === undefined ? {} : { expectedRevision: paginationInteger(method, source, 'expectedRevision', { fallback: NaN, min: 0, max: Number.MAX_SAFE_INTEGER }) }) }
   }
   if (method === 'searchMessages') {
     const source = inputRecord(method, input)

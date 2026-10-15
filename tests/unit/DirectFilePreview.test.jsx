@@ -756,7 +756,7 @@ test('direct-file toolbar names the file and offers no download action of its ow
     ))
     assert.equal(rootElement.querySelector('a[download]'), null)
     // The file chip carries the name (its menu header carries it in full).
-    assert.equal(rootElement.querySelector('[data-testid="preview-file-path"]').textContent, '季度报告')
+    assert.equal(rootElement.querySelector('[data-testid="preview-file-path"]').textContent, '季度报告.docx')
     assert.match(rootElement.querySelector('[data-testid="preview-open-menu-title"]').textContent, /季度报告.docx/)
     assert.equal(rootElement.querySelector('[data-file-family="word"]') !== null, true, 'a Word file shows the Word glyph')
   } finally {

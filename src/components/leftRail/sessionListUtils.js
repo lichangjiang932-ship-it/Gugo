@@ -44,18 +44,18 @@ export function sessionTimePresentation(session, { locale = 'zh', now = Date.now
 
 export function sortSessions(sessions = []) {
   return sessions
-    .map((session, index) => ({ session, index }))
+    .map((session, index) => ({ session, index, activity: timestampOf(session), pinned: pinnedTimestampOf(session) }))
     .sort((left, right) => {
-      const leftPinned = pinnedTimestampOf(left.session) > 0
-      const rightPinned = pinnedTimestampOf(right.session) > 0
+      const leftPinned = left.pinned > 0
+      const rightPinned = right.pinned > 0
       if (leftPinned !== rightPinned) return leftPinned ? -1 : 1
       if (leftPinned) {
-        const pinDifference = pinnedTimestampOf(right.session) - pinnedTimestampOf(left.session)
+        const pinDifference = right.pinned - left.pinned
         if (pinDifference) return pinDifference
         const idDifference = String(left.session?.id || '').localeCompare(String(right.session?.id || ''))
         if (idDifference) return idDifference
       }
-      const activityDifference = timestampOf(right.session) - timestampOf(left.session)
+      const activityDifference = right.activity - left.activity
       return activityDifference || left.index - right.index
     })
     .map(({ session }) => session)

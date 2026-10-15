@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-14",
+  "head": "b5698be",
+  "uncommitted": true,
+  "scope": "backend/shared protocol/web, not Electron",
+  "targeted": {
+    "files": 15,
+    "tests": 71,
+    "status": "PASS"
+  },
+  "persistenceAndProtocol": {
+    "files": 5,
+    "tests": 210,
+    "status": "PASS"
+  },
+  "offline": {
+    "tests": 71,
+    "status": "PASS",
+    "liveProvider": false
+  },
+  "fullRegression": { "files": 1157, "status": "PASS", "exitCode": 0, "seconds": 1599.412 },
+  "ui": {
+    "traffic": "owned loopback fixture only",
+    "renameUIAndSQLiteVerified": true,
+    "crossTurnAfterHydrationVerified": true,
+    "compilerBlockObservationsVerified": true,
+    "paintOpportunityObserved": true,
+    "privateReasoningExposed": false,
+    "syntheticSessions": 2000,
+    "renderedRows": 70,
+    "domElements": 898,
+    "frameMedianMs": 6.1,
+    "frameP95Ms": 30.1,
+    "scope": "paged catalog under concurrent tests, not sustained FPS or real model performance"
+  },
+  "sortBenchmark": {
+    "sessions": 5000,
+    "updates": 30,
+    "orderingIdentical": true,
+    "baselineMedianMs": 56.675,
+    "decoratedMedianMs": 3.511
+  },
+  "liveEvalDataset": {
+    "tasks": 3,
+    "executedAgainstProvider": false
+  },
+  "desktopExcluded": true,
+  "initialPartialRunsRetained": true,
+  "ownedQAProcessesStopped": true
+}

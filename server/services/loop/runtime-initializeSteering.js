@@ -1,5 +1,6 @@
 import { observeLoopEvent } from './eventIsolation.js'
 import { emitWirePreparation } from './runtimeContextDiagnostics.js'
+import { contextUsageObservation, publishContextUsage } from './contextUsageObservation.js'
 import {
   appendModelProviderAttempt,
   createModelInvocation,
@@ -192,8 +193,9 @@ async function prepareTrackedInvocation(s, context, preparedRequest, attempt) {
       context.assertActive()
       if (providerAttempt.wireDiagnostics) {
         await emitWirePreparation(s, { wireDiagnostics: providerAttempt.wireDiagnostics,
-          modelRequestId: invocation.id, physicalAttempt: providerAttempt.sequence, configRevision: invocation.configRevision })
-      }
+          modelRequestId: invocation.id, physicalAttempt: providerAttempt.sequence, configRevision: invocation.configRevision,
+          contextUsage: contextUsageObservation(s, { stage: 'prepared', messages: preparedRequest.messages, tools: preparedRequest.tools }) })
+      } else await publishContextUsage(s, { stage: 'prepared', messages: preparedRequest.messages, tools: preparedRequest.tools })
       context.assertActive()
     },
   }

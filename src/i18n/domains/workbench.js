@@ -1,6 +1,7 @@
 const translations = {
   "zh": {
     "title": "工作台",
+    "backToConversation": "返回对话",
     "active": "正在执行任务",
     "ready": "已就绪",
     "files": "相关文件",
@@ -180,6 +181,7 @@ const translations = {
   },
   "en": {
     "title": "Workbench",
+    "backToConversation": "Back to conversation",
     "active": "Task in progress",
     "ready": "Ready",
     "files": "Files",

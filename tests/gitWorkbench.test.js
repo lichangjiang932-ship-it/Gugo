@@ -109,7 +109,7 @@ test('git_status and git_diff report workspace changes', async () => {
   })
 })
 
-test('run_project_check only allows lint/test/build scripts', async () => {
+test('run_project_check rejects non-check package scripts', async () => {
   const cwd = withTempRepo()
   await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '0', WORKSPACE_SHELL_ENABLED: '1' }, async () => {
     const lint = await runProjectCheckTool({ check: 'lint' })
@@ -118,7 +118,15 @@ test('run_project_check only allows lint/test/build scripts', async () => {
     assert.equal(lint.verificationVerdict, 'passed')
     assert.equal(lint.systemFailure, false)
     assert.match(lint.stdout, /lint-ok/)
-    await assert.rejects(() => runProjectCheckTool({ check: 'start' }), /only supports lint, test, build/)
+    const manifestPath = path.join(cwd, 'package.json')
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+    manifest.scripts['check:all'] = manifest.scripts.lint
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest))
+    const custom = await runProjectCheckTool({ check: 'check:all' })
+    assert.equal(custom.ok, true)
+    assert.equal(custom.check, 'check:all')
+    assert.match(custom.stdout, /lint-ok/)
+    await assert.rejects(() => runProjectCheckTool({ check: 'start' }), /requires a test\/lint\/build\/check\/typecheck name/)
   })
 })
 

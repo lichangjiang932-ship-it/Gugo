@@ -13,6 +13,7 @@ const { classifyGeneratedArtifactFormatCode } = await import(
 const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
 
 const READ_FILE = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+const WRITE_FILE = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
 const REJECTED_PATH = 'D:\\work\\report.docx'
 const POLICY_CODE = 'ARTIFACT_FORMAT_ACTIVE_CONTENT_FORBIDDEN'
 
@@ -79,11 +80,15 @@ async function runAgainstRefusal(result, { maxIters = 20 } = {}) {
     approvalPrincipal: trustedInternalLoopPrincipal(),
     step: { id: 'step-artifact-policy', kind: 'chat' },
     messages: [{ role: 'user', content: '把文档背景改成浅黄色' }],
-    toolSpecs: [READ_FILE],
+    toolSpecs: [READ_FILE, WRITE_FILE],
     maxIters,
     enableToolHooks: false,
     runModel: async ({ tools }) => {
       modelCalls += 1
+      // Seed a real mutation outcome in this turn. Reading an untouched source
+      // is not a delivery attempt and must not reach the output-policy fuse.
+      if (modelCalls === 1) return { content: '', toolCalls: [{ id: 'write-output', type: 'function',
+        function: { name: 'write_file', arguments: JSON.stringify({ path: REJECTED_PATH, content: 'fixture document' }) } }] }
       if (!Array.isArray(tools) || tools.length === 0) return { content: '这个效果加不上。', toolCalls: [] }
       return {
         content: '',
@@ -100,7 +105,11 @@ async function runAgainstRefusal(result, { maxIters = 20 } = {}) {
         }],
       }
     },
-    executeTool: async () => { toolRuns += 1; return result },
+    executeTool: async ({ name }) => {
+      if (name === 'write_file') return { ok: true, path: REJECTED_PATH, changedPaths: [REJECTED_PATH] }
+      toolRuns += 1
+      return result
+    },
   })
   return { outcome, toolRuns }
 }

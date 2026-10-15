@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { getAuthToken } from '../lib/accountClient.js'
+import { normalizeSessionMutationFailure } from '../lib/sessionMutationFailure.js'
 import { deleteSessionRemote, getSessionMetadataRemote, replaceSessionMessagesRemote } from '../lib/sessionClient.js'
 import { fetchServerSessionSnapshot } from '../lib/turnClient.js'
 import { createSessionMutationDispatcher, needsServerTranscriptHydration } from './sessionServerSync.js'
@@ -18,12 +19,12 @@ export default function useSessionMutationDispatch({ dispatch, reducer, state, s
       canFetchSessionSnapshot: () => !!getAuthToken(),
       fetchSessionSnapshot: ({ sessionId }) => fetchServerSessionSnapshot({ sessionId }),
       resolveSessionMetadata: ({ sessionId }) => getSessionMetadataRemote(sessionId),
-      onError: (error, { action, sessionId }) => console.warn(`[AppContext] ${action.type} server session sync failed for ${sessionId}:`, error?.code || error?.message || error),
+      onError: (error, { action, sessionId }) => console.warn(`[AppContext] ${action.type} server session sync failed for ${sessionId}:`, normalizeSessionMutationFailure(error).code),
     })
     dispatcherRef.current = dispatcher
     return dispatcher
   }, [dispatch, reducer, stateRef])
-  const dispatchWithSessionSync = useCallback((action) => getDispatcher()(action), [getDispatcher])
+  const dispatchWithSessionSync = useCallback((action, options) => getDispatcher()(action, options), [getDispatcher])
   const activeSession = state.sessions.find((session) => session.id === state.activeSessionId)
   const hydrationSessionId = state.authReady
     && state.isLoggedIn

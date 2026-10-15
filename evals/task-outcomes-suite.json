@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {
+      "id": "unpaid-invoice-report",
+      "prompt": "Read invoices.json without modifying it. Create reports/unpaid.csv (UTF-8, columns id,customer,amount_cents; only paid=false records, id ascending, RFC CSV escaping), reports/summary.json with count and total_cents, and reports/summary.md headed # Unpaid invoice report, stating the count and total in integer cents and linking unpaid.csv and summary.json. Include negative adjustments in the total. Verify the actual files; a successful unrelated command or final prose is not delivery.",
+      "workspace": "./fixtures/task-invoice-report",
+      "mode": "acceptEdits",
+      "timeoutMs": 600000,
+      "verify": [
+        {
+          "script": "./verifiers/task-outcomes.mjs"
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
+import { formatContextPercent, resolveContextMeter } from '../../../lib/contextMeter.js'
 import RequestCacheUsage from './RequestCacheUsage.jsx'
+import RequestDiagnostics from './RequestDiagnostics.jsx'
 
 function compactTokens(value) {
   const tokens = Math.max(0, Number(value) || 0)
@@ -21,19 +23,14 @@ function UsageRow({ color, label, value }) {
 export default function ContextUsagePanel({
   contextUsage,
   contextWindow,
+  id,
   t,
 }) {
-  const measuredPromptTokens = normalizeOptionalTokenCount(contextUsage.actualPromptTokens)
-  const hasMeasuredPromptTokens = measuredPromptTokens !== null
-  const serverEstimatedPromptTokens = normalizeOptionalTokenCount(contextUsage.serverEstimatedPromptTokens)
-  const usedTokens = measuredPromptTokens
-    ?? serverEstimatedPromptTokens
-    ?? Number(contextUsage.estimatedTokens || 0)
-  const contextWindowAuthoritative = contextUsage.contextWindowAuthoritative !== false
-  const windowTokens = Number(contextUsage.contextWindow || contextWindow)
-  const percent = contextWindowAuthoritative
-    ? Math.min(100, Math.max(0, Math.round((usedTokens / Math.max(1, windowTokens)) * 100)))
-    : 0
+  const meter = resolveContextMeter({ ...contextUsage, contextWindow: contextUsage.contextWindow ?? contextWindow })
+  const usedTokens = meter.usedTokens
+  const windowTokens = meter.contextWindow
+  const contextWindowAuthoritative = windowTokens !== null
+  const percent = meter.percent === null ? 0 : Math.max(0, Math.min(100, meter.percent))
   const toolTokens = Number(contextUsage.toolSpecTokens || 0) + Number(contextUsage.toolCallTokens || 0)
   const conversationTokens = Number(contextUsage.messageTokens || 0) + Number(contextUsage.attachmentTokens || 0)
   const cumulativeTokens = normalizeOptionalTokenCount(contextUsage.cumulativeTokens)
@@ -43,17 +40,19 @@ export default function ContextUsagePanel({
       className="w-full rounded-xl border border-ink/10 bg-paper px-3 py-2.5 text-ink-soft shadow-[0_10px_30px_rgb(var(--color-ink-rgb)/0.13)]"
       data-density="compact"
       data-testid="context-usage-panel"
+      id={id}
+      tabIndex={-1}
       role="dialog"
       aria-label={t('chat.contextUsage.currentContext')}
     >
       <div className="flex items-baseline justify-between gap-3">
         <div className="text-[13px] leading-5 text-ink-soft">
-          {t('chat.contextUsage.currentContext')}{contextWindowAuthoritative && (
-            <strong className="ml-1 font-semibold text-ink">{percent}%</strong>
+          {t('chat.contextUsage.pendingContext')}{contextWindowAuthoritative && (
+            <strong className="ml-1 font-semibold text-ink">{formatContextPercent(meter.percent)}</strong>
           )}
         </div>
         <div className="shrink-0 font-mono text-[13px] font-semibold leading-5 text-ink">
-          {hasMeasuredPromptTokens ? '' : '~'}{compactTokens(usedTokens)}
+          ~{compactTokens(usedTokens)}
           {contextWindowAuthoritative && <> / {compactTokens(windowTokens)}</>}
         </div>
       </div>
@@ -66,7 +65,6 @@ export default function ContextUsagePanel({
         </div>
       )}
       <div className="mt-2 border-t border-ink/10 pt-1.5">
-        {(hasMeasuredPromptTokens || serverEstimatedPromptTokens !== null) && (
           <p
             className="truncate pb-1 text-xs leading-[1.35] text-ink-fade"
             data-testid="context-estimate-notice"
@@ -74,12 +72,19 @@ export default function ContextUsagePanel({
           >
             {t('chat.contextUsage.estimateNotice')}
           </p>
-        )}
         <UsageRow color="bg-ink/35" label={t('chat.contextUsage.systemPrompt')} value={contextUsage.systemTokens} />
         <UsageRow color="bg-accent" label={t('chat.contextUsage.tools')} value={toolTokens} />
         <UsageRow color="bg-ink/60" label={t('chat.contextUsage.messagePayload')} value={conversationTokens} />
       </div>
+      <p className="mt-2 text-xs text-ink-fade" data-testid="context-estimate-source">{t(meter.source === 'retained_estimate' ? 'chat.contextUsage.hostRetained' : 'chat.contextUsage.localVisible')}</p>
+      {meter.unknownAttachments > 0 && <p className="mt-1 text-xs text-warning" data-testid="context-unmeasured-attachments">{t('chat.contextUsage.unmeasuredAttachments', { count: meter.unknownAttachments })}</p>}
+      {(meter.lastRequest?.inputTokens != null || meter.lastRequest?.estimatedInputTokens != null) && <div className="mt-2 border-t border-ink/10 pt-2 text-xs" data-testid="context-last-request">
+        <div className="flex justify-between gap-3"><span>{t(meter.lastRequest.inputTokens != null ? 'chat.contextUsage.lastMeasuredInput' : 'chat.contextUsage.lastEstimatedInput')}</span>
+          <span className="font-mono text-ink">{meter.lastRequest.inputTokens == null ? '~' : ''}{compactTokens(meter.lastRequest.inputTokens ?? meter.lastRequest.estimatedInputTokens)}</span></div>
+        <p className="mt-1 text-ink-fade">{t('chat.contextUsage.lastRequestHint')}</p>
+      </div>}
       <RequestCacheUsage usage={contextUsage.modelUsage} t={t} />
+      <RequestDiagnostics usage={contextUsage} t={t} />
       {cumulativeTokens !== null && (
         <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-ink/10 pt-2 text-xs leading-4">
           <span className="text-ink-soft">{t('chat.contextUsage.cumulativeUsage')}</span>
