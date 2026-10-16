@@ -1,4 +1,5 @@
-import { ChevronDown, Folder, LoaderCircle } from 'lucide-react'
+import { ChevronDown, Folder } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../../components/ui/LoadingState.jsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import InlineDirectoryBrowser from '../../../components/InlineDirectoryBrowser.jsx'
 import {

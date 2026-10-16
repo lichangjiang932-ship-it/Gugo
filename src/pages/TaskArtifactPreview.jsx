@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, Code2, Download, FileText, Globe, Loader2, Presentation, Table2, X } from 'lucide-react'
+import { AlertCircle, Code2, Download, FileText, Globe, Presentation, Table2, X } from 'lucide-react'
+import { Spinner as Loader2 } from '../components/ui/LoadingState.jsx'
 import { applyHtmlArtifactDocumentPolicy } from '../../shared/htmlArtifactPolicy.js'
 import { loadArtifactPreviewDocument, withDownloadToken } from '../lib/jobClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -56,7 +57,7 @@ export default function TaskArtifactPreview({ artifact, onClose }) {
         <TypeIcon type={artifact.type} />
         <div className="flex-1 min-w-0">
           <p className="text-sm text-ink truncate">{artifact.title || artifact.filename || t('artifact.unnamed')}</p>
-          <p className="font-mono text-[10px] text-ink-fade uppercase tracking-wider">
+          <p className="font-mono text-[0.625rem] text-ink-fade uppercase tracking-wider">
             {artifact.type || 'file'} · {artifact.filename || '—'}
           </p>
         </div>

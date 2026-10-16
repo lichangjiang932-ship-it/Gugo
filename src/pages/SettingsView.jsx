@@ -9,6 +9,7 @@ import ModelConfigPanel from '../components/modelConfig/ModelConfigPanel.jsx'
 import SettingsNetworkPolicyPanel from '../components/settings/SettingsNetworkPolicyPanel.jsx'
 import SettingsSideEffectRecoveryPanel from '../components/settings/SettingsSideEffectRecoveryPanel.jsx'
 import SettingsUsagePanel from '../components/settings/SettingsUsagePanel.jsx'
+import HistoryView from './HistoryView.jsx'
 import {
   SettingsAgentPresetsPanel,
   SettingsAppearancePanel,
@@ -28,6 +29,7 @@ import {
   SETTINGS_TAB_AGENT_PRESETS,
   SETTINGS_TAB_APPEARANCE,
   SETTINGS_TAB_DATA,
+  SETTINGS_TAB_HISTORY,
   SETTINGS_TAB_GENERAL,
   SETTINGS_TAB_INTEGRATIONS,
   SETTINGS_TAB_LANGUAGE,
@@ -224,6 +226,8 @@ export default function SettingsView() {
         return <SettingsIntegrationsPanel navigate={navigate} t={t} />
       case SETTINGS_TAB_DATA:
         return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
+      case SETTINGS_TAB_HISTORY:
+        return <HistoryView embedded />
       case SETTINGS_TAB_USAGE:
         return <SettingsUsagePanel t={t} />
       case SETTINGS_TAB_RECOVERY:

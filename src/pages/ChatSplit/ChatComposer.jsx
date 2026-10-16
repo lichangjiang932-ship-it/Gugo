@@ -71,7 +71,7 @@ export default function ChatComposer({
     const selected = slashListRef.current?.querySelector(`[data-slash-index="${safeSlashIndex}"]`)
     selected?.scrollIntoView?.({ block: 'nearest' })
     const dismissOnOutsidePointer = (event) => {
-      if (!composerSurfaceRef.current?.contains(event.target)) setSlashMenuDismissed(true)
+      if (!composerSurfaceRef.current?.contains(event.target) && !slashListRef.current?.contains(event.target)) setSlashMenuDismissed(true)
     }
     window.addEventListener('pointerdown', dismissOnOutsidePointer)
     return () => window.removeEventListener('pointerdown', dismissOnOutsidePointer)
@@ -174,6 +174,8 @@ export default function ChatComposer({
             items={slashCommands}
             selectedIndex={safeSlashIndex}
             listRef={slashListRef}
+            anchorRef={composerSurfaceRef}
+            onDismiss={() => setSlashMenuDismissed(true)}
             onHighlight={setSlashSelectedIndex}
             onSelect={(entry) => {
               setSlashMenuDismissed(true)

@@ -9,7 +9,7 @@ const CARD = 'flex items-center gap-3 rounded-xl border border-ink/12 bg-surface
 const BUTTON = 'h-8 rounded-control border border-ink/15 bg-paper px-3 text-xs text-ink transition-colors hover:bg-paper-2'
 const DASHED = 'flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-ink/25 px-4 py-3 text-sm text-ink-soft transition-colors hover:border-ink/40 hover:text-ink'
 
-function ProviderCard({ confirming = false, defaultModel, expanded, onChangeDefault, onDelete, onExpand, onSaved, provider, t }) {
+function ProviderCard({ confirming = false, defaultModel, expanded, onChangeDefault, onDelete, onExpand, onSaved, onDirectoryChanged, provider, t }) {
   return (
     <li className="flex flex-col gap-2">
       <div className={CARD}>
@@ -36,7 +36,7 @@ function ProviderCard({ confirming = false, defaultModel, expanded, onChangeDefa
         <div className="rounded-xl bg-paper-2/60 p-3">
           <AddProviderPanel editing={provider} initialCatalogEntryId={provider.id} onCancel={() => onExpand(provider)} onSaved={onSaved} t={t} />
           {/* The saved provider already has a live directory below. */}
-          <ProviderModelDirectory defaultModel={defaultModel} onChangeDefault={onChangeDefault} onChanged={onSaved} provider={provider} t={t} />
+          <ProviderModelDirectory defaultModel={defaultModel} onChangeDefault={onChangeDefault} onChanged={onDirectoryChanged} provider={provider} t={t} />
         </div>
       )}
     </li>
@@ -191,6 +191,7 @@ export default function ModelConfigPanel({ onReady }) {
             confirming={confirmingDelete === provider.id}
             onExpand={(entry) => setExpandedId((current) => (current === entry.id ? '' : entry.id))}
             onSaved={afterChange}
+            onDirectoryChanged={reload}
             provider={provider}
             t={t}
           />

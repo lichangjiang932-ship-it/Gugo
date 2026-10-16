@@ -119,6 +119,11 @@ function DetailSection({ kind, label, value, live = false, command = false }) {
 function ToolCallCard({ call, artifacts = [], onOpenArtifact, expanded, onToggle, workspacePath = '' }) {
   const { t } = useT()
   const detailsId = `tool-step-details-${useId().replace(/:/g, '')}`
+  if (!call || typeof call.name !== 'string' || !call.name.trim()) return (
+    <article className="rounded-control border border-ink/10 bg-paper-2 px-3 py-2 text-xs text-ink-soft" data-status="unavailable" role="listitem">
+      {t('toolActivity.emptyCall')}
+    </article>
+  )
   // The row reads as what the agent was doing (终端 / 编辑 / 搜索 …), not as the
   // runtime's tool name; the step number is still handed to plugin contributions
   // by the trace, it is just no longer drawn on the row itself.

@@ -1,4 +1,5 @@
-import { Check, Folder, FolderRoot, LoaderCircle, RefreshCw, Undo2 } from 'lucide-react'
+import { Check, Folder, FolderRoot, RefreshCw, Undo2 } from 'lucide-react'
+import { Spinner as LoaderCircle } from './ui/LoadingState.jsx'
 import { useCallback, useEffect, useState } from 'react'
 import { browseLocalDirectoriesApi } from '../lib/localFileAccessClient.js'
 

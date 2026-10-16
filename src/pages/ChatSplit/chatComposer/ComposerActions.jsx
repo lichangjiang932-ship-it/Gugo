@@ -1,5 +1,7 @@
 import { Pause, Plus, Send, Square } from 'lucide-react'
 import { useCallback, useEffect, useId, useRef } from 'react'
+import PopoverPortal from '../../../components/ui/PopoverPortal.jsx'
+import { isCompositionEvent } from '../../../lib/compositionEvent.js'
 import PermissionModeSwitcher from '../../../components/PermissionModeSwitcher.jsx'
 import { formatContextPercent, resolveContextMeter } from '../../../lib/contextMeter.js'
 import ModelPicker from '../ModelPicker.jsx'
@@ -59,6 +61,7 @@ export default function ComposerActions({
 }) {
   const contextPopoverRef = useRef(null)
   const contextTriggerRef = useRef(null)
+  const contextPanelRef = useRef(null)
   const contextClosingRef = useRef(false)
   const contextPanelId = useId()
   const closeContext = useCallback((restoreFocus = false) => {
@@ -70,7 +73,7 @@ export default function ComposerActions({
   useEffect(() => {
     if (!contextPanelOpen) return
     contextClosingRef.current = false
-    contextPopoverRef.current?.querySelector('[role="dialog"]')?.focus({ preventScroll: true })
+    contextPanelRef.current?.querySelector('[role="dialog"]')?.focus({ preventScroll: true })
   }, [contextPanelOpen])
   const readinessMessageKey = modelReadinessMessageKey(modelReadiness)
   // A ready or pending attachment is draft content: the product rule is that an
@@ -96,10 +99,10 @@ export default function ComposerActions({
   useEffect(() => {
     if (!contextPanelOpen) return undefined
     const closeOnOutsidePointer = (event) => {
-      if (!contextPopoverRef.current?.contains(event.target)) closeContext()
+      if (!contextPopoverRef.current?.contains(event.target) && !contextPanelRef.current?.contains(event.target)) closeContext()
     }
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape' && !event.defaultPrevented) {
+      if (event.key === 'Escape' && !event.defaultPrevented && !isCompositionEvent(event)) {
         event.preventDefault(); event.stopPropagation(); closeContext(true)
       }
     }
@@ -141,14 +144,16 @@ export default function ComposerActions({
           onRetry={onModelRetry}
         />
         <div ref={contextPopoverRef} className="relative shrink-0"
-          onBlurCapture={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) closeContext() }}
+          onBlurCapture={(event) => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget) && !contextPanelRef.current?.contains(event.relatedTarget)) closeContext() }}
           onKeyDown={(event) => {
-            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeContext(true) }
+            if (event.key === 'Escape' && !isCompositionEvent(event)) { event.preventDefault(); event.stopPropagation(); closeContext(true) }
           }}>
           {contextPanelOpen && (
-            <div className="fixed bottom-24 right-3 z-50 max-h-[min(60dvh,28rem)] w-[min(19rem,calc(100vw-1.5rem))] max-w-[calc(100%-1.5rem)] overflow-y-auto lg:absolute lg:bottom-[calc(100%+8px)] lg:right-0 lg:max-w-none" data-testid="context-usage-popover">
+            <PopoverPortal anchorRef={contextTriggerRef} ref={contextPanelRef} heightLimit={448} onDismiss={closeContext}>
+            <div className="w-full overflow-y-auto" style={{ maxHeight: 'inherit' }} data-testid="context-usage-popover">
               <ContextUsagePanel id={contextPanelId} contextUsage={usage} contextWindow={usage.contextWindow} t={t} />
             </div>
+            </PopoverPortal>
           )}
           <button
             type="button"

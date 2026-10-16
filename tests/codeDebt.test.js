@@ -506,7 +506,7 @@ test('source debt markers cannot increase beyond the cleanup baseline', () => {
 test('legacy ember naming and tiny UI text can only shrink', () => {
   const files = walkUiSources('src')
   const legacyEmber = countMatches(files, /\bember\b/g)
-  const tinyText = countMatches(files, /text-\[(?:9|10|11)px\]|font-size:\s*(?:9|10|11)px/g)
+  const tinyText = countMatches(files, /text-\[(?:(?:9|10|11)px|0?\.(?:5625|625|65625|6875)rem)\]|font-size:\s*(?:(?:9|10|11)px|0?\.(?:5625|625|65625|6875)rem)/g)
   const legacyUtility = /(?:text|bg|border(?:-[trblxy])?|ring|outline|fill|stroke|decoration|shadow|accent|divide|caret)-ember/
   const legacyUtilityFiles = files.filter((file) => legacyUtility.test(readFileSync(file, 'utf8')))
 

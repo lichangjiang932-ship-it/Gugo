@@ -16,6 +16,9 @@ async function request(path, { method = 'GET', body } = {}) {
     error.code = payload?.error?.code || 'LLM_CONFIG_FAILED'
     throw error
   }
+  if (method !== 'GET' && ['providers', 'default-model', 'import'].includes(path.split('/')[3]) && typeof window !== 'undefined') {
+    window.dispatchEvent(new window.Event('model-providers:changed'))
+  }
   return payload
 }
 

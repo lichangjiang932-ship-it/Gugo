@@ -22,8 +22,9 @@ export default function DockHost({
   const dock = useDockWidth()
 
   useEffect(() => {
-    const timer = setTimeout(() => subscribeDock(setDockState), 0)
-    return () => clearTimeout(timer)
+    let unsubscribe = null
+    const timer = setTimeout(() => { unsubscribe = subscribeDock(setDockState) }, 0)
+    return () => { clearTimeout(timer); unsubscribe?.() }
   }, [])
 
   if (dockState.panel !== 'diff') return null
@@ -31,6 +32,7 @@ export default function DockHost({
   return (
     <DockLayout dock={dock} embedded={embedded} header={() => null} onClose={closeDock} testId="right-dock" t={t}>
       <DiffReviewPanel
+        initialTargetMode={dockState.targetMode}
         onClose={closeDock}
         onExpandToggle={dock.toggleExpand}
         onSendMessage={onSendMessage}

@@ -1,4 +1,5 @@
-import { FolderOpen, LoaderCircle, Save } from 'lucide-react'
+import { FolderOpen, Save } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../ui/LoadingState.jsx'
 import { useEffect, useState } from 'react'
 import InlineDirectoryBrowser from '../InlineDirectoryBrowser.jsx'
 import {

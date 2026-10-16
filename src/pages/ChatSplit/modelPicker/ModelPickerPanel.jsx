@@ -1,4 +1,4 @@
-import { ChevronRight, RefreshCw } from 'lucide-react'
+import { ChevronRight, Plus, RefreshCw } from 'lucide-react'
 import ModelPickerOption from './ModelPickerOption.jsx'
 
 export default function ModelPickerPanel({
@@ -36,7 +36,8 @@ export default function ModelPickerPanel({
       id={panelId}
       role="dialog"
       aria-label={t('chat.modelPicker.title')}
-      className="fixed bottom-24 right-3 z-40 flex max-h-[min(52dvh,21rem)] w-[min(19rem,calc(100vw-1.5rem))] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-[14px] border border-ink-fade/20 bg-paper shadow-xl lg:absolute lg:bottom-[calc(100%+0.5rem)] lg:left-auto lg:right-0 lg:max-h-[min(48dvh,21rem)] lg:w-[min(19rem,calc(100vw-8rem))] lg:max-w-none"
+      style={{ maxHeight: 'inherit' }}
+      className="relative flex w-full max-w-full flex-col overflow-hidden rounded-[14px] border border-ink-fade/20 bg-paper shadow-xl"
       data-testid="model-picker-panel"
       data-model-picker-view={panelView}
     >
@@ -125,6 +126,12 @@ export default function ModelPickerPanel({
         })}
         </div>
       )}
+      {!catalogUnavailable && <div className="shrink-0 border-t border-ink/10 p-1.5">
+        <button type="button" data-testid="model-picker-manage" onClick={manageModels}
+          className="flex min-h-9 w-full items-center gap-2 rounded-control px-2.5 text-left text-xs text-ink-soft hover:bg-ink/[0.04]">
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />{t('settingsModels.addModel')}
+        </button>
+      </div>}
     </div>
   )
 }

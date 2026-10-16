@@ -31,6 +31,7 @@ import {
   WandSparkles,
 } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import PopoverPortal from '../../components/ui/PopoverPortal.jsx'
 
 const CORE_ICONS = {
   mcp: Paperclip,
@@ -108,23 +109,27 @@ export default function SlashCommandMenu({
   items,
   selectedIndex,
   listRef,
+  anchorRef,
+  onDismiss,
   onSelect,
   onHighlight,
 }) {
   const { t } = useT()
 
   return (
+    <PopoverPortal anchorRef={anchorRef} matchAnchorWidth heightLimit={390} onDismiss={onDismiss}>
     <div
       ref={listRef}
       id="slash-command-menu"
       data-testid="slash-command-menu"
       role="listbox"
       aria-label={t('slash.menuLabel')}
-      className="absolute bottom-[calc(100%+10px)] left-0 right-0 z-50 isolate max-h-[min(390px,46vh)] overflow-y-auto overscroll-contain rounded-card border border-ink/10 bg-paper p-1.5 shadow-[0_18px_50px_rgb(var(--color-ink-rgb)/0.14),0_2px_8px_rgb(var(--color-ink-rgb)/0.05)] [scrollbar-width:thin]"
+      style={{ maxHeight: 'inherit' }}
+      className="relative w-full isolate overflow-y-auto overscroll-contain rounded-card border border-ink/10 bg-paper p-1.5 shadow-[0_18px_50px_rgb(var(--color-ink-rgb)/0.14),0_2px_8px_rgb(var(--color-ink-rgb)/0.05)] [scrollbar-width:thin]"
       onMouseDown={(event) => event.preventDefault()}
     >
       {items.length === 0 ? (
-        <div className="px-3 py-6 text-center text-[13px] text-ink-fade">{t('slash.noMatches')}</div>
+        <div className="px-3 py-6 text-center text-[0.8125rem] text-ink-fade">{t('slash.noMatches')}</div>
       ) : items.map((entry, index) => {
         const selected = index === selectedIndex
         const hint = showsArgumentHint(entry)
@@ -150,11 +155,11 @@ export default function SlashCommandMenu({
             <span className={`flex w-4 shrink-0 items-center justify-center transition-colors ${selected ? 'text-ink-soft' : 'text-ink-fade group-hover:text-ink-soft'}`}>
               <Glyph aria-hidden="true" strokeWidth={1.7} className="h-4 w-4" />
             </span>
-            <span className="max-w-[48%] shrink-0 truncate text-[13px] leading-5">{commandLabel(entry, t)}</span>
+            <span className="max-w-[48%] shrink-0 truncate text-[0.8125rem] leading-5">{commandLabel(entry, t)}</span>
             {hint
-              ? <span className="shrink-0 font-mono text-[13px] leading-5 text-ink-fade/80">{entry.hint}</span>
+              ? <span className="shrink-0 font-mono text-[0.8125rem] leading-5 text-ink-fade/80">{entry.hint}</span>
               : entry.hint ? <span className="sr-only">{entry.hint}</span> : null}
-            <span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-ink-fade/90">{entry.description}</span>
+            <span className="min-w-0 flex-1 truncate text-[0.8125rem] leading-5 text-ink-fade/90">{entry.description}</span>
           </button>
         )
       })}
@@ -166,5 +171,6 @@ export default function SlashCommandMenu({
         </div>
       )}
     </div>
+    </PopoverPortal>
   )
 }

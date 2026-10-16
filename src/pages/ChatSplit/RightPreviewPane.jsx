@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion } from '../../lib/hostMotion.js'
 import { AlertCircle, FileText } from 'lucide-react'
 import ErrorBoundary from '../../components/ErrorBoundary.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'

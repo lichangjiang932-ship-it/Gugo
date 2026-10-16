@@ -41,3 +41,30 @@ test('a refusal can carry a note telling the agent what to do instead', async (c
   })
   assert.deepEqual(decisions, [{ approved: false, feedback: 'Write it to notes/demo.txt instead' }])
 })
+
+test('busy feedback and composition Escape cannot submit or collapse a pending decision', async context => {
+  const d = setupDom()
+  const [{ act }, { createRoot }, { default: Card }, { I18nProvider }] = await Promise.all([
+    import('react'), import('react-dom/client'), import('../../src/components/ToolApprovalCard.jsx'), import('../../src/i18n/I18nProvider.jsx'),
+  ])
+  const root = createRoot(document.getElementById('root')), decisions = []
+  const request = { name: 'write_file', args: { path: 'fixture.txt' }, risk: 'low' }
+  const render = busy => root.render(<I18nProvider><Card open request={request} busy={busy} onDecide={v => decisions.push(v)} /></I18nProvider>)
+  context.after(async () => { await act(async () => root.unmount()); d.window.close() })
+  await act(async () => render(false))
+  await act(async () => document.querySelector('[data-testid=tool-approval-suggest]').click())
+  const box = document.querySelector('textarea')
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(d.window.HTMLTextAreaElement.prototype, 'value').set.call(box, 'Use the test fixture instead')
+    box.dispatchEvent(new d.window.Event('input', { bubbles: true }))
+  })
+  await act(async () => box.dispatchEvent(new d.window.KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true })))
+  assert.equal(!!document.querySelector('[data-testid=tool-approval-feedback]'), true)
+  await act(async () => render(true))
+  assert.equal(box.disabled, true)
+  await act(async () => {
+    box.dispatchEvent(new d.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    document.querySelector('[data-testid=tool-approval-feedback]').dispatchEvent(new d.window.Event('submit', { bubbles: true, cancelable: true }))
+  })
+  assert.deepEqual(decisions, [])
+})

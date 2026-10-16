@@ -5,6 +5,7 @@ import { messageIndexForTurn, subscribeRevealTurn } from '../../lib/chatMessageS
 import MessageRow from './chatMessages/MessageRow.jsx'
 import ChatMiniTimeline from './chatMessages/ChatMiniTimeline.jsx'
 import NewConversationWelcome from './chatMessages/NewConversationWelcome.jsx'
+import ScrollFadeContainer from '../../components/ui/ScrollFadeContainer.jsx'
 import useChatMessageViewport from './chatMessages/useChatMessageViewport.js'
 
 export default function ChatMessages({
@@ -42,7 +43,8 @@ export default function ChatMessages({
   const {
     hiddenCount,
     visibleMessages,
-    atBottom,
+    showJumpToLatest,
+    onContentResize,
     bindContainer,
     loadEarlierMessages,
     activeTurnIndex,
@@ -55,7 +57,7 @@ export default function ChatMessages({
 
   return (
     <div className="chat-messages-shell relative min-h-0 flex-1">
-      <div ref={bindContainer} className="chat-scroll-region relative h-full overflow-y-auto px-4 py-5 sm:px-7 sm:py-7">
+      <ScrollFadeContainer ref={bindContainer} onContentResize={onContentResize} className="chat-scroll-region relative h-full overflow-y-auto px-4 py-5 sm:px-7 sm:py-7">
         <div className="chat-conversation-column mx-auto flex min-h-full w-full max-w-[780px] flex-col gap-0">
         {workbenchMessage && (
           <div className="rounded-card border border-ink/10 bg-paper-2/55 px-3 py-2 text-xs text-ink-soft">{workbenchMessage}</div>
@@ -104,12 +106,12 @@ export default function ChatMessages({
           />
         )}
         </div>
-        {!atBottom && messages.length > 0 && (
-          <button onClick={scrollToBottom} className="chat-chrome-button absolute bottom-4 right-6 z-10 inline-flex h-8 items-center gap-1.5 rounded-pill border border-ink-fade/45 bg-paper px-3 text-xs text-ink-soft hover:border-ink-fade hover:text-ink" title={t('chatMessages.backToBottom')} aria-label={t('chatMessages.backToBottom')}>
+      </ScrollFadeContainer>
+        {showJumpToLatest && messages.length > 0 && (
+          <button data-testid="chat-jump-latest" onClick={scrollToBottom} className="chat-chrome-button absolute bottom-4 right-6 z-10 inline-flex h-8 items-center gap-1.5 rounded-pill border border-ink-fade/45 bg-paper px-3 text-xs text-ink-soft hover:border-ink-fade hover:text-ink" title={t('chatMessages.backToBottom')} aria-label={t('chatMessages.backToBottom')}>
             <ChevronDown className="h-3.5 w-3.5" />{t('chatMessages.backToBottom')}
           </button>
         )}
-      </div>
       <ChatMiniTimeline
         activeTurnIndex={activeTurnIndex}
         messages={messages}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { GitFork, LoaderCircle } from 'lucide-react'
+import { GitFork } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../../components/ui/LoadingState.jsx'
 import { getSessionBranchesRemote } from '../../../lib/sessionClient.js'
 
 export default function SessionBranchNavigator({ sessionId, onOpenSession, t }) {
@@ -123,7 +124,7 @@ export default function SessionBranchNavigator({ sessionId, onOpenSession, t }) 
                       <span className="block truncate text-ink-fade" title={branchSummary}>{branchSummary}</span>
                       {fileOperations.length > 0 && (
                         <span
-                          className="block truncate text-[11px] text-ink-fade"
+                          className="block truncate text-[0.6875rem] text-ink-fade"
                           data-testid={`branch-file-operations-${branch.id}`}
                           title={fileOperationTitle}
                         >
@@ -132,12 +133,12 @@ export default function SessionBranchNavigator({ sessionId, onOpenSession, t }) 
                         </span>
                       )}
                       {fileOperations.length === 0 && branch.fileOperationsTruncated === true && (
-                        <span className="block truncate text-[11px] text-ink-fade">
+                        <span className="block truncate text-[0.6875rem] text-ink-fade">
                           {t('nav.branchFileChangesUnavailable')}
                         </span>
                       )}
                     </span>
-                    {current && <span className="shrink-0 text-[11px] text-accent-ink">{t('nav.branchCurrent')}</span>}
+                    {current && <span className="shrink-0 text-[0.6875rem] text-accent-ink">{t('nav.branchCurrent')}</span>}
                   </button>
                 )
               })}

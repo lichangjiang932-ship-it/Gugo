@@ -16,7 +16,7 @@ export default function AgentTemplateModal({ loading, onClose, onPreview, onUse,
                   <li key={template.id} onClick={() => onPreview(template)} className={`cursor-pointer px-4 py-3 hover:bg-ink/5 ${preview?.id === template.id ? 'bg-ink/5' : ''}`}>
                     <div className="text-sm font-medium">{template.name}</div>
                     <div className="mt-0.5 line-clamp-2 text-xs text-ink-fade">{template.description}</div>
-                    <div className="mt-1 font-mono text-[10px] text-ink-fade">{template.id} v{template.version}</div>
+                    <div className="mt-1 font-mono text-[0.625rem] text-ink-fade">{template.id} v{template.version}</div>
                   </li>
                 ))}
               </ul>

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown, RefreshCw } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import ModelPickerPanel from './modelPicker/ModelPickerPanel.jsx'
+import PopoverPortal from '../../components/ui/PopoverPortal.jsx'
+import { isCompositionEvent } from '../../lib/compositionEvent.js'
 import { modelTriggerLabel } from './modelPicker/modelPickerState.js'
 import useModelPickerView from './modelPicker/useModelPickerView.js'
 
@@ -24,6 +26,7 @@ export default function ModelPicker({
 }) {
   const { t } = useT()
   const pickerRef = useRef(null)
+  const panelRef = useRef(null)
   const triggerRef = useRef(null)
   const modelRowRef = useRef(null)
   const listboxRef = useRef(null)
@@ -77,10 +80,10 @@ export default function ModelPicker({
   useEffect(() => {
     if (!open) return undefined
     const handlePointerDown = (event) => {
-      if (!pickerRef.current?.contains(event.target)) closePicker()
+      if (!pickerRef.current?.contains(event.target) && !panelRef.current?.contains(event.target)) closePicker()
     }
     const handleKeyDown = (event) => {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || event.defaultPrevented || isCompositionEvent(event)) return
       event.preventDefault()
       closePicker()
       window.setTimeout(() => triggerRef.current?.focus(), 0)
@@ -176,6 +179,7 @@ export default function ModelPicker({
       </button>
 
       {open && (
+        <PopoverPortal anchorRef={triggerRef} ref={panelRef} onDismiss={closePicker}>
         <ModelPickerPanel
           catalogUnavailable={catalogUnavailable}
           closePicker={closePicker}
@@ -200,6 +204,7 @@ export default function ModelPicker({
           triggerModelLabel={triggerModelLabel || t(triggerLabelKey || 'chat.modelPicker.selectRequired')}
           view={view}
         />
+        </PopoverPortal>
       )}
     </div>
   )

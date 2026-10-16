@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { useAppContext } from '../store/AppContext'
 import { applyAccent, ACCENT_DEFAULT_HEX } from '../lib/themeAccent.js'
 import { normalizeThemeMode } from '../lib/themeMode.js'
+import '../styles/appearance.css'
+import { HostMotionProvider, useMotionPreference } from '../lib/hostMotion.js'
 
 function getSystemTheme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -17,6 +19,7 @@ function hexToRgb(hex) {
 
 export default function ThemeWrapper({ children }) {
   const { state } = useAppContext()
+  const motionEnabled = useMotionPreference(state.animationsEnabled)
 
   useEffect(() => {
     const apply = () => {
@@ -67,8 +70,8 @@ export default function ThemeWrapper({ children }) {
 
   /* animations */
   useEffect(() => {
-    document.documentElement.dataset.animations = state.animationsEnabled ? 'true' : 'false'
-  }, [state.animationsEnabled])
+    document.documentElement.dataset.animations = motionEnabled ? 'true' : 'false'
+  }, [motionEnabled])
 
-  return children
+  return <HostMotionProvider enabled={motionEnabled}>{children}</HostMotionProvider>
 }

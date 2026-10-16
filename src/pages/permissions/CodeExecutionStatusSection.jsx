@@ -99,7 +99,7 @@ export function CodeExecutionStatusSection({ controller, t }) {
         <div className="grid gap-3 border-b border-dashed border-ink-fade/40 px-4 py-3 sm:grid-cols-2 lg:grid-cols-5">
           {rows.map((row) => (
             <div key={row.id} className="rounded-md border border-ink-fade/40 bg-paper-2 px-3 py-2">
-              <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade">{row.label}</div>
+              <div className="font-mono text-[0.5625rem] uppercase tracking-wider text-ink-fade">{row.label}</div>
               <div className={`mt-1 flex items-center gap-1.5 text-sm ${row.enabled ? 'text-success' : 'text-ink-soft'}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${row.enabled ? 'bg-success' : 'bg-ink-fade'}`} />
                 {row.value}
@@ -119,7 +119,7 @@ export function CodeExecutionStatusSection({ controller, t }) {
               </div>
               <div>
                 <div className="text-sm">{summary.text}</div>
-                <div className="mt-1 font-mono text-[10px] text-ink-fade">{summary.tool}</div>
+                <div className="mt-1 font-mono text-[0.625rem] text-ink-fade">{summary.tool}</div>
               </div>
             </div>
           ))}

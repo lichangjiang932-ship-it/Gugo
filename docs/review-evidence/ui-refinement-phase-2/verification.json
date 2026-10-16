@@ -1,0 +1,100 @@
+{
+  "kind": "ui-refinement-phase-2",
+  "base": "71b01e4",
+  "previousDelivery": "UI phase 1, frozen 1170-file pass; uncommitted changes preserved",
+  "snapshot": {
+    "files": 189,
+    "path": "gugo-ui-decisions-8SnPeC/snapshot"
+  },
+  "reference": {
+    "path": "D:/open-claude-ui",
+    "commit": "2834bc158a4849f21c97cbb2e0b10525f6e646f1",
+    "clean": true,
+    "license": "MIT",
+    "sourceSha256": {
+      "code-examples/McpToolDecisionCard.tsx": "6a7a5646047d336616e38a626013cf521ce7db912587cdc33bfbc1ecc5e24029",
+      "code-examples/CdsButton.tsx": "c6812b293e66c1cc078b02b6f1893d956bb79092c9119f652d4b88384972a84e",
+      "docs/03-会话核心流与指令交互引擎.md": "14d71828d52aab417e221f3820449c76a18e90c18479a6a02a65869fef5e10c6"
+    },
+    "omitted": "Example 1200ms simulated success, broad permission assumptions, brand recoloring and proprietary resources"
+  },
+  "full": {
+    "files": 1172,
+    "exitCode": 0,
+    "seconds": 1388.883,
+    "frozenChangedSources": 146,
+    "unchanged": true,
+    "log": "gugo-ui-decisions-8SnPeC/full-tests.log"
+  },
+  "targeted": {
+    "files": 14,
+    "tests": 122
+  },
+  "offline": {
+    "tests": 71,
+    "realModel": false
+  },
+  "browser": {
+    "viewportWidths": [
+      360,
+      1440
+    ],
+    "themes": [
+      "light",
+      "dark",
+      "white"
+    ],
+    "confirmedReceiptScreens": 6,
+    "clientSubmissions": 7,
+    "realIsolatedHttpRequests": 5,
+    "injectedResponses": 2,
+    "duplicates": 0,
+    "states": [
+      "submitting",
+      "approved",
+      "denied",
+      "unknown",
+      "error",
+      "expired"
+    ],
+    "fault": "Network failure injected after the real approval transaction committed; UI unknown, database approved, no replay",
+    "lateOwnerSuppression": true,
+    "privateErrorBodyRendered": false,
+    "readonlyDatabaseCheck": true,
+    "fixtureFileCreated": false,
+    "buttonHeights": {
+      "sm": [
+        28,
+        32,
+        36
+      ],
+      "md": [
+        32,
+        36,
+        40
+      ]
+    }
+  },
+  "gates": [
+    "lint",
+    "typecheck",
+    "18 invalid type fixtures rejected",
+    "debt:check",
+    "audit:functions -- --check",
+    "i18n:check",
+    "i18n:keys",
+    "deps:check",
+    "isolated Web build",
+    "git diff --check"
+  ],
+  "limits": [
+    "No model or approved tool was executed",
+    "No native Electron acceptance",
+    "No independent Claude binary/runtime verification",
+    "Other legacy controls/permission workflows and tier-C changes remain out of this batch"
+  ],
+  "git": {
+    "commit": false,
+    "push": false
+  }
+}

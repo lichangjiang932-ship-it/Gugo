@@ -86,8 +86,10 @@ test('typing slash opens an inline action menu and click selection does not send
     () => { fallbackKeydowns += 1 },
   )
   try {
-    const menu = rootElement.querySelector('[data-testid="slash-command-menu"]')
+    const menu = document.querySelector('[data-testid="slash-command-menu"]')
     assert.ok(menu)
+    assert.equal(rootElement.contains(menu), false)
+    assert.equal(menu.closest('[data-host-popover]').parentElement === document.body, true)
     assert.equal(menu.getAttribute('role'), 'listbox')
     assert.equal(menu.querySelectorAll('[role="option"]').length, 3)
     const coreOption = menu.querySelector('[role="option"]')
@@ -115,7 +117,7 @@ test('typing slash opens an inline action menu and click selection does not send
     })
     assert.deepEqual(selected, ['new'])
     assert.equal(fallbackKeydowns, 0)
-    assert.equal(rootElement.querySelector('[data-testid="slash-command-menu"]'), null)
+    assert.equal(document.querySelector('[data-testid="slash-command-menu"]'), null)
   } finally {
     await cleanup()
   }

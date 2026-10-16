@@ -1,0 +1,7 @@
+.gugo-progress-dots { display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; gap: 2px; color: inherit; flex-shrink: 0; }
+.gugo-progress-dots > i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: gugo-progress 1200ms ease-in-out infinite; }
+.gugo-progress-dots > i:nth-child(2) { animation-delay: 120ms; }
+.gugo-progress-dots > i:nth-child(3) { animation-delay: 240ms; }
+@keyframes gugo-progress { 0%, 80%, 100% { opacity: .45; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+.gugo-skeleton { display: block; border-radius: var(--radius-control); background: linear-gradient(105deg, rgb(var(--color-skel-rgb)), rgb(var(--color-skel-2-rgb)), rgb(var(--color-skel-rgb))); background-size: 200% 100%; animation: gugo-skeleton 1600ms linear infinite; }
+@keyframes gugo-skeleton { to { background-position: -200% 0; } }

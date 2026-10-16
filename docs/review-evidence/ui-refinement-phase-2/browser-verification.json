@@ -1,0 +1,135 @@
+{
+  "receipts": [
+    {
+      "id": "approve",
+      "state": "resolved",
+      "outcome": "approved",
+      "text": "审批决定\n写入文件\n\n已确认批准这次请求。\n\n本提示只确认审批决定，不代表工具已执行或执行成功。",
+      "buttons": 1
+    },
+    {
+      "id": "deny",
+      "state": "resolved",
+      "outcome": "denied",
+      "text": "审批决定\n写入文件\n\n已确认拒绝这次请求。\n\n本提示只确认审批决定，不代表工具已执行或执行成功。",
+      "buttons": 1
+    },
+    {
+      "id": "unknown",
+      "state": "unknown",
+      "outcome": "unconfirmed",
+      "text": "审批决定\n写入文件\n\n未取得可核对的审批回执，结果暂时无法确认。\n\n请核对当前请求状态，不要直接重复提交。",
+      "buttons": 1
+    },
+    {
+      "id": "network",
+      "state": "unknown",
+      "outcome": "unconfirmed",
+      "text": "审批决定\n写入文件\n\n未能确认审批请求的结果。请先刷新状态，不要重复提交。\n\n请核对当前请求状态，不要直接重复提交。",
+      "buttons": 1
+    },
+    {
+      "id": "forbidden",
+      "state": "error",
+      "outcome": "unconfirmed",
+      "text": "审批决定\n写入文件\n\n当前会话不可用或已过期。请刷新页面后重试。\n\n请核对当前请求状态，不要直接重复提交。",
+      "buttons": 1
+    },
+    {
+      "id": "expired",
+      "state": "error",
+      "outcome": "expired",
+      "text": "审批决定\n写入文件\n\n审批请求已过期。\n\n请核对当前请求状态，不要直接重复提交。",
+      "buttons": 1
+    }
+  ],
+  "screens": [
+    {
+      "width": 1440,
+      "theme": "light",
+      "left": 330,
+      "right": 1110,
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "left": 330,
+      "right": 1110,
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "theme": "white",
+      "left": 330,
+      "right": 1110,
+      "overflow": false
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "left": 16,
+      "right": 344,
+      "overflow": false
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "left": 16,
+      "right": 344,
+      "overflow": false
+    },
+    {
+      "width": 360,
+      "theme": "white",
+      "left": 16,
+      "right": 344,
+      "overflow": false
+    }
+  ],
+  "lateScopeIsolation": true,
+  "posts": [
+    {
+      "id": "ui-decision-approve",
+      "body": {
+        "decision": "approve"
+      }
+    },
+    {
+      "id": "ui-decision-deny",
+      "body": {
+        "decision": "deny"
+      }
+    },
+    {
+      "id": "ui-decision-unknown",
+      "body": {
+        "decision": "approve"
+      }
+    },
+    {
+      "id": "ui-decision-network",
+      "body": {
+        "decision": "approve"
+      }
+    },
+    {
+      "id": "ui-decision-forbidden",
+      "body": {
+        "decision": "approve"
+      }
+    },
+    {
+      "id": "ui-decision-expired",
+      "body": {
+        "decision": "approve"
+      }
+    },
+    {
+      "id": "ui-decision-late",
+      "body": {
+        "decision": "approve"
+      }
+    }
+  ]
+}

@@ -99,7 +99,7 @@ export default function DesktopUpdateCard({ compact = false }) {
         </span>
         <div className="min-w-0 flex-1">
           <div className={`text-xs font-semibold ${passive ? 'text-ink' : 'text-accent-ink'}`}>{statusLabel}</div>
-          {update.version && <div className="mt-0.5 text-[10px] font-medium text-ink-soft">Gugo v{update.version}</div>}
+          {update.version && <div className="mt-0.5 text-[0.625rem] font-medium text-ink-soft">Gugo v{update.version}</div>}
           {manual && <div className="mt-0.5 text-xs leading-4 text-ink-fade">{t('desktopUpdate.manualHint')}</div>}
         </div>
       </div>
@@ -108,14 +108,14 @@ export default function DesktopUpdateCard({ compact = false }) {
           <div className="h-1.5 overflow-hidden rounded-full bg-ink/10">
             <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${percent}%` }} />
           </div>
-          <div className="mt-1.5 flex justify-between text-[10px] text-ink-fade">
+          <div className="mt-1.5 flex justify-between text-[0.625rem] text-ink-fade">
             <span>{formatBytes(update.transferred)} / {formatBytes(update.total)}</span>
             <span>{percent.toFixed(1)}% · {formatBytes(update.bytesPerSecond)}/s</span>
           </div>
         </div>
       )}
       {ready && <button type="button" onClick={() => window.gugoDesktop.installUpdate()} className="mt-2.5 h-9 w-full rounded-lg bg-accent text-xs font-semibold text-accent-contrast shadow-sm transition-colors hover:bg-accent/90">{t('desktopUpdate.restartInstall')}</button>}
-      {installing && <div className="mt-2 text-[10px] leading-4 text-ink-fade">{t('desktopUpdate.installingHint')}</div>}
+      {installing && <div className="mt-2 text-[0.625rem] leading-4 text-ink-fade">{t('desktopUpdate.installingHint')}</div>}
       {(manual || error) && <button type="button" onClick={requestUpdateCheck} className={`mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border bg-paper text-xs font-medium ${error ? 'border-danger/30 text-danger hover:bg-danger/5' : 'border-ink/15 text-ink-soft hover:bg-paper-2'}`}><RefreshCw className="h-3 w-3" />{t(error ? 'desktopUpdate.retry' : 'desktopUpdate.checkNow')}</button>}
     </section>
   )

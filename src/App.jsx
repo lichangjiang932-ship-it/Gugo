@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useSearchParams } from './lib/router.jsx'
 
+import { Skeleton } from './components/ui/LoadingState.jsx'
 import ErrorBoundary from './components/ErrorBoundary'
 import AppLayout from './components/AppLayout.jsx'
 import RouteErrorBoundary from './components/RouteErrorBoundary.jsx'
@@ -33,7 +34,7 @@ function Fallback() {
   const { t } = useT()
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-ink-fade" role="status" aria-label={t('memory.loading')}>
-      <div className="w-8 h-8 rounded-full border-2 border-accent/30 border-t-accent animate-spin" />
+      <div className="flex w-48 flex-col gap-3" aria-hidden="true"><Skeleton className="h-5 w-32" /><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-40" /></div>
       <span className="text-sm tracking-wide">{t('memory.loading')}</span>
     </div>
   )

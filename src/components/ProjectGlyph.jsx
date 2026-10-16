@@ -16,7 +16,7 @@ export default function ProjectGlyph({ name, open = false, size = 'md', classNam
       {...attributes}
       aria-hidden="true"
       data-initial={projectInitial(name)}
-      className={`project-glyph inline-flex shrink-0 select-none items-center justify-center font-semibold leading-none ${small ? 'h-4 w-4 rounded-[5px] text-[9px]' : 'h-5 w-5 rounded-md text-[10.5px]'} ${className}`}
+      className={`project-glyph inline-flex shrink-0 select-none items-center justify-center font-semibold leading-none ${small ? 'h-4 w-4 rounded-[5px] text-[0.5625rem]' : 'h-5 w-5 rounded-md text-[0.65625rem]'} ${className}`}
       style={{ '--project-hue': hue }}
       data-open={open || undefined}
     />

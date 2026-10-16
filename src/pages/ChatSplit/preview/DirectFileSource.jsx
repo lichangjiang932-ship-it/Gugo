@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, LoaderCircle } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../../components/ui/LoadingState.jsx'
 import { loadDirectFileSource } from '../../../lib/directFileSource.js'
 import { SourceView } from './ArtifactRenderers.jsx'
 import { PreviewStatus, RetryPreviewButton } from './PreviewPrimitives.jsx'

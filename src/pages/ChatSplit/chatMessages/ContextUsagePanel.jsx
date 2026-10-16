@@ -46,12 +46,12 @@ export default function ContextUsagePanel({
       aria-label={t('chat.contextUsage.currentContext')}
     >
       <div className="flex items-baseline justify-between gap-3">
-        <div className="text-[13px] leading-5 text-ink-soft">
+        <div className="text-[0.8125rem] leading-5 text-ink-soft">
           {t('chat.contextUsage.pendingContext')}{contextWindowAuthoritative && (
             <strong className="ml-1 font-semibold text-ink">{formatContextPercent(meter.percent)}</strong>
           )}
         </div>
-        <div className="shrink-0 font-mono text-[13px] font-semibold leading-5 text-ink">
+        <div className="shrink-0 font-mono text-[0.8125rem] font-semibold leading-5 text-ink">
           ~{compactTokens(usedTokens)}
           {contextWindowAuthoritative && <> / {compactTokens(windowTokens)}</>}
         </div>

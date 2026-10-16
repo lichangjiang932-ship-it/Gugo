@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ShieldCheck, ShieldAlert, Eye, Zap, ChevronUp } from 'lucide-react'
+import PopoverPortal from './ui/PopoverPortal.jsx'
+import { isCompositionEvent } from '../lib/compositionEvent.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 
 const MODES = [
@@ -17,6 +19,8 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
   const { t } = useT()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
+  const triggerRef = useRef(null)
+  const panelRef = useRef(null)
 
   const current = MODES.find((m) => m.id === mode) || MODES[0]
   const Icon = current.icon
@@ -24,9 +28,9 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
   useEffect(() => {
     if (!open) return undefined
     const onDocClick = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target) && !panelRef.current?.contains(e.target)) setOpen(false)
     }
-    const onEsc = (e) => { if (e.key === 'Escape') setOpen(false) }
+    const onEsc = (e) => { if (e.key === 'Escape' && !e.defaultPrevented && !isCompositionEvent(e)) { setOpen(false); triggerRef.current?.focus() } }
     document.addEventListener('mousedown', onDocClick)
     window.addEventListener('keydown', onEsc)
     return () => {
@@ -61,6 +65,7 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
     <div className="relative" ref={ref}>
       <button
         type="button"
+        ref={triggerRef}
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -73,7 +78,8 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
       </button>
 
       {open && (
-        <div data-testid="permission-mode-popover" className="fixed bottom-24 left-3 right-3 z-40 max-h-[60dvh] overflow-y-auto rounded-control border border-ink/20 bg-paper shadow-lg lg:absolute lg:bottom-full lg:left-0 lg:right-auto lg:mb-1.5 lg:w-72">
+        <PopoverPortal anchorRef={triggerRef} ref={panelRef} width={288} onDismiss={() => setOpen(false)}>
+        <div data-testid="permission-mode-popover" style={{ maxHeight: 'inherit' }} className="w-full overflow-y-auto rounded-control border border-ink/20 bg-paper shadow-lg">
           {MODES.map((m) => {
             const MIcon = m.icon
             const active = m.id === mode
@@ -90,7 +96,7 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
                 <span className="min-w-0">
                   <span className="block text-sm text-ink">
                     {t(`approvals.mode.${m.id}`)}
-                    {active && <span className="ml-1.5 font-mono text-[9px] text-accent-ink">●</span>}
+                    {active && <span className="ml-1.5 font-mono text-[0.5625rem] text-accent-ink">●</span>}
                   </span>
                   <span className="block text-xs text-ink-soft mt-0.5">{t(`approvals.mode.${m.id}Hint`)}</span>
                 </span>
@@ -98,6 +104,7 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
             )
           })}
         </div>
+        </PopoverPortal>
       )}
     </div>
   )

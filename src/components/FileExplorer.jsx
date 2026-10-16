@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence } from '../lib/hostMotion.js'
 import {
   Folder, FolderOpen, FileText, FileCode, FileImage, FileJson,
   FileSpreadsheet, File, ChevronRight, ChevronDown,
@@ -194,7 +194,7 @@ export default function FileExplorer({ files, onFileClick, onFileDelete, onRefre
       </div>
 
       {/* Footer */}
-      <div className="px-3 py-2 border-t border-ink-fade/10 text-[10px] text-ink-fade/40 font-mono">
+      <div className="px-3 py-2 border-t border-ink-fade/10 text-[0.625rem] text-ink-fade/40 font-mono">
         {t('foundation.fileCount', { count: files.length })}
       </div>
     </div>

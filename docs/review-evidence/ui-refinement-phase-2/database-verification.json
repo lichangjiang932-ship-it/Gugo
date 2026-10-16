@@ -1,0 +1,35 @@
+{
+  "readonly": true,
+  "rows": [
+    {
+      "id": "ui-decision-approve",
+      "status": "approved"
+    },
+    {
+      "id": "ui-decision-deny",
+      "status": "denied"
+    },
+    {
+      "id": "ui-decision-expired",
+      "status": "expired"
+    },
+    {
+      "id": "ui-decision-forbidden",
+      "status": "pending"
+    },
+    {
+      "id": "ui-decision-late",
+      "status": "approved"
+    },
+    {
+      "id": "ui-decision-network",
+      "status": "approved"
+    },
+    {
+      "id": "ui-decision-unknown",
+      "status": "pending"
+    }
+  ],
+  "fixtureFileCreated": false,
+  "note": "No chat runtime was waiting; receipt persistence is not tool execution."
+}

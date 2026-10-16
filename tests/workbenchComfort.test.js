@@ -44,6 +44,7 @@ test('system typography and sidebar text share a readable scale without changing
   assert.match(source('../src/components/LeftRail.jsx'), /bg-sidebar/)
   assert.match(source('../src/components/leftRail/SessionList.jsx'), /left-rail-session-title min-w-0 flex-1 text-ui leading-5/)
   assert.match(source('../src/components/leftRail/LeftRail.css'), /-webkit-line-clamp: 2/)
-  assert.match(source('../src/components/leftRail/LeftRail.css'), /min-height: 38px/)
+  assert.match(source('../src/components/leftRail/LeftRail.css'), /min-height: calc\(var\(--control-height\) \+ 6px\)/)
+  assert.match(source('../src/styles/appearance.css'), /--control-height: 32px/)
   assert.match(source('../src/store/appStateBootstrap.js'), /theme: 'white'/)
 })

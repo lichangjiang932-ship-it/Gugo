@@ -12,6 +12,7 @@ import { streamResumeDismissalKey } from '../../src/pages/ChatSplit/streamResume
 const noop = () => {}
 const translate = (key) => key
 const approvals = {
+  dismissApprovalNotice: noop,
   requestServerToolApproval: noop,
   resolveToolApprovalForOwner: noop,
   clearToolApprovalForOwner: noop,
@@ -143,6 +144,20 @@ test('dismissal survives cloned messages and session switches but not a new fail
   await view.call('handleDismissResume')
   await view.render(snapshot([failureMessage('turn-new', 7)]))
   assert.equal(view.available, true, 'a new turn retains its own recovery entry')
+})
+
+test('only an accepted send in the active owner retires the previous approval notice', async context => {
+  let dismissed = 0
+  context.mock.method(approvals, 'dismissApprovalNotice', () => { dismissed += 1 })
+  const view = await mountRecovery(context, snapshot([failureMessage()]))
+  const oldStart = view.recovery.handleTurnStart
+  await view.call('handleTurnStart', { sessionId: 'other-session' })
+  assert.equal(dismissed, 0)
+  await view.call('handleTurnStart', { sessionId: 'session-a' })
+  assert.equal(dismissed, 1)
+  await view.render(snapshot([failureMessage()], { backendId: 'other-backend' }))
+  await act(async () => oldStart({ sessionId: 'session-a' }))
+  assert.equal(dismissed, 1, 'a stale backend callback cannot clear the new owner notice')
 })
 
 test('an accepted new send retires the old prompt before messages arrive and after a greeting succeeds', async (context) => {

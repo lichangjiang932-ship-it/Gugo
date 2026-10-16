@@ -1,3 +1,5 @@
+import Segmented from '../ui/Segmented.jsx'
+
 export function SettingsPanel({ title, description, children, testId, className = '' }) {
   return (
     <section className={`settings-panel ${className}`.trim()} data-testid={testId}>
@@ -53,19 +55,6 @@ export function SettingsToggle({ checked, onChange, label, disabled = false }) {
   )
 }
 
-export function SettingsSegmented({ value, options, onChange, label }) {
-  return (
-    <div className="settings-segmented" role="group" aria-label={label}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={value === option.value || option.aliases?.includes(value)}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
+export function SettingsSegmented(props) {
+  return <Segmented {...props} className="settings-segmented" />
 }

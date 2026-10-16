@@ -10,8 +10,8 @@ html[data-theme="light"] {
    * surfaces are cream, and the ink is warm-neutral so it does not read blue
    * against them. Only the ground and the ink moved — the semantic roles
    * (danger, warning, running, success, focus) and the brand accent keep the
-   * values they have in every theme, because a status colour that shifts with
-   * the paper stops meaning the same thing. */
+   * semantic roles across themes, with theme-specific contrast values, because
+   * status meaning must not depend on the paper. */
   --color-paper: #FAF9F5;
   --color-paper-2: #F0EEE6;
   --color-paper-dark: #1C1A16;
@@ -116,11 +116,11 @@ html[data-theme="light"] {
 
 :root {
   --color-accent-contrast-rgb: 0 0 0;
-  --type-page: 28px;
-  --type-section: 20px;
-  --type-body: 15px;
-  --type-ui: 14px;
-  --type-meta: 12px;
+  --type-page: 1.75rem;
+  --type-section: 1.25rem;
+  --type-body: .9375rem;
+  --type-ui: .875rem;
+  --type-meta: .75rem;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", "Noto Sans Mono CJK SC", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
@@ -686,7 +686,7 @@ html[data-animations="false"] *::after {
 .chat-round-label {
   flex: none;
   font-family: Consolas, Monaco, "Courier New", monospace;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 400;
   line-height: 1.45;
   color: var(--code-fade);
@@ -702,7 +702,7 @@ html[data-animations="false"] *::after {
   overflow: hidden;
   color: var(--code-fade);
   font-family: Consolas, Monaco, "Courier New", monospace;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -727,7 +727,7 @@ html[data-animations="false"] *::after {
    as the header's gist enlarged and repeated. */
 .chat-round-body .chat-markdown {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 400;
   line-height: 1.6;
 }
@@ -843,7 +843,7 @@ html[data-animations="false"] *::after {
   display: block;
   margin-bottom: 0.15rem;
   font-family: var(--font-mono);
-  font-size: calc(var(--type-meta) - 1px);
+  font-size: calc(var(--type-meta) - .0625rem);
   line-height: 1.45;
   color: rgb(var(--color-ink-fade-rgb));
   white-space: nowrap;
@@ -1050,7 +1050,7 @@ html[data-animations="false"] *::after {
   --tw-prose-th-borders: rgb(var(--color-ink-rgb) / 0.15);
   --tw-prose-td-borders: rgb(var(--color-ink-rgb) / 0.1);
   color: rgb(var(--color-ink-rgb) / 0.88);
-  font-size: 14.5px;
+  font-size: 0.90625rem;
   line-height: 1.78;
   overflow-wrap: anywhere;
 }
@@ -1475,7 +1475,7 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   color: var(--code-text);
   padding: 0.5rem 0.6rem;
   font-family: Consolas, Monaco, "Courier New", monospace;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 400;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -1797,7 +1797,7 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   flex: none;
   color: var(--code-fade);
   font-family: Consolas, Monaco, "Courier New", monospace;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 400;
 }
 
@@ -1806,7 +1806,7 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   overflow: hidden;
   color: var(--code-fade);
   font-family: Consolas, Monaco, "Courier New", monospace;
-  font-size: 13px;
+  font-size: 0.8125rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2028,7 +2028,7 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   background: var(--code-bg);
   color: var(--code-text);
   font-family: Consolas, Monaco, "Courier New", monospace;
-  font-size: 13px;
+  font-size: .8125rem;
   font-weight: 400;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -2765,7 +2765,7 @@ html:has(.pet-window-root) #root {
   border-radius: 6px;
   background: var(--color-tip-bg);
   color: var(--color-tip-fg);
-  font-size: 12px;
+  font-size: .75rem;
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
@@ -2798,7 +2798,7 @@ html:has(.pet-window-root) #root {
   border-radius: 4px;
   background: var(--color-tip-bg);
   color: var(--color-tip-fg);
-  font-size: 12px;
+  font-size: .75rem;
   line-height: 1.4;
   white-space: nowrap;
   visibility: hidden;

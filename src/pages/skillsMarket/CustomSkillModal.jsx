@@ -27,5 +27,5 @@ export default function CustomSkillModal({ market, t }) {
 }
 
 function Field({ label, children }) {
-  return <label className="flex flex-col gap-1"><span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{label}</span>{children}</label>
+  return <label className="flex flex-col gap-1"><span className="font-mono text-[0.5625rem] tracking-[0.22em] uppercase text-ink-fade">{label}</span>{children}</label>
 }

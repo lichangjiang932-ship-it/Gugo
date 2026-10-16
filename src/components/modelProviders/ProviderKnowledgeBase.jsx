@@ -21,11 +21,11 @@ function KnowledgeBaseModelRow({ model, inList, onToggle, t }) {
       <span className={`shrink-0 text-sm leading-none ${inList ? 'text-accent-ink' : 'text-ink-fade'}`}>{inList ? '✓' : '+'}</span>
       <span className="min-w-0">
         <span className={`block truncate text-xs ${inList ? 'font-medium text-ink' : 'text-ink-soft'}`}>{model.id}</span>
-        {known.length > 0 && <span className="block truncate text-[10px] text-ink-fade">{known.join(' · ')}</span>}
+        {known.length > 0 && <span className="block truncate text-[0.625rem] text-ink-fade">{known.join(' · ')}</span>}
       </span>
     </button>
-    {model.deprecated === true && <span className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-danger">{t('modelProviders.deprecatedModel')}</span>}
-    {inList && <span className="shrink-0 rounded bg-accent-soft/40 px-1.5 py-0.5 text-[10px] text-accent-ink">{t('modelProviders.inList')}</span>}
+    {model.deprecated === true && <span className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[0.625rem] text-danger">{t('modelProviders.deprecatedModel')}</span>}
+    {inList && <span className="shrink-0 rounded bg-accent-soft/40 px-1.5 py-0.5 text-[0.625rem] text-accent-ink">{t('modelProviders.inList')}</span>}
   </li>
 }
 
@@ -100,8 +100,8 @@ export default function ProviderKnowledgeBase({
         <div className="text-xs font-medium text-ink">{t('modelProviders.knowledgeBaseModels')}</div>
         <div className="mt-0.5 text-xs text-ink-fade">{t('modelProviders.knowledgeBaseModelsHint')}</div>
       </div>
-      {providerId && <span data-catalog-provider-id className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-ink-fade">{providerId}</span>}
-      {known.length > 0 && <span className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-ink-fade">{t('modelProviders.modelCount', { count: known.length })}</span>}
+      {providerId && <span data-catalog-provider-id className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[0.625rem] text-ink-fade">{providerId}</span>}
+      {known.length > 0 && <span className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[0.625rem] text-ink-fade">{t('modelProviders.modelCount', { count: known.length })}</span>}
       <button
         type="button"
         disabled={!providerId || catalogLoading}

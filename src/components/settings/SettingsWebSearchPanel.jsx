@@ -194,7 +194,7 @@ export default function SettingsWebSearchPanel({ t }) {
                 <button type="button" onClick={() => { setSelectedId(item.id); setMessage('') }} className="flex w-full items-center gap-2.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">
                   <BrandMark item={providerMeta} />
                   <span className="min-w-0 flex-1">
-                    <span className={`block truncate text-[13px] font-medium ${active ? 'text-ink' : 'text-ink-soft'}`}>{providerMeta?.label || item.provider}</span>
+                    <span className={`block truncate text-[0.8125rem] font-medium ${active ? 'text-ink' : 'text-ink-soft'}`}>{providerMeta?.label || item.provider}</span>
                     <span className="mt-0.5 flex items-center gap-1.5 text-xs text-ink-fade">
                       <span className={`h-1.5 w-1.5 rounded-full ${item.enabled ? 'bg-success' : 'bg-ink-fade'}`} />
                       {t('webSearch.priority', { index: index + 1 })} · {item.apiKeyPresent ? t('webSearch.keySaved') : t('webSearch.keyMissing')}
@@ -216,7 +216,7 @@ export default function SettingsWebSearchPanel({ t }) {
               <div className="flex min-w-0 items-center gap-2.5">
                 <BrandMark item={meta} size="lg" />
                 <div className="min-w-0">
-                  <h3 className="truncate text-[13px] font-medium text-ink">{meta.label}</h3>
+                  <h3 className="truncate text-[0.8125rem] font-medium text-ink">{meta.label}</h3>
                   <p className="text-xs text-ink-fade">{t('webSearch.apiSettings')} · {t('webSearch.priority', { index: selectedIndex + 1 })}</p>
                 </div>
               </div>

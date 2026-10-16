@@ -82,6 +82,7 @@ export function getModelContextWindow({ modelName, modelProviderId = '', env = p
     modelName: selectedModel,
     env: runtimeEnv,
     overrides: config.profileOverrides || {},
+    modelProfiles: config.modelProfiles || {},
   }).contextWindow
 }
 
@@ -120,7 +121,7 @@ export function getModelStatus(env = process.env) {
     toolMaxRounds: getToolMaxRounds(env),
   }
 
-  const models = getVisibleModels(env, config.modelName)
+  const models = getVisibleModels(env, config.modelName, config.providerId)
   if (models.length) {
     status.models = models
     const activeModel = models.find((model) => model.active) || models[0]
@@ -153,7 +154,7 @@ export async function getSystemDiagnostics(options = {}) {
   return runDiagnostics(options)
 }
 
-export function getVisibleModels(env = process.env, defaultModel = '') {
+export function getVisibleModels(env = process.env, defaultModel = '', defaultProviderId = '') {
   const providers = getModelProviders(env)
   const providerModelEntries = providers.flatMap((provider) => provider.models.map((name) => ({
     name,
@@ -166,6 +167,7 @@ export function getVisibleModels(env = process.env, defaultModel = '') {
   return buildVisibleModelCatalog({
     names,
     defaultModel,
+    defaultProviderId,
     providerModelEntries,
     resolveProfile: (name, providerId) => profileForRuntimeConfig(
       resolveModelConfigForModel({ modelName: name, providerId, env }),

@@ -1,6 +1,7 @@
 import AppLayout from '../../components/AppLayout.jsx'
 import DirectoryApprovalModal from '../../components/DirectoryApprovalModal.jsx'
 import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
+import ApprovalDecisionNotice from '../../components/ApprovalDecisionNotice.jsx'
 import PermissionRequestCard from './chatMessages/PermissionRequestCard.jsx'
 import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
@@ -81,7 +82,7 @@ export default function ChatSplitView({
   state,
   t,
   tasks,
-  toolApproval,
+  toolApproval, approvalNotice = null, onDismissApprovalNotice,
   workbenchMessage,
   workbenchOpen,
   planArtifacts = [],
@@ -163,11 +164,12 @@ export default function ChatSplitView({
             onReject={onDirectoryReject}
           />
         )}
-        {(state.permRequest || toolApproval.open) && (
+        {(state.permRequest || toolApproval.open || approvalNotice) && (
           <div
             className="chat-notice-dock mx-auto flex w-full min-w-0 max-w-[780px] flex-col gap-2 px-4 pb-2 sm:px-6"
             data-testid="chat-approval-dock"
           >
+            <ApprovalDecisionNotice notice={approvalNotice} onDismiss={onDismissApprovalNotice} />
             <PermissionRequestCard
               request={state.permRequest}
               onAllow={onPermAllow}

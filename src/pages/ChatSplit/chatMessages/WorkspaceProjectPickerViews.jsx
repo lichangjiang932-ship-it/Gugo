@@ -1,12 +1,5 @@
-import {
-  Check,
-  Folder,
-  FolderOpen,
-  LoaderCircle,
-  Plus,
-  Search,
-  X,
-} from 'lucide-react'
+import { Check, Folder, FolderOpen, Plus, Search, X } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../../components/ui/LoadingState.jsx'
 import Modal from '../../../components/Modal.jsx'
 
 function sameWorkspacePath(left, right) {

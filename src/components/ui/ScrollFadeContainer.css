@@ -1,0 +1,22 @@
+.gugo-scroll-fade {
+  --scroll-fade-top: 0px;
+  --scroll-fade-bottom: 0px;
+  --scroll-native-width: 0px;
+  overscroll-behavior-y: contain;
+  mask-image: linear-gradient(to bottom,
+    transparent, rgba(0,0,0,.05) calc(var(--scroll-fade-top) * .15),
+    rgba(0,0,0,.15) calc(var(--scroll-fade-top) * .30), rgba(0,0,0,.30) calc(var(--scroll-fade-top) * .45),
+    rgba(0,0,0,.50) calc(var(--scroll-fade-top) * .60), rgba(0,0,0,.70) calc(var(--scroll-fade-top) * .75),
+    rgba(0,0,0,.85) calc(var(--scroll-fade-top) * .87), rgb(0 0 0) var(--scroll-fade-top),
+    rgb(0 0 0) calc(100% - var(--scroll-fade-bottom)), rgba(0,0,0,.85) calc(100% - var(--scroll-fade-bottom) * .87),
+    rgba(0,0,0,.70) calc(100% - var(--scroll-fade-bottom) * .75), rgba(0,0,0,.50) calc(100% - var(--scroll-fade-bottom) * .60),
+    rgba(0,0,0,.30) calc(100% - var(--scroll-fade-bottom) * .45), rgba(0,0,0,.15) calc(100% - var(--scroll-fade-bottom) * .30),
+    rgba(0,0,0,.05) calc(100% - var(--scroll-fade-bottom) * .15), transparent), linear-gradient(rgb(0 0 0), rgb(0 0 0));
+  mask-size: 100% 100%, var(--scroll-native-width) 100%;
+  mask-position: left top, right top;
+  mask-repeat: no-repeat;
+  mask-composite: add;
+}
+/* Never dim keyboard focus, and keep floating controls outside the masked node. */
+.gugo-scroll-fade:not([data-scroll-faded="true"]),
+.gugo-scroll-fade:focus-within { mask-image: none; }

@@ -1,0 +1,124 @@
+{
+  "history": [
+    {
+      "width": 1440,
+      "theme": "light",
+      "overflow": false,
+      "embedded": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "overflow": false,
+      "embedded": true
+    },
+    {
+      "width": 1440,
+      "theme": "white",
+      "overflow": false,
+      "embedded": true
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "overflow": false,
+      "embedded": true
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "overflow": false,
+      "embedded": true
+    },
+    {
+      "width": 360,
+      "theme": "white",
+      "overflow": false,
+      "embedded": true
+    }
+  ],
+  "changes": [
+    {
+      "width": 1440,
+      "theme": "light",
+      "count": 3,
+      "noModes": true,
+      "left": 967,
+      "right": 1247,
+      "hit": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "count": 3,
+      "noModes": true,
+      "left": 967,
+      "right": 1247,
+      "hit": true
+    },
+    {
+      "width": 1440,
+      "theme": "white",
+      "count": 3,
+      "noModes": true,
+      "left": 967,
+      "right": 1247,
+      "hit": true
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "count": 3,
+      "noModes": true,
+      "left": 20,
+      "right": 300,
+      "hit": true
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "count": 3,
+      "noModes": true,
+      "left": 20,
+      "right": 300,
+      "hit": true
+    },
+    {
+      "width": 360,
+      "theme": "white",
+      "count": 3,
+      "noModes": true,
+      "left": 20,
+      "right": 300,
+      "hit": true
+    }
+  ],
+  "accountMenu": [
+    "连接",
+    "设置",
+    "技能库",
+    "记忆",
+    "MCP"
+  ],
+  "historyOpenedOriginalSession": true,
+  "legacyHistoryRoute": true,
+  "menuEscapeStayedInChanges": true,
+  "fsReads": [],
+  "requests": [
+    {
+      "url": "/api/workbench/git/status",
+      "body": {
+        "base": "HEAD"
+      }
+    },
+    {
+      "url": "/api/workbench/git/diff",
+      "body": {
+        "path": "src/a.js",
+        "base": "HEAD"
+      }
+    }
+  ],
+  "comparisonStillWorks": true,
+  "changedPath": "tests/a.js"
+}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Ban, Check, ChevronDown, Circle, CircleDot, Loader2, Minus, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Ban, Check, ChevronDown, Circle, CircleDot, Minus, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Spinner as Loader2 } from '../../../components/ui/LoadingState.jsx'
 import { approveGoalPlanApi, listGoalPlansApi, pickActivePlan, showGoalPlanApi } from '../../../lib/goalPlanClient.js'
 import { subscribeGoalPlanChanged } from '../../../lib/goalPlanSignals.js'
 

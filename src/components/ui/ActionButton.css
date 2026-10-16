@@ -1,5 +1,14 @@
 .gugo-action-button {
   touch-action: manipulation;
+  min-height: var(--control-height);
+}
+
+.gugo-action-button[data-size] {
+  padding-block: calc(var(--space-row) / 2);
+}
+
+.gugo-action-button[data-size="md"] {
+  min-height: calc(var(--control-height) + 4px);
 }
 
 @media (hover: none), (pointer: coarse) {

@@ -1,4 +1,5 @@
-import { FolderOpen, Loader2, ShieldCheck, X } from 'lucide-react'
+import { FolderOpen, ShieldCheck, X } from 'lucide-react'
+import { Spinner as Loader2 } from './ui/LoadingState.jsx'
 import { useEffect, useState } from 'react'
 import { useT } from '../i18n/I18nProvider.jsx'
 import InlineDirectoryBrowser from './InlineDirectoryBrowser.jsx'

@@ -51,11 +51,9 @@ test('narrow composer actions wrap as groups without shrinking primary controls 
   assert.match(actions, /data-testid="chat-composer-actions" className="[^"]*flex flex-wrap/)
   assert.match(actions, /chat-composer-primary-action flex h-8 w-8 shrink-0/)
   assert.match(actions, /relative shrink-0/)
-  assert.match(actions, /fixed bottom-24 right-3[^\n]+lg:absolute[^\n]+data-testid="context-usage-popover"/)
-  assert.match(permission, /data-testid="permission-mode-popover"[^\n]+fixed bottom-24 left-3 right-3[^\n]+lg:absolute/)
+  // Placement belongs to the shared portal, not a mobile fixed/desktop absolute class recipe.
+  for (const owner of [actions, picker, permission]) assert.match(owner, /import PopoverPortal from/)
+  assert.doesNotMatch(pickerPanel, /fixed bottom-24|lg:absolute/)
   assert.match(picker, /ref=\{pickerRef\} className="relative flex min-w-0 max-w-full/)
-  for (const surface of [actions, pickerPanel]) {
-    assert.match(surface, /max-w-\[calc\(100%-1\.5rem\)\]/)
-    assert.match(surface, /lg:max-w-none/)
-  }
+  // HostUiPrimitives + real browser tests cover body ownership, viewport bounds and pointer hits.
 })

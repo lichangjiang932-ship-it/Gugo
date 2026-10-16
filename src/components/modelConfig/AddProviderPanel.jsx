@@ -1,6 +1,10 @@
+import Segmented from '../ui/Segmented.jsx'
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, RefreshCw } from 'lucide-react'
 import { probeLlmDraft, saveLlmCredential, saveLlmProvider } from '../../lib/llmConfigClient.js'
+import ModelSelectionList from './ModelSelectionList.jsx'
+import { mergeModelCandidates } from './modelSelection.js'
+import { isCompositionEvent } from '../../lib/compositionEvent.js'
 
 const INPUT = 'h-9 w-full rounded-control border border-ink/15 bg-paper px-2.5 text-sm text-ink outline-none focus:border-focus'
 // A select with no options renders blank, so the protocol list never depends on
@@ -11,7 +15,7 @@ const FALLBACK_PROTOCOLS = Object.freeze([
   { id: 'anthropic-messages', label: 'Anthropic Messages' },
 ])
 const LABEL = 'text-xs font-medium text-ink'
-const TAB = 'rounded-control px-3 py-1.5 text-sm transition-colors'
+
 const PRIMARY = 'h-9 rounded-control bg-ink px-4 text-sm text-paper disabled:opacity-40'
 const SECONDARY = 'h-9 rounded-control border border-ink/15 bg-paper px-4 text-sm text-ink'
 const LINK = 'inline-flex items-center gap-1 text-xs text-accent hover:underline disabled:opacity-50'
@@ -43,7 +47,7 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
   const [catalogId, setCatalogId] = useState(editing?.id || initialCatalogEntryId || 'openai')
-  const [models, setModels] = useState(() => (editing?.models || []).map((model) => String(model.id || model)))
+  const [models, setModels] = useState(() => (editing?.models || []).map(model => typeof model === 'string' ? { id: model } : model))
   const [modelDraft, setModelDraft] = useState('')
   const [form, setForm] = useState(() => ({
     apiKey: '',
@@ -66,7 +70,7 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
     try {
       const result = await probeLlmDraft({ ...target, apiKey: form.apiKey.trim() })
       const discovered = result.discovered || []
-      setModels((current) => [...new Set([...current, ...discovered])])
+      setModels(current => mergeModelCandidates(current, discovered, result.modelProfiles))
       setNote(t('settingsModels.probeFound', { count: discovered.length }))
     } catch (failure) {
       setNote(failure.message)
@@ -77,7 +81,7 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
   const addModel = () => {
     const id = modelDraft.trim()
     if (!id) return
-    setModels((current) => [...new Set([...current, id])])
+    setModels(current => mergeModelCandidates(current, [id]).map(model => model.id === id ? { ...model, enabled: true } : model))
     setModelDraft('')
   }
   const submit = async (event) => {
@@ -89,7 +93,8 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
         ? { id: form.id.trim().toLowerCase(), displayName: form.displayName.trim() || form.id.trim(), api: form.api, baseURL: form.baseURL.trim(), custom: true }
         : { id: catalogId, ...(form.baseURL.trim() ? { baseURL: form.baseURL.trim() } : {}) }
       if (!provider.id) throw new Error(t('settingsModels.providerIdRequired'))
-      if (models.length > 0) provider.models = models.map((id) => ({ id }))
+      // The live saved directory below must not be overwritten by an old form snapshot.
+      if (!editing && models.length > 0) provider.models = models
       if (form.apiKey.trim()) await saveLlmCredential(provider.id, form.apiKey.trim())
       await saveLlmProvider(provider)
       await onSaved?.()
@@ -102,14 +107,9 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
 
   return (
     <form className="flex flex-col gap-3" data-testid="add-provider-panel" onSubmit={submit}>
-      <div className="inline-flex w-fit gap-1 rounded-control bg-paper p-1" role="tablist">
-        <button type="button" role="tab" aria-selected={tab === 'catalog'} data-testid="tab-catalog"
-          className={`${TAB} ${tab === 'catalog' ? 'bg-ink/[0.07] font-medium text-ink' : 'text-ink-fade hover:text-ink'}`}
-          onClick={() => setTab('catalog')}>{t('settingsModels.tabCatalog')}</button>
-        <button type="button" role="tab" aria-selected={tab === 'custom'} data-testid="tab-custom"
-          className={`${TAB} ${tab === 'custom' ? 'bg-ink/[0.07] font-medium text-ink' : 'text-ink-fade hover:text-ink'}`}
-          onClick={() => setTab('custom')}>{t('settingsModels.tabCustom')}</button>
-      </div>
+      <Segmented role="tablist" value={tab} onChange={setTab} label={t('settingsModels.tabCatalog') + ' / ' + t('settingsModels.tabCustom')}
+        options={[{ value: 'catalog', label: t('settingsModels.tabCatalog'), buttonProps: { 'data-testid': 'tab-catalog' } },
+          { value: 'custom', label: t('settingsModels.tabCustom'), buttonProps: { 'data-testid': 'tab-custom' } }]} />
 
       {tab === 'catalog' ? (
         <>
@@ -201,22 +201,12 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
             {t('settingsModels.modelsEmptyHint')}
           </p>
         ) : (
-          <ul className="flex flex-wrap gap-1.5">
-            {models.map((modelId) => (
-              <li key={modelId} className="flex items-center gap-1 rounded-pill bg-paper-2 px-2 py-0.5 text-xs text-ink-soft">
-                <span>{modelId}</span>
-                <button type="button" aria-label={t('settingsModels.removeModel')} data-testid="draft-remove-model" data-model={modelId}
-                  className="text-ink-fade hover:text-danger" onClick={() => setModels((current) => current.filter((id) => id !== modelId))}>
-                  <Trash2 className="h-3 w-3" aria-hidden="true" />
-                </button>
-              </li>
-            ))}
-          </ul>
+          <ModelSelectionList models={models} onChange={setModels} busy={busy} t={t} />
         )}
         <div className="flex gap-2">
           <input className={INPUT} data-testid="draft-model-input" value={modelDraft} placeholder={t('settingsModels.modelIdPlaceholder')}
             onChange={(event) => setModelDraft(event.target.value)} onKeyDown={(event) => {
-              if (event.key !== 'Enter') return
+              if (event.key !== 'Enter' || isCompositionEvent(event)) return
               event.preventDefault()
               addModel()
             }} />

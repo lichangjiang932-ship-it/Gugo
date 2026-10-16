@@ -127,8 +127,8 @@ test('context panel shows compact total plus system, tools, and conversation bre
         <Harness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    assert.ok(rootElement.querySelector('[data-testid="context-usage-panel"]'))
-    const text = rootElement.textContent
+    assert.ok(document.querySelector('[data-testid="context-usage-panel"]'))
+    const text = document.body.textContent
     assert.match(text, /待发送上下文（估算）/)
     assert.match(text, /会话累计 Token/)
     assert.match(text, /279M/)
@@ -157,11 +157,11 @@ test('context panel keeps historical measured input separate from pending occupa
         <Harness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    assert.match(rootElement.textContent, /0\.1%/)
-    assert.match(rootElement.textContent, /~1K \/ 1M/)
-    assert.match(rootElement.querySelector('[data-testid=context-last-request]').textContent, /331K/)
-    assert.doesNotMatch(rootElement.textContent, /~331K \/ 1M/)
-    assert.equal(rootElement.querySelector('[data-testid="context-usage-panel"]')?.getAttribute('role'), 'dialog')
+    assert.match(document.body.textContent, /0\.1%/)
+    assert.match(document.body.textContent, /~1K \/ 1M/)
+    assert.match(document.querySelector('[data-testid=context-last-request]').textContent, /331K/)
+    assert.doesNotMatch(document.body.textContent, /~331K \/ 1M/)
+    assert.equal(document.querySelector('[data-testid="context-usage-panel"]')?.getAttribute('role'), 'dialog')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -188,8 +188,8 @@ test('context panel treats measured zero as real usage', async () => {
         <Harness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    assert.match(rootElement.textContent, /~5K \/ 128K/)
-    assert.match(rootElement.querySelector('[data-testid=context-last-request]').textContent, /0/)
+    assert.match(document.body.textContent, /~5K \/ 128K/)
+    assert.match(document.querySelector('[data-testid=context-last-request]').textContent, /0/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -217,11 +217,11 @@ test('context panel and model circle fall back to estimates when measured usage 
         <ComposerHarness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    const ring = document.querySelector('[data-testid="context-ring"]')
     assert.match(ring?.getAttribute('aria-label') || '', /3\.9% · ~5,000 tokens · \/ 128,000 tokens/)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.match(rootElement.textContent, /~5K \/ 128K/)
+    assert.match(document.body.textContent, /~5K \/ 128K/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -249,13 +249,13 @@ test('estimated model windows never appear as exact capacity in the composer or 
         <ComposerHarness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    const ring = document.querySelector('[data-testid="context-ring"]')
     assert.match(ring?.getAttribute('aria-label'), /~22,917 tokens.*有效窗口未知/)
     assert.doesNotMatch(ring?.getAttribute('aria-label') || '', /128,000|%/)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.match(rootElement.textContent, /~22\.9K/)
-    assert.doesNotMatch(rootElement.textContent, /128K|%/)
+    assert.match(document.body.textContent, /~22\.9K/)
+    assert.doesNotMatch(document.body.textContent, /128K|%/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -286,12 +286,12 @@ test('correlated retained context avoids recounting uncompressed UI history', as
         <ComposerHarness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    const ring = document.querySelector('[data-testid="context-ring"]')
     assert.match(ring?.getAttribute('aria-label') || '', /13% · ~16,000 tokens · \/ 128,000 tokens/)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.match(rootElement.textContent, /~16K \/ 128K/)
-    assert.doesNotMatch(rootElement.textContent, /~96K \/ 128K/)
+    assert.match(document.body.textContent, /~16K \/ 128K/)
+    assert.doesNotMatch(document.body.textContent, /~96K \/ 128K/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -309,30 +309,31 @@ test('model context circle toggles the usage popover and closes it with Escape',
         <ComposerHarness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    const ring = document.querySelector('[data-testid="context-ring"]')
     assert.ok(ring)
     assert.match(ring.getAttribute('aria-label') || '', /0\.1% · ~1,000 tokens · \/ 1,000,000 tokens/)
-    assert.equal(rootElement.querySelector('[data-testid="context-usage-popover"]'), null)
+    assert.equal(document.querySelector('[data-testid="context-usage-popover"]'), null)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    const popover = rootElement.querySelector('[data-testid="context-usage-popover"]')
+    const popover = document.querySelector('[data-testid="context-usage-popover"]')
     assert.ok(popover)
-    assert.match(popover.className, /w-\[min\(19rem,calc\(100vw-1\.5rem\)\)\]/)
-    assert.match(popover.className, /fixed bottom-24 right-3/)
-    assert.match(popover.className, /lg:absolute/)
-    const panel = rootElement.querySelector('[data-testid="context-usage-panel"]')
+    const layer = popover.closest('[data-host-popover]')
+    assert.equal(layer.parentElement === document.body, true)
+    assert.equal(layer.style.position, 'fixed')
+    assert.ok(parseFloat(layer.style.width) <= window.innerWidth - 24)
+    const panel = document.querySelector('[data-testid="context-usage-panel"]')
     assert.equal(panel?.getAttribute('data-density'), 'compact')
     assert.match(panel?.className || '', /py-2\.5/)
-    const estimateNotice = rootElement.querySelector('[data-testid="context-estimate-notice"]')
+    const estimateNotice = document.querySelector('[data-testid="context-estimate-notice"]')
     assert.match(estimateNotice?.className || '', /truncate/)
     assert.equal(estimateNotice?.getAttribute('title'), estimateNotice?.textContent)
-    const usageRows = [...rootElement.querySelectorAll('[data-testid="context-usage-row"]')]
+    const usageRows = [...document.querySelectorAll('[data-testid="context-usage-row"]')]
     assert.equal(usageRows.length, 3)
     assert.equal(usageRows.every((row) => row.className.includes('py-0.5')), true)
     assert.equal(ring.getAttribute('aria-expanded'), 'true')
 
     await act(async () => dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
-    assert.equal(rootElement.querySelector('[data-testid="context-usage-popover"]'), null)
+    assert.equal(document.querySelector('[data-testid="context-usage-popover"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

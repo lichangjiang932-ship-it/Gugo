@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { RefreshCw, Sparkles, Trash2 } from 'lucide-react'
-import { addLlmModel, probeLlmModels, removeLlmModel } from '../../lib/llmConfigClient.js'
+import { addLlmModel, probeLlmModels, removeLlmModel, saveLlmProvider } from '../../lib/llmConfigClient.js'
+
+import ModelSelectionList from './ModelSelectionList.jsx'
 
 const BUTTON = 'h-8 rounded-control border border-ink/15 bg-paper px-3 text-xs text-ink transition-colors hover:bg-paper-2 disabled:opacity-50'
 const LINK = 'inline-flex items-center gap-1 text-xs text-accent hover:underline disabled:opacity-50'
@@ -15,6 +17,18 @@ export default function ProviderModelDirectory({ defaultModel, onChangeDefault, 
   const [note, setNote] = useState('')
   const models = provider?.models || []
 
+  const selectModels = async next => {
+    setBusy(true)
+    setNote('')
+    try {
+      await saveLlmProvider({ id: provider.id, models: next })
+      await onChanged?.()
+    } catch (error) {
+      setNote(error.message)
+    } finally {
+      setBusy(false)
+    }
+  }
   const probe = async () => {
     setBusy(true)
     setNote('')
@@ -68,27 +82,16 @@ export default function ProviderModelDirectory({ defaultModel, onChangeDefault, 
           {t('settingsModels.modelsEmptyHint')}
         </p>
       ) : (
-        <ul className="flex flex-wrap gap-1.5">
-          {models.map((model) => (
-            <li key={model.id} className="flex items-center gap-1 rounded-pill bg-paper-2 px-2 py-0.5 text-xs text-ink-soft">
-              {onChangeDefault && defaultModel ? (
-                <button
-                  type="button"
-                  className={`underline-offset-2 hover:underline ${defaultModel.model === model.id ? 'font-medium text-accent-ink' : ''}`}
-                  data-testid="set-default-model"
-                  data-model={model.id}
-                  onClick={() => onChangeDefault(provider.id, model.id)}
-                >
-                  {model.id}
-                </button>
-              ) : <span>{model.id}</span>}
-              <button type="button" data-testid="remove-model" data-model={model.id} aria-label={t('settingsModels.removeModel')}
-                className="text-ink-fade hover:text-danger" onClick={() => remove(model.id)}>
-                <Trash2 className="h-3 w-3" aria-hidden="true" />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <ModelSelectionList models={models} onChange={selectModels} busy={busy} t={t} renderActions={(model, enabled) => <>
+          {onChangeDefault && defaultModel && <button type="button" data-testid="set-default-model" data-model={model.id} disabled={busy || !enabled}
+            aria-pressed={defaultModel.provider === provider.id && defaultModel.model === model.id}
+            className="shrink-0 text-xs text-ink-fade hover:text-accent-ink disabled:opacity-30"
+            onClick={() => onChangeDefault(provider.id, model.id)}>{t('settingsModels.setDefault')}</button>}
+          <button type="button" data-testid="remove-model" data-model={model.id} disabled={busy} aria-label={t('settingsModels.removeModel')}
+            className="shrink-0 text-ink-fade hover:text-danger disabled:opacity-30" onClick={() => remove(model.id)}>
+            <Trash2 className="h-3 w-3" aria-hidden="true" />
+          </button>
+        </>} />
       )}
       <div className="flex gap-2">
         <input

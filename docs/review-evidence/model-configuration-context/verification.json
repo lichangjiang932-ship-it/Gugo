@@ -1,0 +1,112 @@
+{
+  "kind": "model-configuration-selection-and-context-progress",
+  "base": "71b01e4",
+  "full": {
+    "testFiles": 1180,
+    "exitCode": 0,
+    "seconds": 875.231,
+    "frozenChangedSources": 184,
+    "hashesUnchanged": true,
+    "log": "gugo-model-selection-9O63K9/full-tests-final.log"
+  },
+  "targeted": {
+    "files": 22,
+    "tests": 186,
+    "supplementalPollingTest": "live-poll-green.log"
+  },
+  "offline": {
+    "tests": 71,
+    "realProvider": false
+  },
+  "regressions": [
+    "default-home writer/runtime-reader mismatch",
+    "selection retains candidate metadata and disables runtime allowance",
+    "successful configuration mutation notifies mounted chat; failed writes do not",
+    "saved-directory edits stay open and form save cannot restore stale choices",
+    "protocol retained across partial updates",
+    "default identity includes provider for same-name models",
+    "per-model limits reach status, request profile and effective compaction window",
+    "Add-model action remains outside the listbox and uses the authenticated settings route"
+  ],
+  "browser": {
+    "modelCandidates": 32,
+    "initialSelected": 2,
+    "finalSelected": 1,
+    "needRestart": false,
+    "selectedModels": [
+      "fixture-model-2",
+      "fixture-model-17"
+    ],
+    "selectedProvider": "fixture",
+    "draftSurvivesSettings": true,
+    "normalComposerStreamFixture": true,
+    "normalComposerRequests": {
+      "stream": 1,
+      "title": 1
+    },
+    "httpProxyFixture": true,
+    "ringGrowth": [
+      0.19404,
+      0.21804
+    ],
+    "ringSeventy": {
+      "tokens": 70000,
+      "window": 100000,
+      "fraction": 0.7
+    },
+    "viewCases": 6,
+    "widths": [
+      360,
+      1440
+    ],
+    "themes": [
+      "light",
+      "dark",
+      "white"
+    ],
+    "overflow": false
+  },
+  "preservedChrome": [
+    "WorkbenchToolbar.jsx",
+    "RightWorkbenchFrame.jsx",
+    "ChatSessionHeaderBar.jsx",
+    "ChatRightPanels.jsx"
+  ],
+  "gates": [
+    "lint",
+    "typecheck",
+    "all 18 invalid type fixtures rejected",
+    "debt:check",
+    "complexity",
+    "i18n shape/keys",
+    "dependencies",
+    "isolated Web build",
+    "git diff --check"
+  ],
+  "isolation": {
+    "realKeysRead": false,
+    "realUserDatabaseModified": false,
+    "realProviderCalled": false,
+    "allOwnedServicesClosed": true,
+    "home": "temporary home/profile/config roots",
+    "patternScan": "changed eligible text only; not comprehensive security audit"
+  },
+  "earlierFailuresRetained": [
+    "red.log",
+    "availability-red.log",
+    "related.log",
+    "navigation-check.log",
+    "browser.log",
+    "browser-verification.log",
+    "full-tests-verified.log"
+  ],
+  "notVerified": [
+    "real upstream model quality/availability",
+    "native Electron installed-package behavior",
+    "production performance/FPS"
+  ],
+  "git": {
+    "committed": false,
+    "pushed": false
+  }
+}

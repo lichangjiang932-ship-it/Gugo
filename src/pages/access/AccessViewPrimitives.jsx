@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Ban, Inbox, Info, LoaderCircle, ShieldCheck } from 'lucide-react'
+import { Ban, Inbox, Info, ShieldCheck } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../components/ui/LoadingState.jsx'
 import { ACCESS_CAPABILITY_LEVELS } from '../../lib/accessCatalog.js'
 
 const CAPABILITY_PRESENTATION = Object.freeze({
@@ -22,13 +23,13 @@ export function ConnectorSection({ title, hint, children }) {
 export function ConnectorCapabilityBadge({ capabilityLevel, t }) {
   const presentation = CAPABILITY_PRESENTATION[capabilityLevel]
   if (!presentation) return null
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${presentation.className}`} data-testid={`connector-capability-${capabilityLevel}`} data-capability-level={capabilityLevel}>{t(presentation.labelKey)}</span>
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[0.625rem] font-medium ${presentation.className}`} data-testid={`connector-capability-${capabilityLevel}`} data-capability-level={capabilityLevel}>{t(presentation.labelKey)}</span>
 }
 
 export function ConnectionMethodBadge({ method, t }) {
   const key = CONNECTION_METHOD_KEYS[method]
   if (!key) return null
-  return <span className="inline-flex rounded-full border border-ink-fade/30 bg-paper-2 px-2 py-0.5 text-[10px] text-ink-soft" data-connection-method={method}>{t(key)}</span>
+  return <span className="inline-flex rounded-full border border-ink-fade/30 bg-paper-2 px-2 py-0.5 text-[0.625rem] text-ink-soft" data-connection-method={method}>{t(key)}</span>
 }
 
 export function CapabilityLegend({ t }) {
@@ -92,7 +93,7 @@ export function BridgeInboundInbox({ messages, busyId, highlightedId, onAllow, o
   if (!Array.isArray(messages) || messages.length === 0) return null
   return (
     <section className="mb-7 rounded-2xl border border-warning/70 bg-warning/60 p-4 shadow-sm" data-testid="bridge-inbound-inbox">
-      <div className="flex items-start gap-3"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning"><Inbox className="h-4 w-4" /></span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h2 className="font-semibold text-xl text-ink">{t('access.inboundInboxTitle')}</h2>{messages.length > 0 && <span className="rounded-full bg-warning/70 px-2 py-0.5 text-[10px] font-medium text-warning">{messages.length}</span>}</div><p className="mt-0.5 text-xs leading-5 text-ink-soft">{t('access.inboundInboxHint')}</p></div></div>
+      <div className="flex items-start gap-3"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning"><Inbox className="h-4 w-4" /></span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h2 className="font-semibold text-xl text-ink">{t('access.inboundInboxTitle')}</h2>{messages.length > 0 && <span className="rounded-full bg-warning/70 px-2 py-0.5 text-[0.625rem] font-medium text-warning">{messages.length}</span>}</div><p className="mt-0.5 text-xs leading-5 text-ink-soft">{t('access.inboundInboxHint')}</p></div></div>
       <div className="mt-4 space-y-3">{messages.map((message) => <InboundMessage key={message.id} message={message} busy={busyId === message.id} highlighted={highlightedId === message.id} onAllow={onAllow} onReject={onReject} t={t} />)}</div>
     </section>
   )
@@ -105,7 +106,7 @@ function InboundMessage({ message, busy, highlighted, onAllow, onReject, t }) {
   const date = new Date(message.createdAt)
   return (
     <article id={`bridge-parking-${message.id}`} className={`rounded-xl border bg-paper p-4 transition-shadow ${highlighted ? 'border-accent ring-2 ring-accent/25 shadow-md' : 'border-warning/20'}`} data-testid={`bridge-parking-${message.id}`}>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm font-medium text-ink">{sender}</strong><span className="rounded-full border border-ink-fade/30 bg-paper-2 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide text-ink-fade">{message.provider}</span><time dateTime={Number.isNaN(date.getTime()) ? undefined : date.toISOString()} className="text-[10px] text-ink-fade">{Number.isNaN(date.getTime()) ? '' : date.toLocaleString()}</time></div><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{text || t('access.attachmentMessage').replace('{count}', String(attachmentCount))}</p></div><div className="flex shrink-0 flex-wrap gap-2 sm:justify-end"><button type="button" disabled={busy} onClick={() => onReject(message.id)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-danger/20 px-3 text-xs text-danger hover:bg-danger/5 disabled:opacity-50"><Ban className="h-3.5 w-3.5" />{t('access.rejectSender')}</button><button type="button" disabled={busy} onClick={() => onAllow(message.id)} className="inline-flex h-8 min-w-28 items-center justify-center gap-1.5 rounded-md bg-ink px-3 text-xs text-paper hover:bg-ink-soft disabled:opacity-50">{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}{busy ? t('access.delivering') : t('access.allowAndDeliver')}</button></div></div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm font-medium text-ink">{sender}</strong><span className="rounded-full border border-ink-fade/30 bg-paper-2 px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wide text-ink-fade">{message.provider}</span><time dateTime={Number.isNaN(date.getTime()) ? undefined : date.toISOString()} className="text-[0.625rem] text-ink-fade">{Number.isNaN(date.getTime()) ? '' : date.toLocaleString()}</time></div><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{text || t('access.attachmentMessage').replace('{count}', String(attachmentCount))}</p></div><div className="flex shrink-0 flex-wrap gap-2 sm:justify-end"><button type="button" disabled={busy} onClick={() => onReject(message.id)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-danger/20 px-3 text-xs text-danger hover:bg-danger/5 disabled:opacity-50"><Ban className="h-3.5 w-3.5" />{t('access.rejectSender')}</button><button type="button" disabled={busy} onClick={() => onAllow(message.id)} className="inline-flex h-8 min-w-28 items-center justify-center gap-1.5 rounded-md bg-ink px-3 text-xs text-paper hover:bg-ink-soft disabled:opacity-50">{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}{busy ? t('access.delivering') : t('access.allowAndDeliver')}</button></div></div>
     </article>
   )
 }

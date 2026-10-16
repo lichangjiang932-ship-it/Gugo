@@ -5,7 +5,7 @@ import { getSlashActionCopy } from '../../lib/slashCoreCommands.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 
 function valueClass(extra = '') {
-  return `mt-1 truncate text-[13px] font-medium text-ink ${extra}`
+  return `mt-1 truncate text-[0.8125rem] font-medium text-ink ${extra}`
 }
 
 export default function ChatStatusCard({

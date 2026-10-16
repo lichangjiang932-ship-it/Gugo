@@ -8,7 +8,7 @@ export default function SkillsToolbar({
   return (
     <>
       <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <h1 className="font-semibold text-[30px] text-ink">{t('skillsMarket.title')}</h1>
+        <h1 className="font-semibold text-[1.875rem] text-ink">{t('skillsMarket.title')}</h1>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           <input
             ref={folderInputRef}

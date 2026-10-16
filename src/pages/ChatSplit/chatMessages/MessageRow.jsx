@@ -174,7 +174,7 @@ function MessageRow({
       <div className={collapseArtifact
         ? 'w-full max-w-[780px]'
         : msg.role === 'assistant'
-          ? 'chat-assistant-message w-full max-w-[780px] text-[15px] leading-[1.65]'
+          ? 'chat-assistant-message w-full max-w-[780px] text-body leading-[1.65]'
           : 'flex max-w-[min(620px,72%)] flex-col items-end'}>
         {msg.role === 'assistant' ? (
           collapseArtifact ? (

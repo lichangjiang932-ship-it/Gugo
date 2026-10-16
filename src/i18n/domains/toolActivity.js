@@ -13,6 +13,7 @@ export default {
     pptxFrameOverflow: '第 {slide} 页的第 {element} 个元素空间不足，需要调整布局。',
     argumentsRejected: '模型给出的参数不符合工具要求，没有执行；模型会修正后重试。',
     summaryUnavailable: '暂无参数摘要',
+    emptyCall: '暂无可展示的工具调用记录。',
     // 执行时间线的行语言：每一行说清"这一步在做什么"。
     // kind* 是行的标签，count* 是分组行里的计数用词（"2 搜索, 2 文件"）。
     kindConsult: '读取',
@@ -75,6 +76,7 @@ export default {
     pptxFrameOverflow: 'Slide {slide}, element {element} needs more space for its content.',
     argumentsRejected: 'The arguments did not fit the tool, so it did not run; the model corrects them and retries.',
     summaryUnavailable: 'No argument summary available',
+    emptyCall: 'No tool call record is available.',
     kindConsult: 'Read',
     kindSearch: 'Search',
     kindCommand: 'Terminal',

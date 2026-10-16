@@ -1,0 +1,21 @@
+{
+  "readonly": true,
+  "records": [
+    {
+      "id": "ui-history-alpha",
+      "title": "Alpha preserved history",
+      "archived_at": null
+    },
+    {
+      "id": "ui-history-archived",
+      "title": "Archived preserved history",
+      "archived_at": 1792075360621
+    },
+    {
+      "id": "ui-history-beta",
+      "title": "Beta preserved history",
+      "archived_at": null
+    }
+  ],
+  "noHistoryDeleted": true
+}

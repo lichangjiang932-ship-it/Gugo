@@ -1,3 +1,4 @@
+import Segmented from '../ui/Segmented.jsx'
 import { useState } from 'react'
 import { Cloud, Server } from 'lucide-react'
 
@@ -60,16 +61,14 @@ export default function ProviderSourcePicker({
   })
   const typedPreset = CLOUD_PRESETS.find((preset) => preset.id === typedId || catalogIdForPreset(preset.id) === typedId)
 
-  const tabClass = (active) => `h-8 rounded-md px-3 text-xs ${active ? 'bg-paper text-ink shadow-sm' : 'text-ink-soft hover:text-ink'}`
 
   return <div className="flex flex-col gap-3">
     <div className="flex items-center gap-2 text-xs font-medium text-ink">
       <Cloud className="h-4 w-4 text-accent-ink" />{t('modelProviders.chooseProvider')}
     </div>
-    <div data-testid="provider-source-tabs" role="tablist" className="flex w-fit items-center gap-1 rounded-lg bg-paper-2 p-1">
-      <button type="button" role="tab" aria-selected={tab === 'catalog'} className={tabClass(tab === 'catalog')} onClick={() => setTab('catalog')}>{t('modelProviders.sourceTabCatalog')}</button>
-      <button type="button" role="tab" aria-selected={tab === 'custom'} className={tabClass(tab === 'custom')} onClick={() => setTab('custom')}>{t('modelProviders.sourceTabCustom')}</button>
-    </div>
+    <Segmented data-testid="provider-source-tabs" role="tablist" value={tab} onChange={setTab}
+      label={t('modelProviders.chooseProvider')} options={[{ value: 'catalog', label: t('modelProviders.sourceTabCatalog') },
+        { value: 'custom', label: t('modelProviders.sourceTabCustom') }]} />
 
     {tab === 'catalog' && <div data-testid="provider-catalog-tab" className="flex flex-col gap-3">
       <div className="text-xs text-ink-fade">{t('modelProviders.sourceTabCatalogHint')}</div>
@@ -118,7 +117,7 @@ export default function ProviderSourcePicker({
             className={`min-h-14 rounded-lg border px-3 py-2 text-left text-xs flex flex-col gap-1 ${editing.presetId === provider.preset.id ? 'border-accent bg-accent-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink'}`}
           >
             <span className="truncate font-medium">{provider.name}</span>
-            <span className="text-[10px] text-ink-fade">{typeof provider.modelCount === 'number' ? t('modelProviders.catalogProviderModelCount', { count: provider.modelCount }) : provider.id}</span>
+            <span className="text-[0.625rem] text-ink-fade">{typeof provider.modelCount === 'number' ? t('modelProviders.catalogProviderModelCount', { count: provider.modelCount }) : provider.id}</span>
           </button>)}
         </div>}
       </div>
@@ -143,7 +142,7 @@ export default function ProviderSourcePicker({
       <div className="text-xs text-ink-fade">{t('modelProviders.customTabHint')}</div>
       <button type="button" onClick={onUseCustomPath} className={`flex min-h-14 flex-col gap-1 self-start rounded-lg border px-3 py-2 text-left text-xs ${editing.presetId === 'custom' ? 'border-accent bg-accent-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink'}`}>
         <span className="font-medium">{t('modelProviders.custom')}</span>
-        <span className="text-[10px] text-ink-fade">{t('modelProviders.customTabHint')}</span>
+        <span className="text-[0.625rem] text-ink-fade">{t('modelProviders.customTabHint')}</span>
       </button>
       <button type="button" onClick={() => setTab('catalog')} className="flex items-center gap-1.5 self-start text-xs text-ink-soft hover:text-ink">
         <Server className="h-3.5 w-3.5" />{t('modelProviders.backToCatalog')}

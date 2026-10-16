@@ -1,0 +1,91 @@
+{
+  "kind": "changes-internal-navigation-and-history-placement",
+  "base": "71b01e4",
+  "scope": "Preserve existing page/toolbar/entry identities. Changes internals and history settings only.",
+  "protectedProductionFilesUnchanged": [
+    "src/pages/ChatSplit/rightWorkbench/WorkbenchToolbar.jsx",
+    "src/pages/ChatSplit/rightWorkbench/RightWorkbenchFrame.jsx",
+    "src/pages/ChatSplit/chatSplitView/ChatSessionHeaderBar.jsx",
+    "src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx"
+  ],
+  "withdrawn": "Proposed five-button toolbar never entered production; proposal test moved outside repository.",
+  "reference": {
+    "localPath": "D:/open-claude-ui",
+    "commit": "2834bc158a4849f21c97cbb2e0b10525f6e646f1",
+    "files": [
+      "code-examples/StreamingDiffViewer.tsx",
+      "code-examples/DraggableSessionList.tsx",
+      "docs sections 5.5, 6.2, 9.2"
+    ],
+    "limits": "No complete Changes drawer implementation in reference; no claim of exact original SVG/order reproduction."
+  },
+  "full": {
+    "files": 1176,
+    "exitCode": 0,
+    "seconds": 1223.662,
+    "frozenChangedSources": 166,
+    "unchanged": true,
+    "log": "gugo-changes-simple-RImjKQ/full-tests-verified.log"
+  },
+  "targeted": {
+    "files": 17,
+    "tests": 87
+  },
+  "offline": {
+    "tests": 71,
+    "realModel": false
+  },
+  "browser": {
+    "historyCases": 6,
+    "changesCases": 6,
+    "widths": [
+      360,
+      1440
+    ],
+    "themes": [
+      "light",
+      "dark",
+      "white"
+    ],
+    "exactSelectedPath": "tests/a.js",
+    "noFullFileReads": true,
+    "initialSessionTarget": true,
+    "advancedHeadComparison": true,
+    "menuEscapeDoesNotCloseChanges": true,
+    "historySearchAndOpen": true,
+    "legacyHistoryRoute": true,
+    "historyData": "Three synthetic SQLite sessions, including one archived, preserved under readonly verification",
+    "changesData": "Synthetic session feed and Git-response fixture, not real model/SSE execution"
+  },
+  "regressionEvidence": {
+    "archive": "New valid Changes tests reproduce three failures against archived 71b01e4; original worktree not reset",
+    "fixtureCorrection": "Initial missing translator in the new test fixture was not counted as feature reproduction",
+    "newMenuAndModalEscapeTests": "Failed before patch; Tab capture retained, Escape handled after children with IME guard"
+  },
+  "nonfinalRuns": [
+    "full-tests.log",
+    "full-tests-final.log",
+    "full-tests-closure.log"
+  ],
+  "gates": [
+    "lint",
+    "typecheck",
+    "18 invalid type fixtures rejected",
+    "debt:check",
+    "audit:functions -- --check",
+    "i18n:check",
+    "i18n:keys",
+    "deps:check",
+    "isolated Web build",
+    "git diff --check"
+  ],
+  "notRun": [
+    "Real provider/model or tool execution",
+    "Native Electron package acceptance",
+    "Claude binary execution or independent toolbar SVG tracing"
+  ],
+  "git": {
+    "committed": false,
+    "pushed": false
+  }
+}

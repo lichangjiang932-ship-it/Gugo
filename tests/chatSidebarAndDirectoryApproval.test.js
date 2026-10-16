@@ -238,7 +238,8 @@ test('typing slash opens an inline command menu above the composer', () => {
 
   assert.match(composer, /data-testid="slash-command-menu"|<SlashCommandMenu/)
   assert.match(composer, /resolveSlashMenuKey\(e\.key/)
-  assert.match(menu, /bottom-\[calc\(100%\+10px\)\]/)
+  // Shared portal owns placement; actual bounds/click/IME are exercised in component and browser tests.
+  assert.match(menu, /import PopoverPortal from/)
   assert.match(menu, /role="listbox"/)
   assert.match(chat, /slashRegistry\.listCommands\(\{ query: slashQuery \}\)/)
 
@@ -270,7 +271,8 @@ test('typing slash opens an inline command menu above the composer', () => {
   // right-hand column, which left a wide gap down the middle of every row and
   // made thirty commands look sparse.
   assert.doesNotMatch(menu, /text-right/)
-  assert.match(menu, /min-w-0 flex-1 truncate text-\[13px\] leading-5 text-ink-fade\/90/)
+  // Font scaling is measured in the browser; keep only the single-line layout constraint here.
+  assert.match(menu, /min-w-0 flex-1 truncate[^"\n]+leading-5 text-ink-fade\/90/)
 })
 
 test('workbench preference defaults to closed and round-trips', () => {

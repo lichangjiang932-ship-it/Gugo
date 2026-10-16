@@ -14,7 +14,7 @@ test('FullscreenMediaModal component exists and exports default', () => {
 
 test('FullscreenMediaModal uses the shared portal modal with a framer-motion fade and black backdrop', () => {
   const source = fs.readFileSync(componentPath, 'utf8')
-  assert.match(source, /from 'framer-motion'/)
+  assert.match(source, /from '\.\.\/lib\/hostMotion\.js'/)
   assert.match(source, /import Modal from '\.\/Modal\.jsx'/)
   assert.match(source, /<Modal/)
   assert.match(source, /motion\.div/)

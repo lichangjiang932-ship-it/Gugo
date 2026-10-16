@@ -29,6 +29,21 @@ Readable host UI metadata is at least 12px (`text-xs`). Bare 9–11px declaratio
 
 Presentation export styles are authored output rather than host UI and are migrated separately.
 
+The five `--type-*` roles use rem; ThemeWrapper changes the root size once. Do not multiply rem by `--font-size-scale` again. Legacy 9–11px equivalents remain debt-counted even after unit migration. Fixed `text-[Npx]` host JSX utilities are forbidden by the boundary test.
+
+## Interaction preferences and shared primitives
+
+- Density is independent from font size. `--space-row`, `--space-section`, and `--control-height` select compact/comfortable/loose spacing; current consumers are settings rows, shared controls and sidebar rows. Legacy surfaces join in audited batches.
+- Host animation must route through `src/lib/hostMotion.js`. Both user disable and live OS reduced-motion changes stop ongoing host animation and select its final state. CSS remains governed by the effective root data attribute.
+- `Segmented` owns single-choice geometry and keyboard movement. Use group/pressed for settings and tablist only for actual view tabs. File tabs with close controls are not segmented choices.
+- Composer popovers use `PopoverPortal`, retain owner/context and close on external pointer or a non-composition Escape. Their anchor, portal node and focus rules must be checked together.
+- `Spinner`, `ProgressDots` and `Skeleton` express loading, public ongoing activity and shape placeholders respectively; their owner supplies accessible localized status text.
+- `ApprovalDecisionNotice` displays only correlated host approval receipts. Pending/submitting belongs to the request card; confirmed/failed/unknown belongs to the non-actionable receipt. Approval is not execution success, denial is not execution failure, and unknown outcomes must not offer blind resubmission. Its visibility is scoped to backend/user/session and retired for a new accepted task.
+- Shared ActionButton size metadata owns vertical padding and density-aware minimum heights; do not retain conflicting fixed vertical utility padding. Neutral/outline variants preserve existing Gugo decision-control colors.
+- Keep the current semantic focus color, existing global focus/active rules and low-specificity native disabled fallback. No brand recoloring or Surface/radius redesign is authorized in this phase.
+
+Implementation status, measured scope and remaining work: [UI_REFINEMENT.md](UI_REFINEMENT.md).
+
 ## Compatibility
 
 `ember` variables remain temporarily for presentation/export compatibility. New host UI utility classes must not use `text-ember`, `bg-ember`, `border-ember`, or related variants. `tests/codeDebt.test.js` enforces a zero-utility rule and non-increasing legacy/tiny-text baselines.

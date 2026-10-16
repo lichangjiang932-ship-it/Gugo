@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import Segmented from '../../../components/ui/Segmented.jsx'
 import {
   Code,
   ArrowLeft,
@@ -113,10 +114,7 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
       <FileIdentity preview={preview} t={t} />
       <div className="chat-preview-toolbar-actions ml-auto flex shrink-0 items-center gap-1.5">
         {actions.canToggleView && (
-          <div className="inline-flex h-8 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-xs">
-            <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
-            <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
-          </div>
+          <FileViewToggle view={view} setView={setView} t={t} />
         )}
         {actions.canCopy && (
           <ActionButton onClick={() => copyTextToClipboard(content).catch(() => {})} icon={<Copy className="h-3.5 w-3.5" />} label={t('chatPreview.copy')} compact />
@@ -148,10 +146,7 @@ export function DirectFileToolbar({ filename, type, file = {}, view = 'preview',
     <div data-testid="preview-command-bar" className="chat-preview-toolbar chat-direct-file-toolbar flex min-h-12 shrink-0 items-center gap-2 border-b border-ink/10 bg-paper px-3 py-2">
       <FileActions key={`${file.url || ''}:${file.path || ''}:${file.previewRevision || ''}`} file={preview} t={t} />
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
-        {setView && canViewDirectFileSource(preview) && <div className="inline-flex h-8 shrink-0 overflow-hidden rounded-full border border-ink/10 bg-paper-2 p-0.5 text-xs">
-          <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
-          <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} />
-        </div>}
+        {setView && canViewDirectFileSource(preview) && <FileViewToggle view={view} setView={setView} t={t} />}
         {zoom && ZOOMABLE_KINDS.has(kind) && view !== 'source' && <ZoomControl state={zoom} t={t} />}
       </div>
     </div>
@@ -173,10 +168,8 @@ function ActionButton({ compact = false, disabled, icon, label, onClick, primary
   )
 }
 
-function Tab({ active, onClick, icon, label, bordered }) {
-  return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={`inline-flex items-center gap-1.5 px-2.5 ${bordered ? 'border-l border-ink/10' : 'rounded-full'} ${active ? 'bg-paper text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}>
-      {icon}{label}
-    </button>
-  )
+function FileViewToggle({ view, setView, t }) {
+  return <Segmented value={view} onChange={setView} label={t('chatPreview.preview') + ' / ' + t('chatPreview.source')}
+    options={[{ value: 'preview', label: t('chatPreview.preview'), icon: <Eye className="h-3.5 w-3.5" /> },
+      { value: 'source', label: t('chatPreview.source'), icon: <Code className="h-3.5 w-3.5" /> }]} />
 }

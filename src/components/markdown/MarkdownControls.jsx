@@ -118,7 +118,7 @@ export function CodeBlock({ children, streaming = false }) {
       </div>
       <div className={folded ? 'chat-code-folded relative' : 'relative'} data-folded={folded || undefined}>
         <pre
-          className="chat-code-scroll m-0 overflow-x-auto p-3 text-[12px] leading-5"
+          className="chat-code-scroll m-0 overflow-x-auto p-3 text-meta leading-5"
           style={folded ? { maxHeight: `calc(${CODE_FOLD_LINES} * 1.25rem + 1.5rem)`, overflowY: 'hidden' } : undefined}
         >
           {children}

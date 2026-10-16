@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, LoaderCircle } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../../components/ui/LoadingState.jsx'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
 import { DOCX_PREVIEW_OPTIONS, buildDocxSrcdoc, docxPageWidthPx } from '../../../lib/docxPreview.js'

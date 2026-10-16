@@ -108,15 +108,14 @@ test('UI radius system exposes exactly the card, control, and pill tiers', () =>
 
 test('global typography has one five-tier scale and one shared CJK-capable mono stack', () => {
   const expectedScale = {
-    page: '28px',
-    section: '20px',
-    body: '15px',
-    ui: '14px',
-    meta: '12px',
+    page: '1.75rem',
+    section: '1.25rem',
+    body: '.9375rem',
+    ui: '.875rem',
+    meta: '.75rem',
   }
   const declarations = [...stylesSource.matchAll(/--type-([\w-]+):\s*([^;]+);/g)]
   assert.deepEqual(Object.fromEntries(declarations.map(([, name, value]) => [name, value.trim()])), expectedScale)
-  assert.doesNotMatch(stylesSource, /font-size:\s*0?\.[0-9]+rem/)
 
   for (const name of Object.keys(expectedScale)) {
     assert.match(tailwindSource, new RegExp(`${name}:\\s*'var\\(--type-${name}\\)'`))
@@ -132,8 +131,10 @@ test('global typography has one five-tier scale and one shared CJK-capable mono 
   assert.match(tailwindSource, /mono:\s*\['var\(--font-mono\)'\]/)
 })
 
-test('unconsumed density spacing selectors and variables stay removed', () => {
-  assert.doesNotMatch(stylesSource, /data-density|--density-(?:padding|gap)|var\(--density-/)
+// Density is a supported preference; browser appearance tests exercise actual computed sizes.
+test('settings density spacing uses shared variables rather than an unconsumed preference', () => {
+  assert.match(settingsViewStylesSource, /padding:\s*var\(--space-row\)/)
+  assert.match(settingsViewStylesSource, /min-height:\s*(?:calc\()?var\(--control-height\)/)
 })
 
 test('agent and settings surfaces use live theme tokens instead of dead aliases or raw hex', () => {

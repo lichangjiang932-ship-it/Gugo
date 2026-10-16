@@ -201,7 +201,7 @@ export default function LeftRail() {
         />
       )}
       <header className={`flex h-10 items-center ${collapsed ? 'justify-center' : 'gap-2 px-1'}`}>
-        {!collapsed && <button type="button" onClick={() => { controller.closeSessionMenu(); closeMobileRail(); navigate('/chat') }} aria-label="Gugo" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"><BrandMark className="h-7 w-7 shrink-0 text-accent-ink" /><span className="truncate text-[14px] font-semibold leading-5 text-ink">Gugo</span></button>}
+        {!collapsed && <button type="button" onClick={() => { controller.closeSessionMenu(); closeMobileRail(); navigate('/chat') }} aria-label="Gugo" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"><BrandMark className="h-7 w-7 shrink-0 text-accent-ink" /><span className="truncate text-ui font-semibold leading-5 text-ink">Gugo</span></button>}
         <button ref={toggleRef} type="button" onClick={() => setRailCollapsed(!collapsed)} title={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-label={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-expanded={!collapsed} aria-controls="left-rail-history" className="left-rail-toggle flex h-9 w-9 shrink-0 items-center justify-center rounded-control text-ink-soft transition-colors hover:bg-ink/[0.05] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"><RailDisclosureIcon collapsed={collapsed} /></button>
       </header>
 

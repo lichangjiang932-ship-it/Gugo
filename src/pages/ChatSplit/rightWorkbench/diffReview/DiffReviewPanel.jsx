@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { buildFileDiff } from '../../../../lib/diffRows.js'
-import { compareLabel, diffTextFromPayload, filesFromStatusPayload } from '../../../../lib/diffReviewModel.js'
+import { compareLabel, diffTextFromPayload, filesFromStatusPayload, WIRED_COMPARE_MODES } from '../../../../lib/diffReviewModel.js'
 import { subscribeSessionChanges } from '../../../../lib/sessionChangesFeed.js'
 import { getAuthToken } from '../../../../lib/accountClient.js'
-import CurrentFileChange from '../../../../components/CurrentFileChange.jsx'
 
 /**
  * The two reads below go through the same authorized workbench routes the
@@ -19,7 +18,6 @@ import DiffToolbar from './DiffToolbar.jsx'
 import DiffViewerPane from './DiffViewerPane.jsx'
 import FeedbackComposer from './FeedbackComposer.jsx'
 import FileListOverlay from './FileListOverlay.jsx'
-import DiffReadingControls from './DiffReadingControls.jsx'
 
 const DEFAULT_TARGET = Object.freeze({ mode: 'uncommitted', branch: 'main' })
 const DEFAULT_VIEW = Object.freeze({
@@ -41,14 +39,13 @@ const DEFAULT_VIEW = Object.freeze({
  * ordinary user message, so the agent sees them in the conversation it already
  * knows how to read.
  */
-export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage, panelExpanded = false, t, workspacePath = '' }) {
-  const [target, setTarget] = useState(DEFAULT_TARGET)
+export default function DiffReviewPanel({ initialTargetMode, onClose, onExpandToggle, onSendMessage, panelExpanded = false, t, workspacePath = '' }) {
+  const [target, setTarget] = useState(() => WIRED_COMPARE_MODES.includes(initialTargetMode) ? { ...DEFAULT_TARGET, mode: initialTargetMode } : DEFAULT_TARGET)
   const [view, setView] = useState(DEFAULT_VIEW)
   const [files, setFiles] = useState([])
   const [status, setStatus] = useState('loading')
   const [refreshToken, setRefreshToken] = useState(0)
   const [selected, setSelected] = useState('')
-  const [contentMode, setContentMode] = useState('diff')
   const [fileListOpen, setFileListOpen] = useState(false)
   const [diffs, setDiffs] = useState({})
   const [comments, setComments] = useState([])
@@ -68,17 +65,19 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
   // the panel — unless a comment is being written, in which case the reader is
   // told and decides when to take the update.
   useEffect(() => {
-    const timer = setTimeout(() => subscribeSessionChanges((next) => {
+    let unsubscribe = null
+    const timer = setTimeout(() => { unsubscribe = subscribeSessionChanges((next) => {
       setFeed(next)
       if (next.revision === seenRevision.current) return
       seenRevision.current = next.revision
       if (draftActive) setPendingRefresh(true)
       else setRefreshToken((token) => token + 1)
-    }), 0)
-    return () => clearTimeout(timer)
+    }) }, 0)
+    return () => { clearTimeout(timer); unsubscribe?.() }
   }, [draftActive])
 
   useEffect(() => {
+    if (isSession) return undefined
     let cancelled = false
     const load = async () => {
       try {
@@ -97,7 +96,7 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
     }
     void load()
     return () => { cancelled = true }
-  }, [refreshToken, workspacePath, base])
+  }, [refreshToken, workspacePath, base, isSession])
 
   useEffect(() => {
     if (isSession || !selected || diffs[selected]) return undefined
@@ -126,7 +125,7 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
     if (typeof window === 'undefined') return undefined
     const onOpen = (event) => {
       const mode = event?.detail?.mode
-      if (!mode) return
+      if (!WIRED_COMPARE_MODES.includes(mode)) return
       setTarget((current) => ({ ...current, mode }))
       setDiffs({})
       setPendingRefresh(false)
@@ -136,14 +135,12 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
   }, [])
 
   const source = isSession ? feed.files : files
-  // Which folder the file list browses: the one holding the file in hand, so the
-  // list is about where the reader already is, and the workspace otherwise.
-  const listRoot = selected ? String(selected).replace(/[\\/][^\\/]*$/u, '') : (workspacePath || '')
+  // Keep backend paths intact instead of rebuilding them from a file name.
   // The review's list is the conversation's own change set and nothing else: the
   // pane next door browses the whole folder, and a reader who opened *this* one
   // is asking what this conversation touched.
   const changedEntries = source
-    .map((file) => ({ name: String(file.path || file.displayPath || '').split(/[\\/]/u).pop() || '' }))
+    .map((file) => ({ path: file.path, name: String(file.path || file.displayPath || '').split(/[\\/]/u).pop() || '' }))
     .filter((entry) => entry.name)
   // Land on a file rather than on an empty pane. The review is opened to read a
   // change, and a reader who has to guess that a row is clickable reads the blank
@@ -185,7 +182,7 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
     setComments([])
   }
   const reviewCode = () => {
-    send(t('diffReview.reviewPrompt', { label, files: files.map((file) => file.path).slice(0, 20).join(', ') || '—' }))
+    send(t('diffReview.reviewPrompt', { label, files: source.map((file) => file.path).slice(0, 20).join(', ') || '—' }))
   }
 
   return (
@@ -199,6 +196,8 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
         onReviewCode={reviewCode}
         onToggleFileList={() => setFileListOpen((open) => !open)}
         onViewChange={setView}
+        target={target}
+        onTargetChange={next => { setTarget(next); setDiffs({}); setPendingRefresh(false) }}
         t={t}
         view={view}
       />
@@ -212,22 +211,10 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
           {t('diffReview.newChanges')}
         </button>
       )}
-      {/* No resident file column: at 46% of the pane it was the largest thing on
-          screen and the least of what a reader came for. The list it held is the
-          overlay the ≡ opens, which names every file in the folder rather than
-          only the ones this conversation touched. */}
+      {/* Changes has one reading surface. The ≡ lists only this comparison
+          set and selecting a path opens its diff, not another content mode. */}
       <div className="relative flex min-h-0 flex-1">
         <div className="flex min-h-0 flex-1 flex-col">
-          {contentMode === 'file' && selected ? (
-            // The file as it stands. A changed file is usually source or text the
-            // reader can simply read, and only some of them have an edit recorded
-            // to diff against — without this, those files were a dead end. A file
-            // reached from the folder list need not be in the change set at all,
-            // so the path is enough to read it by.
-            <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="diff-file-content">
-              <CurrentFileChange counts={activeFile} file={activeFile || { path: selected }} t={t} wrap={view.wordWrap} />
-            </div>
-          ) : (
             <DiffViewerPane
               key={`${selected}:${view.collapseToken}:${view.expandToken}`}
               comments={comments}
@@ -240,18 +227,16 @@ export default function DiffReviewPanel({ onClose, onExpandToggle, onSendMessage
               t={t}
               view={view}
             />
-          )}
           <FeedbackComposer comments={comments} onReviewCode={reviewCode} onSend={sendFeedback} sending={sending} t={t} />
         </div>
         {fileListOpen && (
           <FileListOverlay
-            controls={<DiffReadingControls contentMode={contentMode} onContentModeChange={setContentMode} target={target}
-              onTargetChange={next => { setTarget(next); setDiffs({}); setPendingRefresh(false) }} t={t} />}
             changed={source}
             entries={changedEntries}
             onClose={() => setFileListOpen(false)}
-            onPick={(path) => { setSelected(path); setContentMode('file'); setFileListOpen(false) }}
-            rootPath={listRoot}
+            onPick={(path) => { setSelected(path); setFileListOpen(false) }}
+            selectedPath={selected}
+            rootPath={workspacePath}
             t={t}
           />
         )}

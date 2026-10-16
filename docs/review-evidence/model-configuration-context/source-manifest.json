@@ -1,0 +1,741 @@
+{
+  "scope": "184 changed sources verified on this working tree; Git blob IDs survive line-ending normalization",
+  "sources": {
+    "scripts/testEnvironment.mjs": {
+      "workingTreeSha256": "b2edcc6c26c0d4f81f03e252617ef2efc98a3c42586fec03b86a968604e08bbe",
+      "gitBlob": "f7ae33df181b2b974b25a21e420c21c8bd508c57"
+    },
+    "server/adapters/modelProviderConfig.js": {
+      "workingTreeSha256": "eb77b6114ae1495f711534f313c479511f7398989d51b8eddaad7ffc47c54ef5",
+      "gitBlob": "460ea3e0cc2e337c4aab5908c1e6331a57da1e65"
+    },
+    "server/adapters/modelRuntimeCatalog.js": {
+      "workingTreeSha256": "fd944a4f6d52c4f3400d147037326acc5fd1ec2e0c1e5eecfa5d9b67dfd83f1b",
+      "gitBlob": "fa6af5091fc82232bfa203af54f96fd4ab28d4b6"
+    },
+    "server/llm/llmProviderService.js": {
+      "workingTreeSha256": "1347ceae1cb82e3f2a768b6fead800e4548c65541da540071fdaf21a5e41a4fd",
+      "gitBlob": "814b38572a50ecc5ba4b550b33110b318b3c4379"
+    },
+    "server/llm/modelRuntimeProfiles.js": {
+      "workingTreeSha256": "75535f068a88a96d1464c06835ba2566ff36c7faebd48a0e73190a8bf4898f82",
+      "gitBlob": "73261fa3e6fdc7e39c432487d907daf54d5e039a"
+    },
+    "server/utils/modelCatalog.js": {
+      "workingTreeSha256": "2a23f86b275739a6372417ea906e3aa6abbdd5e70f8ecb02a45241ccabfafa96",
+      "gitBlob": "2fa111101e859cdd3f12c71f42b2697f3b78de90"
+    },
+    "src/App.jsx": {
+      "workingTreeSha256": "1712bfb7999366d2ca9cfec7a4286417d076b53aec64fa819cb0444850a66e9c",
+      "gitBlob": "4a892eab9e5d892ef274a344db0a9454deb5513f"
+    },
+    "src/components/AccessConnectModal.jsx": {
+      "workingTreeSha256": "31bad1d4a9e114ac863440dacd43622ee9866f0191a8a1084ecda1c7dad63e09",
+      "gitBlob": "4a3bbc1faaf46fb639c06c25eba804848557992a"
+    },
+    "src/components/AccessMcpConnectorCard.jsx": {
+      "workingTreeSha256": "e4d11d09837be32664c2125efe82d508d0af17d1d1714f172d0938d64e0d250e",
+      "gitBlob": "902c8591c548b393ca7339b0d02f6da5bd5e024e"
+    },
+    "src/components/ApprovalDecisionNotice.jsx": {
+      "workingTreeSha256": "44112a965486e1c0f8e68d5ed572b433bc36d0a69322e08d0a94897b8ae59f3d",
+      "gitBlob": "62db99d7773c533215eaf7710979dcf64b472718"
+    },
+    "src/components/CommandPalette.jsx": {
+      "workingTreeSha256": "e0728aac53a448e0356fae6416795614decbfe6c669f99d483187678668b2d78",
+      "gitBlob": "3e878c415908d4cf05b2649e8190dbb3e934aab9"
+    },
+    "src/components/CurrentFileChange.jsx": {
+      "workingTreeSha256": "4f2cbd21b16104f2792761a96ba977f3bd2b8715a670adfcd9318ddc04fba07f",
+      "gitBlob": "eb05f8dbb037da1d5251a37be4166e3008b31d09"
+    },
+    "src/components/DesktopUpdateCard.jsx": {
+      "workingTreeSha256": "c75a75ebf62855cf59ac2fc34448a51c7587dea54f42292b94b1e480bbf67d04",
+      "gitBlob": "4c3c8fd3a9e6d3e80e5021314e6b0efe9b65f8a2"
+    },
+    "src/components/DiffLines.jsx": {
+      "workingTreeSha256": "a91d8219b11b0ce921021d13e10d6393766ef319896c867acbc064debc057296",
+      "gitBlob": "996526b1d9ed0e9431f82f77669b46f219636103"
+    },
+    "src/components/DirectoryApprovalModal.jsx": {
+      "workingTreeSha256": "4dba4fa79d83a6b98710bb919ada7821d600a8c3a8eb798a4e751df7ebbe4f5c",
+      "gitBlob": "d07e2293e57e64d82926986f8471614e9d32aece"
+    },
+    "src/components/EditablePlanCard.jsx": {
+      "workingTreeSha256": "4b4af260eafe652f4029a86f538566dbbf71649cd9abaa5dcb44d5c07018ee4c",
+      "gitBlob": "05c1e2e05ff35920e914d41898abdec09580df3a"
+    },
+    "src/components/EmbeddedBrowser.jsx": {
+      "workingTreeSha256": "cbbb26f5540cb969fb480a30dbb5858581caef0330225efc9622955368daace3",
+      "gitBlob": "442cb784b50a5b5faceb0afe4ac68e8860a4879a"
+    },
+    "src/components/ErrorBoundary.jsx": {
+      "workingTreeSha256": "e6d63d82d54409243f5d5ffa19c19d4ddbd75383f53954cc3fb9195e055e094f",
+      "gitBlob": "5506dcb2a018c67d46bc5baeea07176815175ccd"
+    },
+    "src/components/FileExplorer.jsx": {
+      "workingTreeSha256": "a905a680e3d3507c91cc2b075cda5bb21e3238ed4ee0716318f9e613b4fa71cd",
+      "gitBlob": "c194d7b53519354b8ea3ce1e0efce75f29791a2c"
+    },
+    "src/components/FullscreenMediaModal.jsx": {
+      "workingTreeSha256": "1b91728dd4998fa7adb4913307abb96fa820e68bf2de712669c18d90372596b2",
+      "gitBlob": "577a0c554536b5d86622f205b9c76f3811a6c419"
+    },
+    "src/components/InlineDirectoryBrowser.jsx": {
+      "workingTreeSha256": "75e1207a90cf950dd8bc7768288c208334104db15ce77d983c94a027520c5e83",
+      "gitBlob": "7c2941e8f2236c3ba6f6c3e15322a6f95e846b52"
+    },
+    "src/components/LeftRail.jsx": {
+      "workingTreeSha256": "7b001c66cabc96b01359577b7ff1c55f018a6a8bb8da4dbf87784c01382979e7",
+      "gitBlob": "c491fa303179b30e3b389d5803d77c3db7991db1"
+    },
+    "src/components/MentionsAutocomplete.jsx": {
+      "workingTreeSha256": "dbf120ea762593c966869f259745db9f3ae6f062959e7c2ab07b7544033f9bd4",
+      "gitBlob": "7fe5191c7aea3f9701b7b68f46199fb87f1f9385"
+    },
+    "src/components/PermissionModeSwitcher.jsx": {
+      "workingTreeSha256": "738e1bfae1a4b87c5293020032217b8b93a83ffc2aba77427c8e4a92f481a271",
+      "gitBlob": "70796daa1d04f2f8ce96cb8de0b737c09220a43a"
+    },
+    "src/components/PreviewBanner.jsx": {
+      "workingTreeSha256": "b1bcd6bba890c3f0478031357cf7461a9b3434fa059a3e41d6a6121fe7398231",
+      "gitBlob": "1ce009ba032d8c7a14d2281a8f80912291b9e922"
+    },
+    "src/components/ProjectGlyph.jsx": {
+      "workingTreeSha256": "985088c216a5f471282cec34e748dfaee198a56038155105ba6266c48a1c52e7",
+      "gitBlob": "e007ccdda51ddadce241ccbe4d0c3719346e829d"
+    },
+    "src/components/RiskOverridesPanel.jsx": {
+      "workingTreeSha256": "2d9d53cf76224c656340f843d759a3d900fc4ff87e86fdd7b4f87b155d716af0",
+      "gitBlob": "3dbcc3bf021a5b193f4b981c4718cc1757224279"
+    },
+    "src/components/SessionSearchModal.jsx": {
+      "workingTreeSha256": "b19ba1bc8c2d50a196ba863b4ecccb4730d55c86951f5e78353e768007f4e469",
+      "gitBlob": "34606ee0b3cf2024fbe60d25399e4188294ff0d1"
+    },
+    "src/components/ThemeWrapper.jsx": {
+      "workingTreeSha256": "df6e9042189e217f54657144048963905d803f4e321729c0f2c039107f5dc61c",
+      "gitBlob": "f5aca6cc00f55bf213367378d16546def52d90a0"
+    },
+    "src/components/ToolApprovalCard.jsx": {
+      "workingTreeSha256": "c3a083d0770a12d16a047f59c399cc3be67ebde4de3aefb94b1d39726f95c509",
+      "gitBlob": "97ff6f08333c8710bf36c386d83869c1a6e15cf0"
+    },
+    "src/components/ToolCallCard.jsx": {
+      "workingTreeSha256": "56e098908c6a33f8003fcb5547aea4491fa08f689309d7b85d4b15e5a46af8bb",
+      "gitBlob": "68d10712c69cd8add660f1bb53d79c35174388a8"
+    },
+    "src/components/integrations/IntegrationEditor.jsx": {
+      "workingTreeSha256": "d4b1a6d9f84d9d491320f884fce2444691324f8d6e7ef540f7c09bf37c34f716",
+      "gitBlob": "220d29f91bd8a09894e6483471800f2c97f7b415"
+    },
+    "src/components/integrations/IntegrationList.jsx": {
+      "workingTreeSha256": "1ceb0b2219e55aedcbfd6dd167e4bf2356c9fec767c1a264892b34783528d0c4",
+      "gitBlob": "a85a68683114259adb5e22247c379073c9aea077"
+    },
+    "src/components/integrations/IntegrationPanelHeader.jsx": {
+      "workingTreeSha256": "ef36ab313dd6cc4961e6bfb520c706d9bda1ee06e52e2707f11ff431f8e18e93",
+      "gitBlob": "82fc1983f338ece51bb360ea2c619caf1371d2e6"
+    },
+    "src/components/leftRail/AccountArea.jsx": {
+      "workingTreeSha256": "b17a6828ea23e40e94118208b9834e359623f0c763c89ca08e450ddd29612ba4",
+      "gitBlob": "4aec7aa4bdb6ba56f140893dff5c223ba0e85504"
+    },
+    "src/components/leftRail/LeftRail.css": {
+      "workingTreeSha256": "06a387456c6d35db7795957e16fdbdfb0c80e94c822d6591957685034f3df8ed",
+      "gitBlob": "0cb9805f37f351357ff4b555e2b8a1d3aaa4bec8"
+    },
+    "src/components/leftRail/LoginModal.jsx": {
+      "workingTreeSha256": "b44240e7a6dba781183455137160718469cb30af594f5365d10177d73c3a8e4a",
+      "gitBlob": "407ba0dca0ee57dd22c555688b9a6b8df9d22597"
+    },
+    "src/components/markdown/MarkdownControls.jsx": {
+      "workingTreeSha256": "ea227e6a1bb90710a76bd329dbc336b71d386aa05b89e514ecc22eb5d421896d",
+      "gitBlob": "d075a008763dd9e1ed340580610fea5c480dd8a6"
+    },
+    "src/components/modelConfig/AddProviderPanel.jsx": {
+      "workingTreeSha256": "a8366b49480edcf6e14b75c90311d2de2d9c6170ac6d29dc66a7991f4ad0bd9a",
+      "gitBlob": "757a208de98857f55954103029de9f357a39e7ac"
+    },
+    "src/components/modelConfig/ModelConfigPanel.jsx": {
+      "workingTreeSha256": "d40863b5763b1df71786c4d3267f17803d689710ff21b0c761d44e4ea2db91f4",
+      "gitBlob": "8e485104da10e305b799ee6e135f600dfe5902ba"
+    },
+    "src/components/modelConfig/ModelSelectionList.jsx": {
+      "workingTreeSha256": "376e1d1359f1a9364da23e12837453b8e38594e914f0139a46c757ff8abd7def",
+      "gitBlob": "10ef62326765db371d204c753e9348799675d73a"
+    },
+    "src/components/modelConfig/ProviderModelDirectory.jsx": {
+      "workingTreeSha256": "4da77f9ffb610b863d3a75616272f042472bb7de52a5873d97c8e8580b230a0d",
+      "gitBlob": "2db783732d173e1bcec1fab2843d27374f12797d"
+    },
+    "src/components/modelConfig/modelSelection.js": {
+      "workingTreeSha256": "7e297f6590a2918ce8a5fa3a6f1a7da8f02a696b8f92072a643cdc3fbbefd215",
+      "gitBlob": "f9bd031d6b3f6e3693af2faedc4252f8ec9f840e"
+    },
+    "src/components/modelProviders/ProviderEditor.jsx": {
+      "workingTreeSha256": "a00dce877363c7f947a05479c27b8656a3ec8d322bd9d555860bfd5a7c196358",
+      "gitBlob": "0a5a69fc9cfd51e4467031540182e0c6fcfd8f3d"
+    },
+    "src/components/modelProviders/ProviderKnowledgeBase.jsx": {
+      "workingTreeSha256": "64f8e9c183a8b5943674d5ca4dbbd28403bc29f161b384d731aac5b7cab3fca5",
+      "gitBlob": "7d4f0dd4530e5195c9fe4f1341051418640bb656"
+    },
+    "src/components/modelProviders/ProviderList.jsx": {
+      "workingTreeSha256": "cc3fe427177f60ad17d0892b81ef336ed7ab0367103dbe68d073b03bf2672a34",
+      "gitBlob": "5f6a290e4bb12e55c6d273e6922795e6b378d3d4"
+    },
+    "src/components/modelProviders/ProviderSourcePicker.jsx": {
+      "workingTreeSha256": "0e34c47cd7c81920e3cd0ba65032bc47a8d4704befab3a31bacdc780004a68e8",
+      "gitBlob": "c05dcb44ee4952ebf18d8bc5f46efdfb027dd0c4"
+    },
+    "src/components/settings/SettingsFileOutputPanel.jsx": {
+      "workingTreeSha256": "f306c09d0ba4730b15ad37eba821afcce033e88005ae7ceef11c3246a310f8d5",
+      "gitBlob": "18430bbb1c1c747628aa8815e2bc41b343e29eda"
+    },
+    "src/components/settings/SettingsPrimitives.jsx": {
+      "workingTreeSha256": "f3521719063514d382a34533e224c172113abe918aad66487e638b06897a5578",
+      "gitBlob": "5bb3bb22f2edb57948fe1393ccd972c46aa16a74"
+    },
+    "src/components/settings/SettingsToolsPanel.jsx": {
+      "workingTreeSha256": "0eafbf6c4ca269e4fb50b1312fb0edc61386449423e68376871edf915401c481",
+      "gitBlob": "51b36c42fa2be5a19c0281810d417046c4a64834"
+    },
+    "src/components/settings/SettingsUsagePanel.jsx": {
+      "workingTreeSha256": "1241759f8cc124698523228f923f4878b9193162a116a6380bcb9cc2b80d9e22",
+      "gitBlob": "0b8878f13c3a738bdf567ba1be7cbd4fe52bfcea"
+    },
+    "src/components/settings/SettingsWebSearchPanel.jsx": {
+      "workingTreeSha256": "584c123c1d0af09f4ead2d081bc7274c694e67e3a0c741e0e82708de8427396d",
+      "gitBlob": "89ff8b1285645667cc6679617ff08a315235c06e"
+    },
+    "src/components/ui/ActionButton.css": {
+      "workingTreeSha256": "92cec0736bd30d330d856948caa8b29622cd484eadc3e34ad6dbba625a717f3c",
+      "gitBlob": "9c6ad488dfb34094c1bed98dfcfd9bc4d2a9a9e0"
+    },
+    "src/components/ui/ActionButton.jsx": {
+      "workingTreeSha256": "e136e249c01052a663589f50f48e9f6e706bed9c88f815854130912d68c41911",
+      "gitBlob": "0f58d36c39e458f50f98380b199777867c0cf328"
+    },
+    "src/components/ui/HostMotionElement.jsx": {
+      "workingTreeSha256": "dc3f06853a716b6eddbc9695cf2f49d6b7e539f072cb164a2fed33c24bc56180",
+      "gitBlob": "8e1fe5efaba1ae225d0b7b0bf5fff373b9386613"
+    },
+    "src/components/ui/LoadingState.css": {
+      "workingTreeSha256": "eb169b9fcea889221404d1907050be345bdbc984edec40be947080e9facd0bf2",
+      "gitBlob": "c7e4288a351d217026ba94eec179eec0be3cbe59"
+    },
+    "src/components/ui/LoadingState.jsx": {
+      "workingTreeSha256": "f8b034afd0c9d82f36a144fe7739f554dff6cc79872560960d68ebdbb4627ef9",
+      "gitBlob": "0904ca83f68fd21534ea7ce10fb227b5f17e4fc3"
+    },
+    "src/components/ui/PopoverPortal.jsx": {
+      "workingTreeSha256": "06649a08b194773538ca9ab67a0cd9d7dc3607138400ec1256fff0d508b117bd",
+      "gitBlob": "92115be4698f6855735737b2c54306c7c2b4c4da"
+    },
+    "src/components/ui/ScrollFadeContainer.css": {
+      "workingTreeSha256": "3877bc02cf5560f5c91c893e451ac05e241260da065ad3d2ad3fdfab8be5b43f",
+      "gitBlob": "69a631ed93d0c9426b916d49f813bd88ae67c508"
+    },
+    "src/components/ui/ScrollFadeContainer.jsx": {
+      "workingTreeSha256": "85dc887b3730ec3126c3ba4bf0342527a6fe964900def6672f25f59e520f71b7",
+      "gitBlob": "1384629176a38700ce7ecd1bd9c0cc475c9c3aa5"
+    },
+    "src/components/ui/Segmented.css": {
+      "workingTreeSha256": "8443c5d6eb68bbc938cc11dde1eb74127dbd4b9df51ca6c54bc0320e9ddd927b",
+      "gitBlob": "2b3627a44e4e9268023b8ce6757dc8db7e53804b"
+    },
+    "src/components/ui/Segmented.jsx": {
+      "workingTreeSha256": "b9341529a95159d11150d861d2432c29813d28c94f6662fecff0080e157e53df",
+      "gitBlob": "b877132e6454e12641ed19e510f6d73c645c7893"
+    },
+    "src/i18n/domains/diffReview.js": {
+      "workingTreeSha256": "4d15de7c2d2e36a06cb0f2c50091fee837e4f61cb0b575cea6dc171db911471e",
+      "gitBlob": "9df2af150df5baa6bead3cf3e18cdd6a8b494ce0"
+    },
+    "src/i18n/domains/settingsModels.js": {
+      "workingTreeSha256": "64af107bc37c7acecc5197f92b08540d9e89f0d858822fb705026a2bc3ff82e7",
+      "gitBlob": "aa0b1339c8e56bbc8a2bcab3ae5e430c2420cea6"
+    },
+    "src/i18n/domains/toolActivity.js": {
+      "workingTreeSha256": "ed84b2cd24b19a95aaef19ec6f2f8e79946d5baa24a952498af657b8275524f7",
+      "gitBlob": "f3749cc4ab6533efc188d153a04b85074e38cf16"
+    },
+    "src/i18n/domains/toolApproval.js": {
+      "workingTreeSha256": "f3b8f2cb2177ded033ffb07e1310d5c94d669b7354381360f6fb912a6efe07df",
+      "gitBlob": "13eeb22e3e647b4b3995e5d1627881ab75eea9b2"
+    },
+    "src/index.css": {
+      "workingTreeSha256": "2c641d71a0a19a3a8dee5ce78de5fcc0d2e0dcc4b9ccdd98afd2a05409803b50",
+      "gitBlob": "178034c37c3edad0bbcb42a0c2819579b5daf5c1"
+    },
+    "src/lib/approvalDecisionPresentation.js": {
+      "workingTreeSha256": "f3930e613f4c74cab900dc05e0e3ca32a8d29dfc203368685233a493129752be",
+      "gitBlob": "a61ba20e9d55b567f9adee8c9dd4c0d281e76b2b"
+    },
+    "src/lib/hostMotion.js": {
+      "workingTreeSha256": "fd53cf33ba609f65552f584c7c8b1a31617a644347f6dbfe63a330f86dddae36",
+      "gitBlob": "4190739e5e275c4e17ce2e5d4027047015e0e62a"
+    },
+    "src/lib/llmConfigClient.js": {
+      "workingTreeSha256": "e2cc5ef3015e6b955e5356d9e6df1b3d3fae357614477aed7c6beb39f6e6b148",
+      "gitBlob": "5c84d1ce9f7c88900b599960c714ae18d6d3b990"
+    },
+    "src/lib/motionPreference.js": {
+      "workingTreeSha256": "3e1ce0b80e3980a14fc45a981eca4319090610c8bc1210d26ef1716722d400b5",
+      "gitBlob": "1d13c0d53e43b07c379e04aa6e1df75feb27fa0d"
+    },
+    "src/lib/scrollPinning.js": {
+      "workingTreeSha256": "e15954633f49077c57c8704c2d6381055fcd5d0e3b3d6a32385f24a2ac07378f",
+      "gitBlob": "274b868dfc0f9b18ac03d585dd98133aa754d633"
+    },
+    "src/lib/settingsNavigation.js": {
+      "workingTreeSha256": "11df3a43201a30111e84af1ba0475292b3014570e8f56eec9dbd6f434c18ccf5",
+      "gitBlob": "e840f44680a9dee625b3d34275db1ccca86be940"
+    },
+    "src/lib/useModalFocusTrap.js": {
+      "workingTreeSha256": "3f59b2f7830cc64bc7ba9041c72e7911a8d0941768f558c27137f5d8cf069c19",
+      "gitBlob": "a57dfba516b56a078a2dcd4b4f10749ba9d5ba9d"
+    },
+    "src/pages/AccessView.jsx": {
+      "workingTreeSha256": "d35d44e2a11e97b1f7778578ea126d6c9bf994525fa36b5bf4ca5b096effae09",
+      "gitBlob": "c462f2edeaec2d04876e5dcd767bdf83b4691891"
+    },
+    "src/pages/ApprovalsInbox.jsx": {
+      "workingTreeSha256": "ace2fc94863e1c1a6f171c014f13abba645ff0bac92f38fd9b232f08ed835091",
+      "gitBlob": "08cf8ceff7cc2a080d2763e3538abe29cf6b6515"
+    },
+    "src/pages/ChannelsPage.jsx": {
+      "workingTreeSha256": "286d063034d897d37c6fb45bcdc2361bdec1c98a733575fed292cd9abeb241ec",
+      "gitBlob": "7c3791e67518f6cc72e6203acbb902234b05e8f6"
+    },
+    "src/pages/ChatSplit/ChatComposer.jsx": {
+      "workingTreeSha256": "251a0ba3dd9478911b1bd44ff0888994d50579e35329aa23777f6b6b79a4c5f8",
+      "gitBlob": "f34bdaee51f0dcc7dc123d2d6faf416767853faf"
+    },
+    "src/pages/ChatSplit/ChatMessages.jsx": {
+      "workingTreeSha256": "58536a58c305cc729eaca5456b0bf1b1be93fadec6fc73b00232f290e2c2c768",
+      "gitBlob": "3b9ae3c5ff3687cc5514b08ab15ef1d02db294d7"
+    },
+    "src/pages/ChatSplit/ChatSplitView.jsx": {
+      "workingTreeSha256": "e7e33a766df253b8789bfcfd7af39835ee06ff820b8cc87d0072dc7f95e0bdfc",
+      "gitBlob": "efd6c75651c48f71308446473afdbd0e744ffb46"
+    },
+    "src/pages/ChatSplit/ChatStatusCard.jsx": {
+      "workingTreeSha256": "cde46f07b28319c4f9a81d3b2d016fe463a4aca6d06e8b09b40fe1f84ad91ab4",
+      "gitBlob": "79840635fad4c4f4b707216d58499ac6e0e7808e"
+    },
+    "src/pages/ChatSplit/ModelPicker.jsx": {
+      "workingTreeSha256": "936b6b4e92f4dba7472cdb31b31c1e1d3cdb6f7f5d0df4c70eadaf6708d7968a",
+      "gitBlob": "a15cf839c702946acfcaf0d59c957b23813a627e"
+    },
+    "src/pages/ChatSplit/RightPreviewPane.jsx": {
+      "workingTreeSha256": "67d69a52b829ca96cadc87bfcd45b3acd0f75c1b91936d11e25d5777f7b4d328",
+      "gitBlob": "0a8e5ac38e9dccbf1674bd9e7370c85feb0db803"
+    },
+    "src/pages/ChatSplit/SlashCommandMenu.jsx": {
+      "workingTreeSha256": "c18f1245293241d7ccd38f79a28a593b2ca0b44b1b41ca5608e26bbe5f8d760c",
+      "gitBlob": "4716bc617cba9f9161f060b83243b9d3b103ad8e"
+    },
+    "src/pages/ChatSplit/SlashInlinePanelHost.jsx": {
+      "workingTreeSha256": "bcaad67ba5585c43bd1271ef9b1636b03a4ca2ae1f35a44ba64ac8c28f2e1323",
+      "gitBlob": "b24bfe9a0ba0cf8c5a66d902d4d3a1dcf3a94c83"
+    },
+    "src/pages/ChatSplit/chatComposer/ComposerActions.jsx": {
+      "workingTreeSha256": "59929d7a089d4be23ec06fc9914f077a0f65173d58b7366ff5514fe768589db6",
+      "gitBlob": "fd7396e039f759732cbed584cc36af2cf24fc813"
+    },
+    "src/pages/ChatSplit/chatComposer/ComposerAttachments.jsx": {
+      "workingTreeSha256": "e73b77c93b2bb41aa7e6871191457edc2267273b47300bc6aee48646d9237ea0",
+      "gitBlob": "f6aa3441b40a6f63998514a7e4dc44e2c2d0136d"
+    },
+    "src/pages/ChatSplit/chatMessages/ActivityTraces.jsx": {
+      "workingTreeSha256": "38637ff2c33c151bd898168b2af4f1b0164557fdff2c3eae8f8842ba839e325a",
+      "gitBlob": "d03d7f96d086ce9cb95079e16c263357a9a755f1"
+    },
+    "src/pages/ChatSplit/chatMessages/ContextUsagePanel.jsx": {
+      "workingTreeSha256": "f0b70c21696c2bb0b9b57198ffd9234edc606e9646a24e25c12d758d75f89f77",
+      "gitBlob": "fb7c0d33aab0722dda08b70c8ae4838cc3dd0547"
+    },
+    "src/pages/ChatSplit/chatMessages/MessageRow.jsx": {
+      "workingTreeSha256": "8de06e7c9ec7004b17a62f3af0f060cc17ce9fb39b312bcfa2837b1ef7e8d595",
+      "gitBlob": "5027b9aa119905b5327ebed3d06aecc9a5fb891e"
+    },
+    "src/pages/ChatSplit/chatMessages/WorkspaceProjectPicker.jsx": {
+      "workingTreeSha256": "cd9a602eb1a048cd2a983933e0cd91e3441a456508bcc1252e2c332fe4772a18",
+      "gitBlob": "0e76373d7b4c8bce257a92c31a4abd099f74a996"
+    },
+    "src/pages/ChatSplit/chatMessages/WorkspaceProjectPickerViews.jsx": {
+      "workingTreeSha256": "2b6a74d159225f7d5141a0030147c43226c85d0edfb3bc3107cc2522804f3006",
+      "gitBlob": "a1131abdd5d3040381d2154de2b38c9a96b19937"
+    },
+    "src/pages/ChatSplit/chatMessages/messageRow/CollapsedArtifactContent.jsx": {
+      "workingTreeSha256": "3a7d18401eeeb8365147e5935c89561eda1900f6afdacabf07787e7da1e03726",
+      "gitBlob": "dfcc6558c7c0548c48e494412ae395841ef79477"
+    },
+    "src/pages/ChatSplit/chatMessages/messageRow/InlineSideEffectRecoveryCard.jsx": {
+      "workingTreeSha256": "2144b82a9bb39e298c846a4360b5d941fc9197964adab3c04ccbac8867582535",
+      "gitBlob": "ffb4a93d60c12bb1cc18fa2dbb97258c2141c248"
+    },
+    "src/pages/ChatSplit/chatMessages/messageRow/UserBubble.jsx": {
+      "workingTreeSha256": "a5184fa9442ed4507d84a029093049017e6ad26857269e8f5e4bdf04347f9f1d",
+      "gitBlob": "704f515bf82d0133d544260f53d11ab80053fbd1"
+    },
+    "src/pages/ChatSplit/chatMessages/useChatMessageViewport.js": {
+      "workingTreeSha256": "69d21d9d4582479180237499c219300798edd396c58b7827ea48fb457e71826d",
+      "gitBlob": "0088c845f348d54863154bd4e44eb689d5a56847"
+    },
+    "src/pages/ChatSplit/chatSplitView/ChatSessionHeader.jsx": {
+      "workingTreeSha256": "bd3f119b69d7ef4c7098e8ba0a73df53fe82e138bcc037098fbd9c19e68bd77b",
+      "gitBlob": "11fad49f6f07f943b13845a5bc4fab1046f8f6ee"
+    },
+    "src/pages/ChatSplit/chatSplitView/SessionBranchNavigator.jsx": {
+      "workingTreeSha256": "5c7c648ca5e8ceddf3dcc021aae30ec6dcea2beb3ebe9e223a3baad5eae5b008",
+      "gitBlob": "294867de9cd330195c6c483e8c413ba7e92dbe87"
+    },
+    "src/pages/ChatSplit/dock/DockHost.jsx": {
+      "workingTreeSha256": "6863ac3dc03fecaf1d44bd466d3e9029f1ffb71356be7000dc1e0e4d183bf1cb",
+      "gitBlob": "da599634495dec2abe1a229e7bcf1394302d7d34"
+    },
+    "src/pages/ChatSplit/dock/dockStore.js": {
+      "workingTreeSha256": "26107ee44dac26f8cf9c5e9d98f2a813bc5b4ca619e20b6266427f8f9157a9d6",
+      "gitBlob": "dc670e4b5ac4fc111dbf5b3cea12357fd08366d6"
+    },
+    "src/pages/ChatSplit/index.jsx": {
+      "workingTreeSha256": "ed8301c07660a990cc85eb5e6a160528e2b01b6933dd7dcf5f4dd83e2e95c809",
+      "gitBlob": "f3e798f1b128a3b7e61ae5046a6756075198d380"
+    },
+    "src/pages/ChatSplit/modelPicker/ModelPickerPanel.jsx": {
+      "workingTreeSha256": "43fbd4df3186747893da0aefc2c6bb032693cd6a03f44034f11d272fd198fbd4",
+      "gitBlob": "adb4d074e2053ebddabcaa242befaa1d68eacf71"
+    },
+    "src/pages/ChatSplit/preview/ArtifactRenderers.jsx": {
+      "workingTreeSha256": "adc6c9c2f48a92eefe62e0f82fa814cc5c646b4b47309183d732551018dd392b",
+      "gitBlob": "9b99b8d116c648fb471eee76f11cb99b3c19c608"
+    },
+    "src/pages/ChatSplit/preview/DirectFilePreview.jsx": {
+      "workingTreeSha256": "5c3c416eef8d397674f416730cca7d03c8bbdfca5aaa28ca48e03b02f1a54fae",
+      "gitBlob": "3d4a3b489d54392e1e597c0416858ffc03b772d9"
+    },
+    "src/pages/ChatSplit/preview/DirectFileSource.jsx": {
+      "workingTreeSha256": "388daad5b31a16c3acce9bfa51be8148eeb583befbf6e88916c8b066e0fe6d2c",
+      "gitBlob": "a9984ae0aa8eb3501bbdc68bd938ea6c60165cac"
+    },
+    "src/pages/ChatSplit/preview/FileActions.jsx": {
+      "workingTreeSha256": "96d2ef97c0b36742d7ebabe367e149f8b02edc364b604f3a02a238a3139ca527",
+      "gitBlob": "0b120780678e2b601c2fe77c916f5641e1761f7a"
+    },
+    "src/pages/ChatSplit/preview/FileIdentity.jsx": {
+      "workingTreeSha256": "ac09e84b59cfc1c06e46f3bcec9fc267d12e232ce0e327358b392b026752434a",
+      "gitBlob": "491563290c6d7ea452605b63e1a22b150e412d1d"
+    },
+    "src/pages/ChatSplit/preview/HtmlFilePreview.jsx": {
+      "workingTreeSha256": "d9fcb20113c9da2eac4cf7dce5877810d62a67bf09f6926e15129b38fe5e583e",
+      "gitBlob": "843b0fde3f0677cb4edea51fb9c66b8caa9a0ac2"
+    },
+    "src/pages/ChatSplit/preview/NativePreviewRenderers.jsx": {
+      "workingTreeSha256": "85666f4a163791c922618c0b622ca23d7dfe3630499996c065d36deb671edb5c",
+      "gitBlob": "371404d885f280784406c007b4b63b767854785e"
+    },
+    "src/pages/ChatSplit/preview/PreviewChrome.jsx": {
+      "workingTreeSha256": "8461805ef52a17849fee1326fc27160b2a6576bf3550991f23e7f97c7da6efd1",
+      "gitBlob": "d8903170189646ed82705b9f9638ab163bfdb40d"
+    },
+    "src/pages/ChatSplit/preview/PreviewZoom.jsx": {
+      "workingTreeSha256": "50ff3b7d8775a4e2a0632a3cf6f1b42e9523aa1af3f9a61bf43be7ca43b8959a",
+      "gitBlob": "e83f0b53098f8d276d0199f4f6754c0b20edfee2"
+    },
+    "src/pages/ChatSplit/rightWorkbench/WorkbenchPlan.jsx": {
+      "workingTreeSha256": "94b10144e1d8fcf61a5308db96dba848ecc4c0edeb33d385d0502d00675ad246",
+      "gitBlob": "2d3017c6b2a856bfb4e86a0dae9de14b0f46e7d1"
+    },
+    "src/pages/ChatSplit/rightWorkbench/diffReview/DiffReadingControls.jsx": {
+      "workingTreeSha256": "12047fb3f786738b298359de80a17483af84d9b3077f2839db82694e8b645185",
+      "gitBlob": "f9cb4844c9cbb38f127e29e4d628cde06abb3045"
+    },
+    "src/pages/ChatSplit/rightWorkbench/diffReview/DiffReviewPanel.jsx": {
+      "workingTreeSha256": "694b539235f58f24a93299ba935216325edb1c07ec891392754612faa8707994",
+      "gitBlob": "4356699905f1a4e03fbb4e8ff550bfe39f1de9ad"
+    },
+    "src/pages/ChatSplit/rightWorkbench/diffReview/DiffToolbar.jsx": {
+      "workingTreeSha256": "417172902311a708c4fb14b981040788e66249b406112bea83922935fcbcedfc",
+      "gitBlob": "f4368a7330a9442dbf44c7c5bef6eed87eca9223"
+    },
+    "src/pages/ChatSplit/rightWorkbench/diffReview/DiffViewerPane.jsx": {
+      "workingTreeSha256": "c100d29bca104cb7ec3012b0e8a3d0e7f85bd8291e3952d9e59528aac189c042",
+      "gitBlob": "7df36d4c6116afff63adce22d164d7050d8aeee8"
+    },
+    "src/pages/ChatSplit/rightWorkbench/diffReview/FileListOverlay.jsx": {
+      "workingTreeSha256": "5a8b9dcbe9d6a8c5657194587b0e6c6a6d93286e117bf9d0a8365782364e4185",
+      "gitBlob": "3f071ed0f3ceb51d072dbdcd68a3e8a7120ebc68"
+    },
+    "src/pages/ChatSplit/useApprovalDecisionNotice.js": {
+      "workingTreeSha256": "1a86bae531c24f20b1247fdba1f776dcd76c75aa3f11710cc7854586975bad19",
+      "gitBlob": "260426af1bc6b6cdc328adcc6c06870560a36681"
+    },
+    "src/pages/ChatSplit/useChatApprovals.js": {
+      "workingTreeSha256": "86d684215f221b0d3e0c75110f208e94d1a1fc73c0e9b41b88fb227db7c32b13",
+      "gitBlob": "8e74cd791e18bce95b67ac6eb15ed55788af1d07"
+    },
+    "src/pages/ChatSplit/useChatOverlays.js": {
+      "workingTreeSha256": "6cc3bbaee744a0d6c10b1f20414c3b49c87b9997e6d9581ec054a561fe3f7c55",
+      "gitBlob": "b2677633fa2d312d90a25efa81f0cbade26152ff"
+    },
+    "src/pages/ChatSplit/useChatTurnRecovery.js": {
+      "workingTreeSha256": "8e04f55170df985f1cef62ab615783e1f8672c0ddbe08b7b7e4f6499702906af",
+      "gitBlob": "8e09e28f1a6ea51b8ea87c556a5616fd5214e52c"
+    },
+    "src/pages/DeskView.jsx": {
+      "workingTreeSha256": "3dd7488e8b64c235e73eee0a8524ca71535f0a4b4dd6ef738350d589533275fe",
+      "gitBlob": "06f3b055d5f076e2e0b6336f46bbab9b7e3ce473"
+    },
+    "src/pages/HistoryView.jsx": {
+      "workingTreeSha256": "78a693741fc59abb16da0bf9cae7097f4a60c7f79fb7e51726d845f7b54ee16e",
+      "gitBlob": "a566092caaaa01399284c7f2f76191573e240593"
+    },
+    "src/pages/McpServersView.jsx": {
+      "workingTreeSha256": "75e70a10f6ca103ee8d3ae5a47b1869e448c0e850bea83ae8fb9fb1d4f13df5b",
+      "gitBlob": "ffb25c792371680149f57ea618ef16cfb5201ca9"
+    },
+    "src/pages/PermissionsDashboard.jsx": {
+      "workingTreeSha256": "64f077aaa5be459616bd3ce29614fcecd5140d9d6a4041313e9e5ca82f012067",
+      "gitBlob": "b35bc9ebd02bc52a9349a052b96de44bd5d6cf15"
+    },
+    "src/pages/ReasonixWorkspace.jsx": {
+      "workingTreeSha256": "0823d738a570cb6a3353f978000e93bb21b8bd893b4bc2da847fdaa6c2ae97cf",
+      "gitBlob": "f4e6e5b4f3fed65bc7ff42c45571485c97b9ad03"
+    },
+    "src/pages/SettingsView.css": {
+      "workingTreeSha256": "040cc09336571b60de1903802ba271850f028d0db5c8ae45d8722d7ef380da38",
+      "gitBlob": "67ee10f9f19640d0f39542c60095d6d183b44e0a"
+    },
+    "src/pages/SettingsView.jsx": {
+      "workingTreeSha256": "f088f91b826bf9ca51e461ba8391e21ca934bffe52b7cad3cbc31135ade2104a",
+      "gitBlob": "247300f5311cc88e04117567caf1932fff9c856a"
+    },
+    "src/pages/TaskArtifactPreview.jsx": {
+      "workingTreeSha256": "aadbe305ae1d96eaa12eaccf70ddfa7b948c3a49cacf6a509274c30cb6ff590b",
+      "gitBlob": "160ec2126186670785faf314dde7dfac7ac015b4"
+    },
+    "src/pages/access/AccessConnectorGrid.jsx": {
+      "workingTreeSha256": "dd9a0ef364097557e069d990e27fbf76de11f45de4935e4eb4be765be3f9db63",
+      "gitBlob": "a9f3d303c09dd91b0b81717602cc3e0804108455"
+    },
+    "src/pages/access/AccessViewPrimitives.jsx": {
+      "workingTreeSha256": "1379c2a4556e03a355aebd065ebb4e32a041ecd23ab410405d6b890c7121c6ce",
+      "gitBlob": "3f011e7d5e09f5ff5b5727f145db7cfcaffbd570"
+    },
+    "src/pages/agents/AgentTemplateModal.jsx": {
+      "workingTreeSha256": "54f32af8af99ed8d5541da40dddf45d941018f39a92b69517d74d9bf6af0bac7",
+      "gitBlob": "abd429ef66fdcc48d1e3e71d2c95c4e5288ecf8b"
+    },
+    "src/pages/channels/ChannelPanels.jsx": {
+      "workingTreeSha256": "ff925d495d2366fa7fe17fd0fa0325b10c408fe139646ca7aef0b75c8ff3e01e",
+      "gitBlob": "fd0db27ca8c6ba49a1f50dfcd2462256731eca9a"
+    },
+    "src/pages/history/HistoryContent.jsx": {
+      "workingTreeSha256": "c892e60ac303f354d5b2850386710470a0033fb6eab30b6f351a7111762aec30",
+      "gitBlob": "bb0840d88a0b56e0c7cb70a7c1916a203a61bab3"
+    },
+    "src/pages/hooks/HookEditor.jsx": {
+      "workingTreeSha256": "9290169f62717e23dba9a0e7fc47ba5a4d1dd13860b314ae7f97337b322c86f3",
+      "gitBlob": "08dcba5c7ee6d9be4e8e9bda1bbce5a76c05341d"
+    },
+    "src/pages/hooks/HooksList.jsx": {
+      "workingTreeSha256": "6f523667eaf17f93fe34e25275f71826417690e9e6efcfa1c573f21dd2822a87",
+      "gitBlob": "11a7b0817a82baafb7f86b23a62968c99b27531f"
+    },
+    "src/pages/memory/MemoryEditor.jsx": {
+      "workingTreeSha256": "c9dd09675830795e5d6a3f8f97c66695bfbbab2ef888f5e15b4d263c386a74aa",
+      "gitBlob": "1568c5b29823c2a4e452366541f63adbe13659c8"
+    },
+    "src/pages/memory/MemoryList.jsx": {
+      "workingTreeSha256": "4385559de09df78687c9cef2c9bc9034e239e806bbcfe39a99d925eb5afae6fc",
+      "gitBlob": "1a157fa8dd6d9bae57e41fe1351c8fec22b462bf"
+    },
+    "src/pages/permissions/CodeExecutionStatusSection.jsx": {
+      "workingTreeSha256": "512b773fe91a378b5be8d193408a8c28b8db9e0ed0cab4d34cf3c8999b1d69e0",
+      "gitBlob": "8b3c36648f0bebe507310373f026400278260a39"
+    },
+    "src/pages/permissions/PermissionSectionPrimitives.jsx": {
+      "workingTreeSha256": "0b2fe799ebc129ebb8ad74e625468740891027364b4b7fd9d67071a99730fbe5",
+      "gitBlob": "1a5f9f33bd2743cb67dd8f184056d859bce03a71"
+    },
+    "src/pages/permissions/PermissionSections.jsx": {
+      "workingTreeSha256": "26bfe5217fbb066356bd5de9b418403fd1a9a0fc8a095f6dbb2a2916edae317b",
+      "gitBlob": "9237b1a088cdaf47eb1219c3cb55c381342c2181"
+    },
+    "src/pages/permissions/WorkspaceTrustSection.jsx": {
+      "workingTreeSha256": "0be06272014e7abec9edbbfc493783cfa585bd4ecb03c834b0d1e53047744a08",
+      "gitBlob": "5ddc8d959a64c9cfafda4b9e6b4cd691854e3426"
+    },
+    "src/pages/settingsView/SettingsDialogNavigation.jsx": {
+      "workingTreeSha256": "43f726d8060ce3aa4af3635ffb6acdc80870153cf29e1b4cfdf8629c0a02f2aa",
+      "gitBlob": "86e613ea027115c4a0b3d5db19b152a7806b0f66"
+    },
+    "src/pages/skillsMarket/CustomSkillModal.jsx": {
+      "workingTreeSha256": "37e2759d56d789dbb5302f282d9b4c7202ca62f48bceab443309ca2e27c05935",
+      "gitBlob": "7f236f2d5a02e8315196048ca48898d62332ae1d"
+    },
+    "src/pages/skillsMarket/SkillsGrid.jsx": {
+      "workingTreeSha256": "ddcb0285a1dafe88e37599fe1a1b4fc68857bd30af731ec3558c9c31a67cf596",
+      "gitBlob": "adda753045d9eb5336000da0b52009b83ff45853"
+    },
+    "src/pages/skillsMarket/SkillsToolbar.jsx": {
+      "workingTreeSha256": "e80c47b50934127b74f3d593485d3be6261d535d15c753847a24383fa4b9dbea",
+      "gitBlob": "7c1421df3bfbc4d1ee204da0a5fd64b57e7b906e"
+    },
+    "src/pages/taskRun/DirectoryRequestCard.jsx": {
+      "workingTreeSha256": "e17f90cb9dcfa5be21271ddb0d47598019fac8459d5c1a7e6306a0bed886de68",
+      "gitBlob": "c5dfb61db5136605eea162f17b60c9aae75e92f9"
+    },
+    "src/pages/taskRun/JobDeliveryCard.jsx": {
+      "workingTreeSha256": "3e5328b725ad735972d735b6e32bcc7f3e6aea5957a0bc896149ed7b97577da0",
+      "gitBlob": "38cd23c6c4aa5ebbdaffc9751d6bff36877cc559"
+    },
+    "src/pages/taskRun/TaskListSidebar.jsx": {
+      "workingTreeSha256": "91950c84e0ebd437f1eb072311477e74e3e93f99417ab60213623f19ee8fda1d",
+      "gitBlob": "2cd58c8624ed4794d4a0946a2efc3fb21a550e78"
+    },
+    "src/pages/taskRun/TaskRunHeader.jsx": {
+      "workingTreeSha256": "3547e6c8b5d375110eba3ef36358be64fa8e7deac5fbc6bc411ef01a7b2ea03c",
+      "gitBlob": "096c0aca00cba5f3d54cb71b095ed4cdd2bf040d"
+    },
+    "src/plugins/uiContributionRegistry.js": {
+      "workingTreeSha256": "2f985083c80d1fa65062c59c41eb17eec62397070cb6edb69f03834e3c3cb399",
+      "gitBlob": "a35576ae0347f3359fb76add1fd402f96c0e7b09"
+    },
+    "src/styles/appearance.css": {
+      "workingTreeSha256": "5e4ee2ca52796d07f1da0c5cf277d49b7c98bf806b87af950c677cb2d87cf78d",
+      "gitBlob": "16c38d0ca71786e4e2b41c6537cabe742fd315b9"
+    },
+    "tests/approvalDecisionPresentation.test.js": {
+      "workingTreeSha256": "b4dbe1f6a6164a4b338bc786d88b2bebad03a6d92660ab5c9e670991bdb72f65",
+      "gitBlob": "ca33c709a690b79d43e687f4a33616518c4ab3e2"
+    },
+    "tests/chatMessageViewport.test.jsx": {
+      "workingTreeSha256": "7e7ba04cb6ac8fdf6114b84aa63dab96cedf4c8958308f758177b1ebd1cdb1e0",
+      "gitBlob": "08598fb3dfc6f7d63afd059bbceb564e2c94a9a6"
+    },
+    "tests/chatSidebarAndDirectoryApproval.test.js": {
+      "workingTreeSha256": "cc518897128359ea1a61c1ab90f153517444635777a4b61d6e39b729bb506ca7",
+      "gitBlob": "c0ba50cdb80491e1ce84c4c19c1548f26bbdb541"
+    },
+    "tests/chatSurfaceLayout.test.js": {
+      "workingTreeSha256": "e26570e91dc362922bb30af5c7ae1e8ed5cd156e88becd7d57c0c7783908a495",
+      "gitBlob": "d74f1fdafd556289a784a46bf88929290d53e0f1"
+    },
+    "tests/codeDebt.test.js": {
+      "workingTreeSha256": "3d243cf8bf3d47f683f80314f2be2eca81cbd4ad91bc976cb818997465383a32",
+      "gitBlob": "6bf721b701983da6c647abadf4188493353919f6"
+    },
+    "tests/codingWorkbenchUi.test.js": {
+      "workingTreeSha256": "c9b2bce99f9d13917bebdba0f1b5f69cd126ac5263e74b2f6e06c331a5c972d1",
+      "gitBlob": "d6c76f29b373acfce0406e73265f1f66f270dc3e"
+    },
+    "tests/fullscreenMediaModal.test.js": {
+      "workingTreeSha256": "a76cce21c69efadf568257c265c2bbb82ce02a2b86555d6b4b9cb4e722e51257",
+      "gitBlob": "249e207e7e7a09315059195593205163aea348cf"
+    },
+    "tests/hostUiBoundary.test.js": {
+      "workingTreeSha256": "96b609e77f7c7071dbe2fa5cf331a0dfd3a785fc2f8fdd0dd2f289d0586e2ac4",
+      "gitBlob": "36e710817f25cdbdcf71c812550e260d26773531"
+    },
+    "tests/llmRuntimeSelection.test.js": {
+      "workingTreeSha256": "6b6f583878048c14ff1aeda25e815d9da73b716116b7b46ba465c8ce27ca2031",
+      "gitBlob": "48ba1a880b16239ebb3d050bfee5bf76c09dd183"
+    },
+    "tests/modelPickerStructure.test.js": {
+      "workingTreeSha256": "da59b1be000e96722ac6bae5c0d7c44c17c3656e2493b7dfd67b6e3c0fad9ac8",
+      "gitBlob": "9d6d2edd8016fb46cf5d6433bb1f68ebe771f013"
+    },
+    "tests/modelProxy.test.js": {
+      "workingTreeSha256": "5bac2c8a30640e0665a0f072d250ed9994c9ab112a17fbecaa9610343dd3c156",
+      "gitBlob": "7065cb4e022a875a1d0755818172b981ebeddf39"
+    },
+    "tests/scrollPinning.test.js": {
+      "workingTreeSha256": "9f0e74cf7ea81f4d19042c73c340a822c5b36ce3295fecd9a5c95d84f0daa3d8",
+      "gitBlob": "66ab28dcc7e15d431ffb73f8ed1bc0b950485983"
+    },
+    "tests/sessionListUtils.test.js": {
+      "workingTreeSha256": "b9fc54260d1f47b77d70ac11f895d19d4f8aa8c503a35a9b98aec94497b35a31",
+      "gitBlob": "12937483ad1b816633265f0208b255e4eb0af39e"
+    },
+    "tests/uiExperienceRegression.test.js": {
+      "workingTreeSha256": "1f425b3bbb7f5c4babc3e0e85cb52f52e247218aceb824eaad754e33b579a56b",
+      "gitBlob": "9d72651adfa4c3f42379b8cd08d3ec0c63922bfd"
+    },
+    "tests/uiVisual.test.js": {
+      "workingTreeSha256": "731af5b474f0b038bbf4aaa1a4b78eef058eb732077a6fb40218368eefed7196",
+      "gitBlob": "e1624a3d6447a589c2de4d504e9eb504e59d7d38"
+    },
+    "tests/unit/ApprovalDecisionLifecycle.test.jsx": {
+      "workingTreeSha256": "747c86ca89694e073e9a28fbbab35de8a96d3e01c626bbbefd9e58f6562cb34c",
+      "gitBlob": "0e679f093bf2827373e8c0cc34bafdc7aba0588b"
+    },
+    "tests/unit/ChangesNavigation.test.jsx": {
+      "workingTreeSha256": "1a88455ebb3d36664be3464eb9e9798be02a7b55ebd491af5bdb445d80f11340",
+      "gitBlob": "15324a070d1cca99f71e5799f862ce1b8ed96ff9"
+    },
+    "tests/unit/ChangesOpenTarget.test.jsx": {
+      "workingTreeSha256": "eb26770dd042a217ef8a0ebc8700809872467e13c76cdd597991fd596f77a0b6",
+      "gitBlob": "f74d880edfbe4cdb5fad49146a3e22871ed85056"
+    },
+    "tests/unit/ChatComposerSlashMenu.test.jsx": {
+      "workingTreeSha256": "59acb8e4c599942fce778ba9fd5df9705a9e99bee1e27282888441ea57fef9af",
+      "gitBlob": "11b6ff2c86495073d633e3ba5fb0f7bdf2cc9f88"
+    },
+    "tests/unit/ChatTurnRecoveryLifecycle.test.jsx": {
+      "workingTreeSha256": "87b8286138f90a3fd4eecd08bc0a9c21dc0f901b6a958ecea326f683bcf74a6e",
+      "gitBlob": "265b99227b390be6da4de476d5208989dc87fbdc"
+    },
+    "tests/unit/ContextRingProgress.test.jsx": {
+      "workingTreeSha256": "e5d6ce4e505556a3c943bc0794d4ba0efe4672027e6399fb5b4496481821224d",
+      "gitBlob": "5aecdea720250b446e191d203616fdc08d23bbe3"
+    },
+    "tests/unit/ContextUsagePanel.test.jsx": {
+      "workingTreeSha256": "e5d9113b84721a4078dfdb7808dbd1eb86a8218a2838fd9380ad1676aece3a10",
+      "gitBlob": "e4100be4e625c26c6125a3975063cc14e5b56125"
+    },
+    "tests/unit/DiffReviewPanelMount.test.jsx": {
+      "workingTreeSha256": "6afe94e2c88326795214eb5d578fbf02f68566077b0fb36be5bbb2438b4531c2",
+      "gitBlob": "1f7d029352ffb6e627b33e6d327832409be2b6ad"
+    },
+    "tests/unit/HistoryPlacement.test.jsx": {
+      "workingTreeSha256": "c4d87e7ef85b59ee1279ab174d89754f092501e357b6c12368db0a9c83ae0392",
+      "gitBlob": "b79286b4a8fd9487a30815075331714f1978672e"
+    },
+    "tests/unit/HostUiPrimitives.test.jsx": {
+      "workingTreeSha256": "211c0af48c7d67de67cda67dadeb114d2773e939da8c06024218281cefe757fe",
+      "gitBlob": "8e7b6196c52b3f43b0895eb4bf4c8bc8fa0fe9e2"
+    },
+    "tests/unit/ModalEscapeLayers.test.jsx": {
+      "workingTreeSha256": "86d7013e8828a8203de9c3d64f38a595e7fdec2de55891fbb0877b84534dc618",
+      "gitBlob": "fe03e989f7a03b63a5e590b74ffa54a66e2529c1"
+    },
+    "tests/unit/ModelConfigurationFlow.test.jsx": {
+      "workingTreeSha256": "4f7c3f5416580c4569dc60c73744aec98036ce5d79bf59a3b5d8ee79e5a53951",
+      "gitBlob": "cd5216530ccee57fdd27ab1582201137d41988f8"
+    },
+    "tests/unit/ModelConfigurationLiveCatalog.test.jsx": {
+      "workingTreeSha256": "8a337f218173171bb9cfea6cee48d2b98483814de00b2c67c037d86782a92103",
+      "gitBlob": "61194ed689db4cec85a580c4e86fd935f8f6baab"
+    },
+    "tests/unit/ModelPicker.test.jsx": {
+      "workingTreeSha256": "5f08b1b2f0ed86f090cf7999e70c2469a37008a47d6d31d4ddde6ccdcbddf1fb",
+      "gitBlob": "dd84296bab94abd8b61966c862c6eeae9f21954d"
+    },
+    "tests/unit/ToolApprovalFeedback.test.jsx": {
+      "workingTreeSha256": "0b65220d194a88727cb8be2d2ef886bc7a938f5439b6e126283739ec23a39e7a",
+      "gitBlob": "6ea40c6bebdeed47165f2d72fce05d507f8c36ea"
+    },
+    "tests/unit/WorkbenchDetails.test.jsx": {
+      "workingTreeSha256": "8512ba390d7ed7fa8c1ea359ef92932d4b9aef9e4ff6369d1151d421701f9f58",
+      "gitBlob": "0e1b5b8b48bfb347653c56a8ccb5fb5d0cb0e62b"
+    },
+    "tests/workbenchComfort.test.js": {
+      "workingTreeSha256": "eaf7445923979cc45a9e691caa4119a5344657bea7189fe96422dbf838480876",
+      "gitBlob": "16bb306435d652fb35881744e2bee45961a93f65"
+    }
+  }
+}

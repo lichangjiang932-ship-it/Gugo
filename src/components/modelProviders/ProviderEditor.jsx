@@ -108,7 +108,7 @@ function ModelCatalog({ editing, setEditing, models, busy, detecting, canDiscove
         <div className="text-xs font-medium text-ink">{t('modelProviders.modelCatalog')}</div>
         <div className="mt-0.5 text-xs text-ink-fade">{t('modelProviders.modelCatalogHint')}</div>
       </div>
-      {models.length > 0 && <span className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-ink-fade">{t('modelProviders.modelCount', { count: models.length })}</span>}
+      {models.length > 0 && <span className="shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[0.625rem] text-ink-fade">{t('modelProviders.modelCount', { count: models.length })}</span>}
       {canDiscover && <button type="button" disabled={busy || detecting || !canFetch} onClick={onDiscover} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-ink/20 px-3 text-xs text-ink-soft hover:bg-ink/[0.04] hover:text-ink disabled:opacity-40"><RefreshCw className={`h-3.5 w-3.5 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>}
     </div>
     {models.length > 0 && <ul className="flex max-h-56 flex-col overflow-y-auto rounded-md border border-ink/10 bg-paper">
@@ -116,7 +116,7 @@ function ModelCatalog({ editing, setEditing, models, busy, detecting, canDiscove
         const isDefault = model === editing.defaultModel
         return <li key={model} className="group flex items-center gap-2 border-b border-ink/5 px-2.5 py-1.5 last:border-b-0 hover:bg-paper-2">
           <button type="button" onClick={() => setEditing({ ...editing, defaultModel: model })} aria-pressed={isDefault} title={t('modelProviders.defaultModel')} className={`min-w-0 flex-1 truncate text-left text-xs ${isDefault ? 'font-medium text-ink' : 'text-ink-soft'} hover:text-ink`}>{model}</button>
-          {isDefault && <span className="shrink-0 rounded bg-accent-soft/40 px-1.5 py-0.5 text-[10px] text-accent-ink">{t('modelProviders.defaultModel')}</span>}
+          {isDefault && <span className="shrink-0 rounded bg-accent-soft/40 px-1.5 py-0.5 text-[0.625rem] text-accent-ink">{t('modelProviders.defaultModel')}</span>}
           <button type="button" onClick={() => removeModel(model)} aria-label={t('modelProviders.removeModel', { model })} title={t('modelProviders.removeModel', { model })} className="shrink-0 rounded px-1 text-sm leading-none text-ink-fade opacity-60 hover:bg-ink/[0.06] hover:text-danger group-hover:opacity-100">×</button>
         </li>
       })}

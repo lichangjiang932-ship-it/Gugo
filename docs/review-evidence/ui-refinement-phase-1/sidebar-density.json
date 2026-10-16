@@ -1,0 +1,17 @@
+[
+  {
+    "density": "compact",
+    "min": "34px",
+    "height": 34
+  },
+  {
+    "density": "comfortable",
+    "min": "38px",
+    "height": 38
+  },
+  {
+    "density": "loose",
+    "min": "42px",
+    "height": 42
+  }
+]

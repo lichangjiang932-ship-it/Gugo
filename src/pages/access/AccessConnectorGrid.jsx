@@ -1,4 +1,5 @@
-import { CheckCircle2, LoaderCircle, Settings2, Unplug } from 'lucide-react'
+import { CheckCircle2, Settings2, Unplug } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../components/ui/LoadingState.jsx'
 import AccessMcpConnectorCard from '../../components/AccessMcpConnectorCard.jsx'
 import ConnectorBrandIcon from '../../components/ConnectorBrandIcon.jsx'
 import { findInstalledMcpPreset } from '../../lib/mcpPresets.js'
@@ -81,7 +82,7 @@ function WebConnectors({ connectors, controller, t }) {
 function ConnectorCard({ children, connected, connector, description, persistent = false, t }) {
   return (
     <article className="rounded-xl border border-ink-fade/35 bg-paper p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md" data-testid={`connector-${connector.provider}`}>
-      <div className="flex items-start gap-3"><ConnectorBrandIcon connector={connector} /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-ink">{connector.label}</h3><ConnectorCapabilityBadge capabilityLevel={connector.capabilityLevel} t={t} /><ConnectionMethodBadge method={connector.connectionMethod} t={t} />{connected && <span className="inline-flex items-center gap-1 rounded-full border border-success/20 bg-success/5 px-2 py-0.5 text-[10px] text-success"><CheckCircle2 className="h-3 w-3" />{t(persistent ? 'access.persistentConnected' : 'access.connected')}</span>}</div><p className="mt-1 text-xs leading-5 text-ink-soft">{description}</p></div></div>
+      <div className="flex items-start gap-3"><ConnectorBrandIcon connector={connector} /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-ink">{connector.label}</h3><ConnectorCapabilityBadge capabilityLevel={connector.capabilityLevel} t={t} /><ConnectionMethodBadge method={connector.connectionMethod} t={t} />{connected && <span className="inline-flex items-center gap-1 rounded-full border border-success/20 bg-success/5 px-2 py-0.5 text-[0.625rem] text-success"><CheckCircle2 className="h-3 w-3" />{t(persistent ? 'access.persistentConnected' : 'access.connected')}</span>}</div><p className="mt-1 text-xs leading-5 text-ink-soft">{description}</p></div></div>
       {children}
     </article>
   )

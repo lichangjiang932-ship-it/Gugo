@@ -35,7 +35,7 @@ function WorkspaceTrustRow({ controller, grant, last, t }) {
           {trust?.effective && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {Object.entries(trust.effective).map(([name, enabled]) => (
-                <span key={name} className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${enabled ? 'border-success/30 text-success' : 'border-ink-fade/40 text-ink-fade line-through'}`}>{name}</span>
+                <span key={name} className={`rounded border px-1.5 py-0.5 font-mono text-[0.5625rem] ${enabled ? 'border-success/30 text-success' : 'border-ink-fade/40 text-ink-fade line-through'}`}>{name}</span>
               ))}
             </div>
           )}

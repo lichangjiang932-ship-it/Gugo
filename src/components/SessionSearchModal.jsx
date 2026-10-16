@@ -178,7 +178,7 @@ export default function SessionSearchModal() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-ink truncate">{result.sessionTitle}</span>
-                    <span className="font-mono text-[10px] text-ink-fade shrink-0">{result.role}</span>
+                    <span className="font-mono text-[0.625rem] text-ink-fade shrink-0">{result.role}</span>
                     <span className="text-xs text-ink-fade shrink-0">
                       {new Date(result.createdAt).toLocaleString()}
                     </span>

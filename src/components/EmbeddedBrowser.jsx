@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  ExternalLink,
-  Globe2,
-  Loader2,
-  Lock,
-  RotateCw,
-  Search,
-  X,
-} from 'lucide-react'
+import { ExternalLink, Globe2, Lock, RotateCw, Search, X } from 'lucide-react'
+import { Spinner as Loader2 } from './ui/LoadingState.jsx'
 import { copyTextToClipboard } from '../lib/clipboard.js'
 import { isDesktopBrowserAvailable } from '../lib/desktopBrowserClient.js'
 import { publishPreviewPageStatus } from '../lib/previewPageStore.js'

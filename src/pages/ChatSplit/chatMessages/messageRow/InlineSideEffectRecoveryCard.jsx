@@ -1,4 +1,5 @@
-import { AlertTriangle, LoaderCircle } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../../../components/ui/LoadingState.jsx'
 import useInlineSideEffectRecovery from './useInlineSideEffectRecovery.js'
 
 function OperationEvidence({ record, t }) {

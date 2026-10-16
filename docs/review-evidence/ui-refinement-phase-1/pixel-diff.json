@@ -1,0 +1,62 @@
+[
+  {
+    "name": "appearance-1440-dark.png",
+    "differentChannels": 0,
+    "total": 3888000
+  },
+  {
+    "name": "appearance-1440-light.png",
+    "differentChannels": 0,
+    "total": 3888000
+  },
+  {
+    "name": "appearance-1440-white.png",
+    "differentChannels": 0,
+    "total": 3888000
+  },
+  {
+    "name": "appearance-360-dark.png",
+    "differentChannels": 0,
+    "total": 972000
+  },
+  {
+    "name": "appearance-360-light.png",
+    "differentChannels": 0,
+    "total": 972000
+  },
+  {
+    "name": "appearance-360-white.png",
+    "differentChannels": 0,
+    "total": 972000
+  },
+  {
+    "name": "chat-1440-dark.png",
+    "differentChannels": 26,
+    "total": 3888000
+  },
+  {
+    "name": "chat-1440-light.png",
+    "differentChannels": 7,
+    "total": 3888000
+  },
+  {
+    "name": "chat-1440-white.png",
+    "differentChannels": 33,
+    "total": 3888000
+  },
+  {
+    "name": "chat-360-dark.png",
+    "differentChannels": 0,
+    "total": 972000
+  },
+  {
+    "name": "chat-360-light.png",
+    "differentChannels": 0,
+    "total": 972000
+  },
+  {
+    "name": "chat-360-white.png",
+    "differentChannels": 0,
+    "total": 972000
+  }
+]

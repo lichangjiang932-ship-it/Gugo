@@ -1,4 +1,5 @@
-import { CheckCircle2, LoaderCircle, Settings2, Trash2 } from 'lucide-react'
+import { CheckCircle2, Settings2, Trash2 } from 'lucide-react'
+import { Spinner as LoaderCircle } from './ui/LoadingState.jsx'
 import ConnectorBrandIcon from './ConnectorBrandIcon.jsx'
 
 export default function AccessMcpConnectorCard({

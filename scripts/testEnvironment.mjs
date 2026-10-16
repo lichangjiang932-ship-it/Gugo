@@ -29,6 +29,12 @@ process.env.TMP = workerDir
 process.env.TEMP = workerDir
 process.env.APP_DATA_DIR = workerDir
 process.env.APP_DB_PATH = path.join(workerDir, 'app.db')
+// Default-home configuration readers must never touch the real user's files.
+const homeDir = path.join(workerDir, 'home')
+mkdirSync(homeDir, { recursive: true })
+process.env.HOME = homeDir
+process.env.USERPROFILE = homeDir
+process.env.GUGO_HOME = path.join(homeDir, '.gugo')
 // Verification tools invoke npm even in offline tests. Keep their debug cache
 // and config lookup away from the developer's real npmrc and user cache.
 process.env.npm_config_cache = path.join(workerDir, 'npm-cache')

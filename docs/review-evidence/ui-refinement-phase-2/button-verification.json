@@ -1,0 +1,47 @@
+[
+  {
+    "density": "compact",
+    "sizes": [
+      {
+        "size": "sm",
+        "min": "28px",
+        "height": 28
+      },
+      {
+        "size": "md",
+        "min": "32px",
+        "height": 32
+      }
+    ]
+  },
+  {
+    "density": "comfortable",
+    "sizes": [
+      {
+        "size": "sm",
+        "min": "32px",
+        "height": 32
+      },
+      {
+        "size": "md",
+        "min": "36px",
+        "height": 36
+      }
+    ]
+  },
+  {
+    "density": "loose",
+    "sizes": [
+      {
+        "size": "sm",
+        "min": "36px",
+        "height": 36
+      },
+      {
+        "size": "md",
+        "min": "40px",
+        "height": 40
+      }
+    ]
+  }
+]

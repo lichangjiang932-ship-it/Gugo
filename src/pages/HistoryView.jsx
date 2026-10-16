@@ -16,7 +16,7 @@ const tabs = [
   { key: 'tasks', labelKey: 'history.tasks', icon: LayoutList },
 ]
 
-export default function HistoryView() {
+export default function HistoryView({ embedded = false }) {
   const navigate = useNavigate()
   const { state, dispatch } = useAppContext()
   const { t, lang } = useT()
@@ -125,13 +125,17 @@ export default function HistoryView() {
     }
   }
 
+  const Surface = embedded ? 'section' : AppLayout
+  const surfaceProps = embedded
+    ? { className: 'settings-panel min-w-0', 'data-testid': 'settings-history-panel' }
+    : { className: 'h-screen flex bg-paper overflow-hidden', mainAs: 'main', mainClassName: 'flex-1 overflow-y-auto px-5 py-6 sm:px-8' }
   return (
-    <AppLayout className="h-screen flex bg-paper overflow-hidden" mainAs="main" mainClassName="flex-1 overflow-y-auto px-5 py-6 sm:px-8">
+    <Surface {...surfaceProps}>
         {/* Header */}
-        <div className="mx-auto mb-5 flex max-w-5xl flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className={`mx-auto mb-5 flex max-w-5xl flex-col gap-4 sm:flex-row sm:items-end sm:justify-between ${embedded ? 'settings-panel-header' : ''}`}>
           <div>
-            <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{t('history.eyebrow')}</span>
-            <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('history.title')}</h1>
+            {!embedded && <span className="font-mono text-[0.5625rem] tracking-[0.22em] uppercase text-ink-fade">{t('history.eyebrow')}</span>}
+            <h1 className="font-semibold text-page text-ink mt-1.5">{t('history.title')}</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {tabs.map(tab => (
@@ -178,6 +182,7 @@ export default function HistoryView() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t('history.search')}
+                aria-label={t('history.search')}
                 className="bg-transparent text-sm text-ink outline-none placeholder:text-ink-soft w-24"
               />
             </div>
@@ -194,6 +199,6 @@ export default function HistoryView() {
           retryingId={retryingId}
           t={t}
         />
-    </AppLayout>
+    </Surface>
   )
 }

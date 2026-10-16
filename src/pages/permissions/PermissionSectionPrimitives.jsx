@@ -1,7 +1,7 @@
-import { motion } from 'framer-motion'
+import { motion } from '../../lib/hostMotion.js'
 
 export function SectionTitle({ eyebrow, title }) {
-  return <div className="mb-2 flex items-baseline gap-2"><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">{eyebrow}</span><span className="font-semibold text-base text-ink-soft">{title}</span></div>
+  return <div className="mb-2 flex items-baseline gap-2"><span className="font-mono text-[0.5625rem] uppercase tracking-[0.22em] text-ink-fade">{eyebrow}</span><span className="font-semibold text-base text-ink-soft">{title}</span></div>
 }
 
 export function PermSwitch({ on, onToggle, label }) {

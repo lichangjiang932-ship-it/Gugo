@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { FolderOpen, LoaderCircle } from 'lucide-react'
+import { FolderOpen } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../components/ui/LoadingState.jsx'
 import InlineDirectoryBrowser from '../../components/InlineDirectoryBrowser.jsx'
 
 export default function DirectoryRequestCard({ request, busy, error = '', onAuthorize, onReject, lockAccessMode = false, t, browseDirectories }) {

@@ -16,8 +16,8 @@ export default function FileIdentity({ preview, t }) {
             {index === crumbs.length - 1 ? <FileNameLabel value={crumb} className="flex-1 font-medium text-ink-soft" /> : <span className="truncate">{crumb}</span>}
           </span>)}
         </div>
-      ) : <div className="min-w-0 text-[13px] font-medium tracking-[-0.01em] text-ink" title={preview.filename}><FileNameLabel value={preview.filename} /></div>}
-      {preview.summary && <div className="mt-0.5 truncate text-[10px] text-ink-fade">{preview.summary}</div>}
+      ) : <div className="min-w-0 text-[0.8125rem] font-medium tracking-[-0.01em] text-ink" title={preview.filename}><FileNameLabel value={preview.filename} /></div>}
+      {preview.summary && <div className="mt-0.5 truncate text-[0.625rem] text-ink-fade">{preview.summary}</div>}
     </div>
   )
 }

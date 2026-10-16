@@ -132,7 +132,7 @@ export default function CommandPalette() {
             aria-label={t('slash.menuLabel')}
             className="flex-1 bg-transparent outline-none text-sm text-ink placeholder:text-ink-fade"
           />
-          <kbd className="font-mono text-[10px] text-ink-fade border border-ink/15 rounded px-1.5 py-0.5">Esc</kbd>
+          <kbd className="font-mono text-[0.625rem] text-ink-fade border border-ink/15 rounded px-1.5 py-0.5">Esc</kbd>
         </div>
 
         <div ref={listRef} className="max-h-[400px] overflow-auto py-1">
@@ -159,8 +159,8 @@ export default function CommandPalette() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[12px] text-accent-ink">/{cmd.id}</span>
-                    <span className="text-[10px] uppercase tracking-wider text-ink-fade">{cmd.kind}</span>
+                    <span className="font-mono text-meta text-accent-ink">/{cmd.id}</span>
+                    <span className="text-[0.625rem] uppercase tracking-wider text-ink-fade">{cmd.kind}</span>
                   </div>
                   {cmd.description && <div className="text-xs text-ink-fade truncate mt-0.5">{cmd.description}</div>}
                 </div>
@@ -170,7 +170,7 @@ export default function CommandPalette() {
           )}
         </div>
 
-        <div className="flex items-center gap-3 px-4 py-2 border-t border-ink/10 text-[10px] text-ink-fade bg-paper-2/50">
+        <div className="flex items-center gap-3 px-4 py-2 border-t border-ink/10 text-[0.625rem] text-ink-fade bg-paper-2/50">
           <span><kbd className="font-mono">↑↓</kbd> {t('slash.navigate')}</span>
           <span><kbd className="font-mono">Enter</kbd> {t('slash.select')}</span>
           <span className="ml-auto">{filtered.length} / {allCommands.length}</span>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence } from '../lib/hostMotion.js'
 import { X } from 'lucide-react'
 import Modal from './Modal.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'

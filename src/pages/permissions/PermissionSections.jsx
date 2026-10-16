@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { motion } from '../../lib/hostMotion.js'
 import { useState } from 'react'
 import { Bell, CheckCircle2, FolderOpen, Mic, ShieldAlert, Terminal } from 'lucide-react'
 import RiskOverridesPanel from '../../components/RiskOverridesPanel.jsx'
@@ -17,7 +17,7 @@ export function PermissionStats({ controller, t }) {
     { label: t('permissionsDashboard.toolsEnabled'), value: `${GATEABLE_TOOLS.length - controller.gatedOffCount}/${GATEABLE_TOOLS.length}`, tone: 'cyan' },
     { label: t('permissionsDashboard.toolGate'), value: t('permissionsDashboard.serverEnforced'), tone: '' },
   ]
-  return <div className="mb-5 grid grid-cols-2 gap-3.5 lg:grid-cols-4">{stats.map((stat, index) => <motion.div key={stat.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }} className="rounded-md border border-ink/30 bg-paper p-3.5"><span className={`font-mono text-[9px] tracking-wider ${stat.tone === 'ember' ? 'text-accent-ink' : stat.tone === 'cyan' ? 'text-cyan' : 'text-ink-fade'}`}>{stat.label}</span><div className="mt-1.5 font-semibold text-[26px] text-ink">{stat.value}</div></motion.div>)}</div>
+  return <div className="mb-5 grid grid-cols-2 gap-3.5 lg:grid-cols-4">{stats.map((stat, index) => <motion.div key={stat.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }} className="rounded-md border border-ink/30 bg-paper p-3.5"><span className={`font-mono text-[0.5625rem] tracking-wider ${stat.tone === 'ember' ? 'text-accent-ink' : stat.tone === 'cyan' ? 'text-cyan' : 'text-ink-fade'}`}>{stat.label}</span><div className="mt-1.5 font-semibold text-[1.625rem] text-ink">{stat.value}</div></motion.div>)}</div>
 }
 
 export function WorkspaceOnboardingSection({ controller, t }) {
@@ -109,9 +109,9 @@ export function WorkspaceOnboardingSection({ controller, t }) {
                       className="mt-0.5"
                     />
                     <span className="min-w-0">
-                      <span className="block font-mono text-[10px] text-ink">{code}</span>
+                      <span className="block font-mono text-[0.625rem] text-ink">{code}</span>
                       <span className="block text-xs text-ink-fade">{t(`permissionsDashboard.onboardingFeature${name[0].toUpperCase()}${name.slice(1)}`)}</span>
-                      {state?.locked && <span className="block text-[10px] text-warning">{t('permissionsDashboard.onboardingManaged', { source: state.source })}</span>}
+                      {state?.locked && <span className="block text-[0.625rem] text-warning">{t('permissionsDashboard.onboardingManaged', { source: state.source })}</span>}
                     </span>
                   </label>
                 )
@@ -169,7 +169,7 @@ export function ToolGateSection({ controller, t }) {
           return (
             <div key={tool.id} className={`grid grid-cols-[40px_1.4fr_1fr_80px] items-center gap-3 px-4 py-3 ${index < GATEABLE_TOOLS.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`} style={{ opacity: enabled ? 1 : 0.55 }}>
               <div className="flex h-7 w-7 items-center justify-center rounded-md border border-ink-fade/60 bg-paper"><Icon className="h-3.5 w-3.5 text-ink-soft" /></div>
-              <div className="flex flex-col leading-tight"><span className="text-sm text-ink">{name}</span><span className="font-mono text-[9px] tracking-wider text-ink-fade">{tool.id}</span></div>
+              <div className="flex flex-col leading-tight"><span className="text-sm text-ink">{name}</span><span className="font-mono text-[0.5625rem] tracking-wider text-ink-fade">{tool.id}</span></div>
               <span className="text-sm text-ink-soft">{scope}</span>
               <PermSwitch on={enabled} onToggle={() => controller.toggleTool(tool.id)} label={`${enabled ? t('permissionsDashboard.disable') : t('permissionsDashboard.enable')} ${name}`} />
             </div>
@@ -182,6 +182,6 @@ export function ToolGateSection({ controller, t }) {
 
 export function BrowserPermissionSection({ controller, t }) {
   return (
-    <><SectionTitle eyebrow="BROWSER" title={t('permissionsDashboard.title')} /><div className="overflow-hidden rounded-md border border-ink/30">{PERMISSION_ITEMS.map((item, index) => { const result = controller.results[item.id] || { state: 'unknown' }; const state = result.state || 'unknown'; const Icon = item.icon; const showRequest = item.requestable && ['prompt', 'denied'].includes(state); return <div key={item.id} className={`grid grid-cols-[40px_1.4fr_1fr_1fr_90px] items-center gap-3 px-4 py-3 ${index < PERMISSION_ITEMS.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`}><div className="flex h-7 w-7 items-center justify-center rounded-md border border-ink-fade/60 bg-paper"><Icon className="h-3.5 w-3.5 text-ink-soft" /></div><div className="flex flex-col leading-tight"><span className="text-sm text-ink">{t(`permissionsDashboard.${item.nameKey}`)}</span><span className="font-mono text-[9px] uppercase tracking-wider text-ink-fade">{item.id}</span></div><div className="flex flex-col leading-tight"><span className="text-sm text-ink-soft">{t(`permissionsDashboard.${item.scopeKey}`)}</span>{result.detail && <span className="font-mono text-[10px] text-ink-fade">{result.detail}</span>}</div><span className={`flex items-center gap-1.5 text-sm ${STATE_COLOR[state] || STATE_COLOR.unknown}`}><span className={`inline-block h-1.5 w-1.5 rounded-full ${STATE_DOT[state] || STATE_DOT.unknown}`} />{t(`permissionsDashboard.${STATE_KEY[state] || 'stateUnknown'}`)}</span><div>{showRequest && <button onClick={() => controller.requestPermission(item.id)} className="h-7 rounded-md border border-ink-fade/60 px-2.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent-ink">{t('permissionsDashboard.request')}</button>}</div></div> })}</div></>
+    <><SectionTitle eyebrow="BROWSER" title={t('permissionsDashboard.title')} /><div className="overflow-hidden rounded-md border border-ink/30">{PERMISSION_ITEMS.map((item, index) => { const result = controller.results[item.id] || { state: 'unknown' }; const state = result.state || 'unknown'; const Icon = item.icon; const showRequest = item.requestable && ['prompt', 'denied'].includes(state); return <div key={item.id} className={`grid grid-cols-[40px_1.4fr_1fr_1fr_90px] items-center gap-3 px-4 py-3 ${index < PERMISSION_ITEMS.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`}><div className="flex h-7 w-7 items-center justify-center rounded-md border border-ink-fade/60 bg-paper"><Icon className="h-3.5 w-3.5 text-ink-soft" /></div><div className="flex flex-col leading-tight"><span className="text-sm text-ink">{t(`permissionsDashboard.${item.nameKey}`)}</span><span className="font-mono text-[0.5625rem] uppercase tracking-wider text-ink-fade">{item.id}</span></div><div className="flex flex-col leading-tight"><span className="text-sm text-ink-soft">{t(`permissionsDashboard.${item.scopeKey}`)}</span>{result.detail && <span className="font-mono text-[0.625rem] text-ink-fade">{result.detail}</span>}</div><span className={`flex items-center gap-1.5 text-sm ${STATE_COLOR[state] || STATE_COLOR.unknown}`}><span className={`inline-block h-1.5 w-1.5 rounded-full ${STATE_DOT[state] || STATE_DOT.unknown}`} />{t(`permissionsDashboard.${STATE_KEY[state] || 'stateUnknown'}`)}</span><div>{showRequest && <button onClick={() => controller.requestPermission(item.id)} className="h-7 rounded-md border border-ink-fade/60 px-2.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent-ink">{t('permissionsDashboard.request')}</button>}</div></div> })}</div></>
   )
 }

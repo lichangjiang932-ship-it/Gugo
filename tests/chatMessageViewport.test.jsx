@@ -100,6 +100,21 @@ test('directory clarification does not pull a user who deliberately scrolled upw
   }
 })
 
+test('an upward wheel releases streaming before the delayed scroll event', async () => {
+  const dom = setupDom(), root = createRoot(document.getElementById('root'))
+  const metrics = { height: 1000, clientHeight: 400 }; let element
+  const render = () => root.render(<Harness messages={[{ ...streamingMessage }]} metrics={metrics} onElement={value => { element = value }} />)
+  try {
+    await act(async () => render())
+    element.scrollTop = 600
+    await act(async () => element.dispatchEvent(new dom.window.Event('scroll')))
+    await act(async () => element.dispatchEvent(new dom.window.WheelEvent('wheel', { deltaY: -20 })))
+    metrics.height = 1100
+    await act(async () => render())
+    assert.equal(element.scrollTop, 600)
+  } finally { await act(async () => root.unmount()); dom.window.close() }
+})
+
 test('scrolling updates the active conversation turn from visible message anchors', async () => {
   const dom = setupDom()
   const root = createRoot(document.getElementById('root'))

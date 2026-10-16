@@ -7,7 +7,8 @@
  * - 钉选 / 标题 / 正文，自动 PATCH（防抖 600ms）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Trash2, Pin, PinOff, NotebookPen, Loader2 } from 'lucide-react'
+import { Plus, Trash2, Pin, PinOff, NotebookPen } from 'lucide-react'
+import { Spinner as Loader2 } from '../components/ui/LoadingState.jsx'
 import AppLayout from '../components/AppLayout.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {

@@ -68,7 +68,7 @@ function McpStatusPanel({ copy, onClose, onManage }) {
                 return (
                   <div key={server.id} className="flex items-center gap-3 rounded-card px-3 py-2 hover:bg-ink/[0.035]">
                     <span className={`h-2 w-2 shrink-0 rounded-pill ${connected ? 'bg-success' : 'bg-ink/20'}`} />
-                    <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium text-ink">{server.name || server.id}</div><div className="truncate text-xs text-ink-fade">{server.transport || 'stdio'}</div></div>
+                    <div className="min-w-0 flex-1"><div className="truncate text-[0.8125rem] font-medium text-ink">{server.name || server.id}</div><div className="truncate text-xs text-ink-fade">{server.transport || 'stdio'}</div></div>
                     <div className="text-right text-xs text-ink-fade"><div>{connected ? copy.connected : copy.disconnected}</div>{connected && <div>{runtime?.tools?.length || 0} {copy.tools}</div>}</div>
                   </div>
                 )
@@ -103,7 +103,7 @@ function FeedbackPanel({ copy, onClose, onSubmit }) {
   }
   return (
     <PanelShell testId="slash-feedback-panel" icon={MessageSquare} title={copy.title} closeLabel={copy.close} onClose={onClose}>
-      <textarea autoFocus value={value} onChange={(event) => { setValue(event.target.value); setNotice({ type: '', text: '' }) }} placeholder={copy.placeholder} rows={3} className="mt-3 w-full resize-none rounded-card border border-ink/[0.12] bg-paper-2/60 px-3 py-2.5 text-[13px] leading-5 text-ink outline-none placeholder:text-ink-fade focus:border-ink/25" />
+      <textarea autoFocus value={value} onChange={(event) => { setValue(event.target.value); setNotice({ type: '', text: '' }) }} placeholder={copy.placeholder} rows={3} className="mt-3 w-full resize-none rounded-card border border-ink/[0.12] bg-paper-2/60 px-3 py-2.5 text-[0.8125rem] leading-5 text-ink outline-none placeholder:text-ink-fade focus:border-ink/25" />
       <div className="mt-1.5 min-h-4 text-xs text-ink-fade">{notice.text ? <span className={notice.type === 'error' ? 'text-danger' : 'text-success'}>{notice.text}</span> : copy.note}</div>
       <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} disabled={busy} className="rounded-control px-3 py-1.5 text-xs text-ink-soft hover:bg-ink/[0.05] disabled:opacity-40">{copy.cancel}</button><button type="button" onClick={submit} disabled={busy} className="rounded-control bg-ink px-3 py-1.5 text-xs text-paper hover:bg-ink/85 disabled:opacity-40">{copy.submit}</button></div>
     </PanelShell>
@@ -186,14 +186,14 @@ function GoalsPanel({ copy, todos, sessionId, onClose, onChange }) {
 
   return (
     <PanelShell testId="slash-goals-panel" icon={Target} title={copy.title} closeLabel={copy.close} onClose={onClose}>
-      <div className="mt-3 flex gap-2"><input autoFocus value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); createPlan() } }} placeholder={copy.placeholder} className="h-9 min-w-0 flex-1 rounded-control border border-ink/[0.12] bg-paper-2/60 px-3 text-[13px] text-ink outline-none placeholder:text-ink-fade focus:border-ink/25" /><button type="button" onClick={createPlan} disabled={!value.trim() || state.busy} className="rounded-control bg-ink px-3 text-xs text-paper hover:bg-ink/85 disabled:opacity-35">{copy.add}</button></div>
+      <div className="mt-3 flex gap-2"><input autoFocus value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); createPlan() } }} placeholder={copy.placeholder} className="h-9 min-w-0 flex-1 rounded-control border border-ink/[0.12] bg-paper-2/60 px-3 text-[0.8125rem] text-ink outline-none placeholder:text-ink-fade focus:border-ink/25" /><button type="button" onClick={createPlan} disabled={!value.trim() || state.busy} className="rounded-control bg-ink px-3 text-xs text-paper hover:bg-ink/85 disabled:opacity-35">{copy.add}</button></div>
       {state.error ? <p data-testid="slash-goals-error" className="mt-3 text-xs text-danger">{state.error}</p> : null}
       {loading ? <p className="mt-3 text-xs text-ink-fade">{copy.loading}</p> : null}
       {!loading && !plan && !legacy.length ? <div className="mt-3 rounded-card bg-ink/[0.035] px-3 py-4 text-center text-xs text-ink-fade">{copy.empty}</div> : null}
       {plan ? (
         <div className="mt-3" data-testid="slash-goals-plan">
           <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{plan.objective}</span>
+            <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium text-ink">{plan.objective}</span>
             <span className="text-xs text-ink-fade">{copy.revision} {plan.revision}</span>
             <span
               data-testid="slash-goals-plan-status"
@@ -214,7 +214,7 @@ function GoalsPanel({ copy, todos, sessionId, onClose, onChange }) {
               return (
                 <div key={step.id} data-testid={`slash-goals-step-${step.ordinal}`} className="flex items-center gap-2 rounded-card px-2 py-2 hover:bg-ink/[0.035]">
                   <Icon className={`h-4 w-4 shrink-0 ${verified ? 'text-success' : 'text-ink-fade'}`} strokeWidth={1.8} />
-                  <span className={`min-w-0 flex-1 truncate text-[13px] ${step.status === 'done' ? 'text-ink-soft' : 'text-ink'}`} title={verified ? copy.verified : undefined}>{step.ordinal + 1}. {step.title}</span>
+                  <span className={`min-w-0 flex-1 truncate text-[0.8125rem] ${step.status === 'done' ? 'text-ink-soft' : 'text-ink'}`} title={verified ? copy.verified : undefined}>{step.ordinal + 1}. {step.title}</span>
                   <span className="text-xs text-ink-fade">{copy[STEP_LABEL_KEY[step.status]] || step.status}</span>
                   {canStart ? <button type="button" disabled={state.busy} onClick={() => run(() => setGoalStepStatusApi({ planId: plan.id, stepId: step.id, status: 'in_progress', expectedVersion: plan.version }))} title={copy.start} aria-label={copy.start} className="flex h-6 w-6 items-center justify-center rounded-control text-ink-fade hover:bg-ink/[0.045] hover:text-ink disabled:opacity-35"><RefreshCw className="h-3.5 w-3.5" /></button> : null}
                   {canReopen ? <button type="button" disabled={state.busy} onClick={() => run(() => setGoalStepStatusApi({ planId: plan.id, stepId: step.id, status: 'in_progress', expectedVersion: plan.version }))} title={copy.reopen} aria-label={copy.reopen} className="flex h-6 w-6 items-center justify-center rounded-control text-ink-fade hover:bg-ink/[0.045] hover:text-ink disabled:opacity-35"><RefreshCw className="h-3.5 w-3.5" /></button> : null}
@@ -234,7 +234,7 @@ function GoalsPanel({ copy, todos, sessionId, onClose, onChange }) {
           <div className="mt-1 max-h-40 space-y-1 overflow-y-auto">
             {legacy.map((goal, index) => {
               const done = goalDone(goal)
-              return <div key={goal.id || index} className="group flex items-center gap-2 rounded-card px-2 py-2 hover:bg-ink/[0.035]"><button type="button" onClick={() => onChange?.(legacy.map((item, itemIndex) => itemIndex === index ? updateGoalDone(item, !done) : item))} title={done ? copy.markOpen : copy.markDone} aria-label={done ? copy.markOpen : copy.markDone} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-pill ${done ? 'text-success' : 'text-ink-fade hover:text-ink'}`}>{done ? <Check className="h-4 w-4" /> : <Circle className="h-4 w-4" />}</button><span className={`min-w-0 flex-1 truncate text-[13px] ${done ? 'text-ink-fade line-through' : 'text-ink'}`}>{goalText(goal)}</span><span className="text-xs text-ink-fade">{done ? copy.completed : copy.active}</span><button type="button" onClick={() => onChange?.(legacy.filter((_, itemIndex) => itemIndex !== index))} title={copy.remove} aria-label={copy.remove} className="flex h-6 w-6 items-center justify-center rounded-control text-ink-fade opacity-0 hover:bg-ink/[0.045] hover:text-danger group-hover:opacity-100 focus:opacity-100"><Trash2 className="h-3.5 w-3.5" /></button></div>
+              return <div key={goal.id || index} className="group flex items-center gap-2 rounded-card px-2 py-2 hover:bg-ink/[0.035]"><button type="button" onClick={() => onChange?.(legacy.map((item, itemIndex) => itemIndex === index ? updateGoalDone(item, !done) : item))} title={done ? copy.markOpen : copy.markDone} aria-label={done ? copy.markOpen : copy.markDone} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-pill ${done ? 'text-success' : 'text-ink-fade hover:text-ink'}`}>{done ? <Check className="h-4 w-4" /> : <Circle className="h-4 w-4" />}</button><span className={`min-w-0 flex-1 truncate text-[0.8125rem] ${done ? 'text-ink-fade line-through' : 'text-ink'}`}>{goalText(goal)}</span><span className="text-xs text-ink-fade">{done ? copy.completed : copy.active}</span><button type="button" onClick={() => onChange?.(legacy.filter((_, itemIndex) => itemIndex !== index))} title={copy.remove} aria-label={copy.remove} className="flex h-6 w-6 items-center justify-center rounded-control text-ink-fade opacity-0 hover:bg-ink/[0.045] hover:text-danger group-hover:opacity-100 focus:opacity-100"><Trash2 className="h-3.5 w-3.5" /></button></div>
             })}
           </div>
         </div>

@@ -1,4 +1,5 @@
-import { LoaderCircle, Search } from 'lucide-react'
+import { Search } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../components/ui/LoadingState.jsx'
 import AppLayout from '../components/AppLayout.jsx'
 import AccessConnectModal from '../components/AccessConnectModal.jsx'
 import { ACCESS_CAPABILITY_LEVELS } from '../lib/accessCatalog.js'
@@ -32,7 +33,7 @@ export default function AccessView() {
         <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
           <header className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end">
             <div>
-              <h1 className="font-semibold text-[32px] text-ink">{t('access.title')}</h1>
+              <h1 className="font-semibold text-[2rem] text-ink">{t('access.title')}</h1>
               <p className="mt-1 max-w-2xl text-sm text-ink-soft">{t('access.subtitle')}</p>
             </div>
             <div className="rounded-full border border-ink-fade/40 bg-paper-2 px-4 py-2 text-xs text-ink-soft" data-testid="access-catalog-summary">

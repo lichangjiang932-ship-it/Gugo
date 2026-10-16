@@ -7,7 +7,7 @@ import { desktopFileCapabilities, desktopFileErrorKey, openDesktopFile } from '.
 import { CHIP_CLASS } from './previewChipStyles.js'
 import useDetailsDismiss from './useDetailsDismiss.js'
 
-const ITEM_CLASS = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-ink hover:bg-ink/[0.05] disabled:opacity-50'
+const ITEM_CLASS = 'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[0.8125rem] text-ink hover:bg-ink/[0.05] disabled:opacity-50'
 const PANEL_CLASS = 'rounded-xl border border-ink/10 bg-paper p-1 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.22)]'
 
 /**
@@ -74,7 +74,7 @@ export default function FileActions({ file, t }) {
         <div role="group" aria-label={t('chatPreview.fileActions')} className={`absolute left-0 top-full z-50 mt-1.5 w-72 ${PANEL_CLASS}`}>
           {/* Which file these actions apply to, above the actions themselves. */}
           {filename && (
-            <p data-testid="preview-open-menu-title" className="flex items-center gap-2.5 px-2.5 py-2 text-[13px] text-ink" title={filename}>
+            <p data-testid="preview-open-menu-title" className="flex items-center gap-2.5 px-2.5 py-2 text-[0.8125rem] text-ink" title={filename}>
               <FileTypeGlyph name={filename} type={file?.type} size={16} />
               <FileNameLabel value={filename} />
             </p>

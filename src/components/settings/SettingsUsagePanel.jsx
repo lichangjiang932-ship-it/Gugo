@@ -124,7 +124,7 @@ export default function SettingsUsagePanel({ t }) {
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <span className="font-mono text-xs tracking-[0.22em] text-ink-fade">USAGE</span>
-          <h1 className="mt-1 text-[22px] font-semibold leading-tight text-ink">{t('usage.title')}</h1>
+          <h1 className="mt-1 text-[1.375rem] font-semibold leading-tight text-ink">{t('usage.title')}</h1>
           <p className="mt-1 text-sm text-ink-soft">{t('usage.subtitle')}</p>
         </div>
         <ActionButton onClick={() => void refresh()} busy={busy || (!report && !error)} data-testid="settings-usage-refresh">

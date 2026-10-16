@@ -14,7 +14,7 @@ export function ChannelListGroup({ title, channels, activeId, onSelect }) {
   if (!channels.length) return null
   return (
     <section className="flex flex-col gap-1">
-      <div className="px-2 font-mono text-[10px] uppercase tracking-wider text-ink-fade">{title}</div>
+      <div className="px-2 font-mono text-[0.625rem] uppercase tracking-wider text-ink-fade">{title}</div>
       {channels.map((channel) => {
         const active = channel.id === activeId
         const Icon = channel.kind === 'dm' ? MessageCircle : Hash
@@ -33,7 +33,7 @@ export function AgentChip({ agent, active, onRemove }) {
   return (
     <span className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs ${active ? 'border-accent/50 bg-accent-soft text-accent-ink' : 'border-ink-fade/40 bg-paper-2 text-ink-soft'}`}>
       <span className="truncate">{agentLabel(agent)}</span>
-      {agent.role === 'owner' && <span className="font-mono text-[9px] uppercase text-ink-fade">owner</span>}
+      {agent.role === 'owner' && <span className="font-mono text-[0.5625rem] uppercase text-ink-fade">owner</span>}
       {onRemove && <button type="button" onClick={() => onRemove(agent)} className="text-ink-fade hover:text-ink"><X className="h-3 w-3" /></button>}
     </span>
   )

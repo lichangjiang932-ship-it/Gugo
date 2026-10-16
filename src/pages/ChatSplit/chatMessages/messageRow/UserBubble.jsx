@@ -19,7 +19,7 @@ export function UserBubble({ attachments, command, content, onOpenAttachment, t 
     : displayContent
 
   return (
-    <div data-testid="user-message-bubble" className={`chat-user-message max-w-full text-[14px] leading-[1.6] ${command?.command ? 'chat-user-skill-message' : ''}`}>
+    <div data-testid="user-message-bubble" className={`chat-user-message max-w-full text-ui leading-[1.6] ${command?.command ? 'chat-user-skill-message' : ''}`}>
       {command?.command && <span data-testid="sent-skill-command" className="mb-1.5 inline-flex h-6 items-center rounded-control bg-ink/5 px-2 font-mono text-xs font-medium leading-5 text-ink-soft">{command.command}</span>}
       {displayContent && (
         <div className={command?.command ? 'text-ink' : ''}>

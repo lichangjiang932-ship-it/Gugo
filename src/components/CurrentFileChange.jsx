@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { LoaderCircle } from 'lucide-react'
+import { Spinner as LoaderCircle } from './ui/LoadingState.jsx'
 import DiffLines from './DiffLines.jsx'
 import { CURRENT_CONTENT_LINE_LIMIT, isBinaryChangePath, readCurrentFileContent } from '../lib/currentFileContent.js'
 

@@ -28,8 +28,8 @@ export default function PreviewBanner() {
     : 'sticky top-0 z-30 w-full border-b border-ink-fade/40 bg-paper-2 text-ink-soft'
 
   const badgeClass = isWip
-    ? 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-warning/80 text-warning'
-    : 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-paper border border-ink-fade/50 text-ink-fade'
+    ? 'inline-flex items-center px-1.5 py-0.5 rounded text-[0.625rem] font-mono uppercase tracking-wider bg-warning/80 text-warning'
+    : 'inline-flex items-center px-1.5 py-0.5 rounded text-[0.625rem] font-mono uppercase tracking-wider bg-paper border border-ink-fade/50 text-ink-fade'
 
   return (
     <div role="status" aria-live="polite" className={wrapClass}>

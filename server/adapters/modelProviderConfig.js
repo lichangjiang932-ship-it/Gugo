@@ -1,5 +1,6 @@
 import { resolveEndpointProfile } from '../utils/endpointProfile.js'
 import { resolveModelProviderRuntimeKey } from '../utils/modelProviderRuntimeBinding.js'
+import { modelRuntimeProfiles } from '../llm/modelRuntimeProfiles.js'
 
 const REQUIRED_ENV = ['MODEL_BASE_URL', 'MODEL_NAME']
 
@@ -35,7 +36,7 @@ function parseProfileOverrides(raw) {
   }
 }
 
-import { providersFromSettings, readCredentials, readSettings, resolveApiKey } from '../llm/llmConfigStore.js'
+import { providersFromSettings, readCredentials, readDefaultModel, readSettings, resolveApiKey } from '../llm/llmConfigStore.js'
 
 export function getModelProviders(env = process.env) {
   const ids = parseModelList(env.MODEL_PROVIDERS)
@@ -51,11 +52,7 @@ export function getModelProviders(env = process.env) {
       profileOverrides: parseProfileOverrides(env[`${prefix}_PROFILE`]),
     }
   })
-  // Only a deployment that points GUGO_HOME at a config directory opts into the
-  // YAML layer. Without this gate, a developer's own ~/.gugo/settings.yaml would
-  // change provider resolution inside every test and every unrelated runtime.
-  const settingsHome = String(env.GUGO_HOME || '').trim()
-  if (!settingsHome) return fromEnv
+  // Settings and runtime use the same home resolver, including normal startup.
   const known = new Set(fromEnv.map((provider) => provider.id))
   const settings = readSettings(env)
   const credentials = readCredentials(env)
@@ -66,7 +63,8 @@ export function getModelProviders(env = process.env) {
       label: String(provider.displayName || id),
       baseUrl: String(provider.baseURL || ''),
       apiKey: resolveApiKey(id, provider, { env, credentials }).apiKey,
-      models: (Array.isArray(provider.models) ? provider.models : []).map((model) => String(model?.id || model || '')).filter(Boolean),
+      models: (Array.isArray(provider.models) ? provider.models : []).filter(model => model?.enabled !== false).map((model) => String(model?.id || model || '')).filter(Boolean),
+      modelProfiles: modelRuntimeProfiles(provider.models, env),
       headers: {},
       profileOverrides: protocolProfileOverrides(provider.api),
       api: String(provider.api || 'openai-completions'),
@@ -113,8 +111,11 @@ export function loadModelConfig(env = process.env) {
   const maxTokens = parseMaxTokens(env.MODEL_MAX_TOKENS)
 
   if (providers.length) {
-    const modelName = env.MODEL_NAME?.trim() || providers.find((provider) => provider.models.length)?.models[0] || ''
-    const provider = findProviderForModel(modelName, env) || providers[0]
+    const preferred = readDefaultModel(readSettings(env))
+    const preferredProvider = providers.find(provider => provider.id === preferred.provider && provider.models.includes(preferred.model))
+    const readyProvider = providers.find(provider => provider.models.length && providerMissingFields(provider).length === 0)
+    const modelName = env.MODEL_NAME?.trim() || (preferredProvider ? preferred.model : '') || (readyProvider || providers.find(provider => provider.models.length))?.models[0] || ''
+    const provider = (!env.MODEL_NAME?.trim() && preferredProvider) || findProviderForModel(modelName, env) || providers[0]
     const providerMissing = provider ? providerMissingFields(provider) : ['MODEL_PROVIDERS']
     if (!modelName) providerMissing.unshift('MODEL_NAME')
 
@@ -122,6 +123,8 @@ export function loadModelConfig(env = process.env) {
       configured: providerMissing.length === 0,
       missing: providerMissing,
       baseUrl: provider?.baseUrl || '',
+      providerId: provider?.id || '',
+      modelProfiles: provider?.modelProfiles || {},
       modelName,
       apiKey: provider?.apiKey || '',
       ...(Object.keys(provider?.headers || {}).length ? { headers: provider.headers } : {}),
@@ -174,6 +177,8 @@ export function resolveModelConfigForModel({ modelName, providerId = '', env = p
     configured: missing.length === 0,
     missing,
     baseUrl: provider.baseUrl,
+    providerId: provider.id,
+    modelProfiles: provider.modelProfiles || {},
     modelName: selectedModel,
     apiKey: provider.apiKey,
     ...(Object.keys(provider.headers || {}).length ? { headers: provider.headers } : {}),

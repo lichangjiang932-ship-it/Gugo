@@ -1,0 +1,77 @@
+{
+  "appearance": [
+    {
+      "width": 1440,
+      "density": "compact",
+      "row": "58px",
+      "rootFont": "16px",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "density": "comfortable",
+      "row": "62px",
+      "rootFont": "16px",
+      "overflow": false
+    },
+    {
+      "width": 1440,
+      "density": "loose",
+      "row": "66px",
+      "rootFont": "16px",
+      "overflow": false
+    },
+    {
+      "width": 360,
+      "density": "compact",
+      "row": "58px",
+      "rootFont": "16px",
+      "overflow": false
+    },
+    {
+      "width": 360,
+      "density": "comfortable",
+      "row": "62px",
+      "rootFont": "16px",
+      "overflow": false
+    },
+    {
+      "width": 360,
+      "density": "loose",
+      "row": "66px",
+      "rootFont": "16px",
+      "overflow": false
+    }
+  ],
+  "portal": [
+    {
+      "width": 1440,
+      "portal": true,
+      "insideMain": false,
+      "left": 859,
+      "right": 1163,
+      "top": 789,
+      "bottom": 835,
+      "hit": true
+    },
+    {
+      "width": 360,
+      "portal": true,
+      "insideMain": false,
+      "left": 12,
+      "right": 316,
+      "top": 785,
+      "bottom": 831,
+      "hit": true
+    }
+  ],
+  "scroll": [
+    {
+      "before": 5524,
+      "after": 5524,
+      "streamDidNotStealViewport": true,
+      "jumpOutsideMask": true,
+      "bottomClear": true
+    }
+  ]
+}

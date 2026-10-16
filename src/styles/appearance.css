@@ -1,0 +1,16 @@
+:root {
+  --space-row: 12px;
+  --space-section: 16px;
+  --control-height: 32px;
+  --layer-local: 10;
+  --layer-backdrop: 30;
+  --layer-popover: 40;
+  --layer-modal: 50;
+  --layer-toast: 60;
+}
+html[data-density="compact"] { --space-row: 8px; --space-section: 12px; --control-height: 28px; }
+html[data-density="loose"] { --space-row: 16px; --space-section: 20px; --control-height: 36px; }
+/* Low-specificity native disabled fallback; existing explicit variants still win. */
+:where(button, input, select, textarea):disabled { cursor: not-allowed; opacity: .5; }
+/* Density changes spacing, never the reader's font-size choice. */
+@media (pointer: coarse) { :root { --control-height: 44px; } }

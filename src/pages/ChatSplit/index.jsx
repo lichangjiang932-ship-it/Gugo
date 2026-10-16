@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from '../../lib/router.jsx'
 import { useAppContext } from '../../store/AppContext'
 import { writeStoredModelSelection } from '../../lib/modelSelection.js'
-import { isLoggedInLocally } from '../../lib/accountClient.js'
+import { streamResumeOwnerScope } from '../../lib/streamResumeDismissals.js'
 import { SETTINGS_TAB_MODELS, settingsPathForSection } from '../../lib/settingsNavigation.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { getSlashActionCopy } from '../../lib/slashCoreCommands.js'
@@ -83,7 +83,7 @@ export default function ChatSplit() {
     sessionId: activeSessionId,
     enabled: state.inputHistoryNavigationEnabled !== false,
   })
-  const approvals = useChatApprovals({ setWorkbenchMessage, toast, t })
+  const approvals = useChatApprovals({ setWorkbenchMessage, toast, t, presentationScope: JSON.stringify([streamResumeOwnerScope(state), activeSessionId || '__draft__']) })
   const directory = useDirectoryApproval({ lang, t, toast })
   const { handleVoice, voiceState } = useVoiceRecognition({ dispatch, input, lang, permissions: state.permissions, setInput, setMessage: setWorkbenchMessage, t })
   const { abortSessionIdRef, attachmentsRef, inputRef } = useChatSessionLifecycle({
@@ -230,8 +230,8 @@ export default function ChatSplit() {
     dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionGranted') })
   }
   const handleManageModels = () => {
-    if (isLoggedInLocally()) { navigate(CHAT_MODEL_SETTINGS_PATH); return }
-    window.dispatchEvent(new CustomEvent('auth:required', { detail: { path: CHAT_MODEL_SETTINGS_PATH, message: t('chatReliability.signInForModels') } }))
+    // The settings route owns local/multi-user authentication; navigation is not a credential gate.
+    navigate(CHAT_MODEL_SETTINGS_PATH)
   }
   const { forkingMessageId, handleForkMessage, handleOpenSessionBranch } = useChatSessionBranches(
     { activeSessionId, dispatch, isGenerating, navigate, stateRef, t, toast },
@@ -291,7 +291,7 @@ export default function ChatSplit() {
       setShowContextPanel={setShowContextPanel} showContextPanel={showContextPanel} showContextUsage={showContextUsage}
       showModelPicker={showModelPicker} slashCommands={slashCommands} slashInlinePanel={slashInlinePanel}
       workspaceBusy={workspaceBusy} workspaceError={workspaceError}
-      state={state} t={t} tasks={state.tasks} toolApproval={approvals.toolApproval} voiceState={voiceState}
+      state={state} t={t} tasks={state.tasks} toolApproval={approvals.toolApproval} approvalNotice={approvals.approvalNotice} onDismissApprovalNotice={approvals.dismissApprovalNotice} voiceState={voiceState}
       workbenchMessage={workbenchMessage} workbenchOpen={workbenchOpen} workbenchTab={workbenchTab}
       previewOpen={workbenchOpen && workbenchTab === 'browser'} onOpenPreview={openPreview}
     />

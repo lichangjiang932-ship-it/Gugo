@@ -7,6 +7,9 @@ import {
 } from '../../lib/approvalClient.js'
 import { createApprovalEpochGuard, createApprovalOwnerGuard } from './approvalOwnerGuard.js'
 import { approvalDecisionNoticeKey, localizeApprovalError } from '../../lib/approvalErrorPresentation.js'
+import { decisionReceiptNotice, decisionFailureNotice } from '../../lib/approvalDecisionPresentation.js'
+import useApprovalDecisionNotice from './useApprovalDecisionNotice.js'
+const CLOSED_APPROVAL = Object.freeze({ open: false, request: null, busy: false })
 
 function approvalPresentationClosedError() {
   const error = new Error('Approval view closed before a decision was submitted.')
@@ -16,8 +19,9 @@ function approvalPresentationClosedError() {
   return error
 }
 
-export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
-  const [toolApproval, setToolApproval] = useState({ open: false, request: null, busy: false })
+export default function useChatApprovals({ setWorkbenchMessage, toast, t, presentationScope = '' }) {
+  const [toolApproval, setToolApproval] = useState(CLOSED_APPROVAL)
+  const { approvalNotice, dismissApprovalNotice, isCurrentApprovalScope, publishApprovalNotice } = useApprovalDecisionNotice(presentationScope)
   const [approvalSettings, setApprovalSettings] = useState({ mode: 'normal', rememberedTools: [] })
   const toolApprovalResolveRef = useRef(null)
   const activeApprovalRef = useRef(null)
@@ -38,12 +42,12 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
       setToolApproval({ open: false, request: null, busy: false })
     }
     Promise.resolve(resolve?.(decision)).catch((error) => {
-      if (mountedRef.current && presentation?.noticeEnabled !== false && epochGuardRef.current.isCurrent(resolutionEpoch)) {
+      if (mountedRef.current && presentation?.noticeEnabled !== false && isCurrentApprovalScope(presentation?.scopeKey) && epochGuardRef.current.isCurrent(resolutionEpoch)) {
         setWorkbenchMessage(localizeApprovalError(error, t))
       }
     }).finally(close)
     return true
-  }, [setWorkbenchMessage, t])
+  }, [isCurrentApprovalScope, setWorkbenchMessage, t])
 
   const presentServerToolApproval = useCallback((request, owner) => {
     // Closing the chat page is not a user denial. Keep the persisted approval
@@ -56,36 +60,42 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
     let rejectApproval
     const presentationOwner = createApprovalOwnerGuard()
     const canNotify = () => mountedRef.current && activeApprovalRef.current?.promise === approvalPromise
-      && activeApprovalRef.current.noticeEnabled === true
+      && activeApprovalRef.current.noticeEnabled === true && isCurrentApprovalScope(presentationScope)
     approvalPromise = new Promise((resolve, reject) => {
       rejectApproval = reject
+      dismissApprovalNotice()
       epochGuardRef.current.advance()
       ownerGuardRef.current.claim(owner)
       presentationOwner.claim(owner)
       toolApprovalResolveRef.current = async (decision) => {
         try {
           const result = await decideApprovalApi(request.id, decision?.approved ? 'approve' : 'deny', null, { remember: !!decision?.remember })
+          if (canNotify()) publishApprovalNotice(decisionReceiptNotice(result, request, owner), request, presentationScope)
           const noticeKey = approvalDecisionNoticeKey(result)
           if (noticeKey && canNotify()) setWorkbenchMessage(t(noticeKey))
           resolve()
         } catch (error) {
-          if (canNotify()) setWorkbenchMessage(localizeApprovalError(error, t))
+          if (canNotify()) {
+            publishApprovalNotice(decisionFailureNotice(error), request, presentationScope)
+            setWorkbenchMessage(localizeApprovalError(error, t))
+          }
           reject(error)
         } finally {
           if (activeApprovalRef.current?.promise === approvalPromise) activeApprovalRef.current = null
         }
       }
-      setToolApproval({ open: true, request, busy: false })
+      setToolApproval({ open: true, request, busy: false, scopeKey: presentationScope })
     })
     activeApprovalRef.current = {
       id: request.id,
+      scopeKey: presentationScope,
       promise: approvalPromise,
       reject: rejectApproval,
       presentationOwner,
       noticeEnabled: true,
     }
     return approvalPromise
-  }, [setWorkbenchMessage, t])
+  }, [dismissApprovalNotice, isCurrentApprovalScope, presentationScope, publishApprovalNotice, setWorkbenchMessage, t])
 
   const requestServerToolApproval = useCallback((request, owner) => {
     // approval.required is durable and may be delivered again after an SSE
@@ -194,7 +204,8 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
     resolveToolApproval,
     resolveToolApprovalForOwner,
     setToolApproval,
-    toolApproval,
+    toolApproval: toolApproval.scopeKey !== undefined && toolApproval.scopeKey !== presentationScope ? CLOSED_APPROVAL : toolApproval,
+    approvalNotice, dismissApprovalNotice,
     toolApprovalResolveRef,
   }
 }

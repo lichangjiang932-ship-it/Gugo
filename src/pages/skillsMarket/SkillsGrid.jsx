@@ -24,9 +24,9 @@ export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
               <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ${iconClassName}`} data-skill-icon>
                 <Icon className="h-[22px] w-[22px]" strokeWidth={1.9} aria-hidden="true" />
               </div>
-              <h2 className="min-w-0 truncate text-[15px] font-semibold leading-5 text-ink" title={skill.name}>{skill.name}</h2>
+              <h2 className="min-w-0 truncate text-body font-semibold leading-5 text-ink" title={skill.name}>{skill.name}</h2>
             </div>
-            <p className="pointer-events-none relative z-10 mt-4 line-clamp-2 min-h-11 text-[13px] leading-[1.65] text-ink-soft" title={skill.desc}>{skill.desc}</p>
+            <p className="pointer-events-none relative z-10 mt-4 line-clamp-2 min-h-11 text-[0.8125rem] leading-[1.65] text-ink-soft" title={skill.desc}>{skill.desc}</p>
             {skill.localCustom && (
               <button
                 type="button"

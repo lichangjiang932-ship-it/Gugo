@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { isCompositionEvent } from './compositionEvent.js'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -98,16 +99,18 @@ export default function useModalFocusTrap({
       focusWithoutScrolling(next)
     }
 
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') {
+    // Escape runs after inner React/menu handlers; Tab retains capture-phase trapping.
+    const onEscape = (event) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && !isCompositionEvent(event)) {
         const nestedDialog = event.target?.closest?.('[data-modal-layer="nested"][role="dialog"]')
         if (nestedDialog && nestedDialog !== dialog && dialog.contains(nestedDialog)) return
         event.preventDefault()
         event.stopPropagation()
         onClose()
-        return
       }
-      if (event.key !== 'Tab') return
+    }
+    const onKeyDown = (event) => {
+      if (event.key !== 'Tab' || isCompositionEvent(event)) return
 
       const focusable = getModalFocusableElements(dialog)
       if (focusable.length === 0) {
@@ -132,9 +135,11 @@ export default function useModalFocusTrap({
     }
 
     document.addEventListener('keydown', onKeyDown, true)
+    document.addEventListener('keydown', onEscape)
     document.addEventListener('focusin', keepFocusInside, true)
     return () => {
       document.removeEventListener('keydown', onKeyDown, true)
+      document.removeEventListener('keydown', onEscape)
       document.removeEventListener('focusin', keepFocusInside, true)
       restoreBackground()
       document.body.style.overflow = previousBodyOverflow

@@ -48,7 +48,7 @@ export default function RiskOverridesPanel() {
   return (
     <section className="mb-6">
       <div className="mb-2 flex items-baseline gap-2">
-        <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">RISK OVERRIDES</span>
+        <span className="font-mono text-[0.5625rem] tracking-[0.22em] uppercase text-ink-fade">RISK OVERRIDES</span>
         <span className="font-semibold text-base text-ink-soft">{t('permissionsDashboard.riskOverridesTitle')}</span>
       </div>
       <p className="mb-2 text-xs text-ink-fade">{t('permissionsDashboard.riskOverridesHint')}</p>

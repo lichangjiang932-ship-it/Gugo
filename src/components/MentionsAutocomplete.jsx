@@ -24,7 +24,7 @@ export default function MentionsAutocomplete({
 
   return (
     <div className="absolute left-3 right-3 bottom-[calc(100%+0.5rem)] z-30 rounded-md border border-ink-fade/40 bg-paper shadow-xl p-1.5">
-      <div className="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-ink-fade">mentions</div>
+      <div className="px-2 py-1 text-[0.625rem] font-mono uppercase tracking-wider text-ink-fade">mentions</div>
       {items.map((agent, index) => {
         const selected = index === safeIndex
         return (

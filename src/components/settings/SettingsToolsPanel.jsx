@@ -43,8 +43,8 @@ export default function SettingsToolsPanel({ state, dispatch, t }) {
   return (
     <section className="flex flex-col gap-5 animate-float-up">
       <div>
-        <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">TOOLS</span>
-        <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('settingsTools.title')}</h1>
+        <span className="font-mono text-[0.5625rem] tracking-[0.22em] uppercase text-ink-fade">TOOLS</span>
+        <h1 className="font-semibold text-page text-ink mt-1.5">{t('settingsTools.title')}</h1>
         <p className="text-sm text-ink-soft mt-1">{t('settingsTools.subtitle')}</p>
       </div>
       <div className="flex flex-col gap-2">
@@ -53,7 +53,7 @@ export default function SettingsToolsPanel({ state, dispatch, t }) {
           const name = t(`settingsTools.tools.${id}.name`)
           return (
             <div key={id} className="p-3 border border-ink/20 rounded-md flex items-center gap-3 hover:border-ink/40 transition-colors">
-              <div className="flex-1 min-w-0"><div className="text-sm text-ink">{name}</div><div className="font-mono text-[10px] tracking-wider text-ink-fade mt-0.5">{id}</div><div className="text-xs text-ink-soft mt-1">{t(`settingsTools.tools.${id}.desc`)}</div></div>
+              <div className="flex-1 min-w-0"><div className="text-sm text-ink">{name}</div><div className="font-mono text-[0.625rem] tracking-wider text-ink-fade mt-0.5">{id}</div><div className="text-xs text-ink-soft mt-1">{t(`settingsTools.tools.${id}.desc`)}</div></div>
               <button type="button" data-tool-id={id} onClick={() => onToggle(id)} className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${enabled ? 'bg-accent' : 'bg-ink-fade/40'}`} aria-pressed={enabled} aria-label={`${name}: ${t(enabled ? 'settingsTools.enabled' : 'settingsTools.disabled')}`}>
                 <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-paper transition-all ${enabled ? 'left-[22px]' : 'left-0.5'}`} />
               </button>

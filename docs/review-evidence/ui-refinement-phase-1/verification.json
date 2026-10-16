@@ -1,0 +1,109 @@
+{
+  "kind": "ui-refinement-phase-1",
+  "base": "71b01e4",
+  "scope": "approved tier A+B, first delivery only; tier C excluded",
+  "reference": {
+    "repository": "Caho1/open-claude-ui",
+    "commit": "2834bc158a4849f21c97cbb2e0b10525f6e646f1",
+    "license": "MIT",
+    "independentClaudeRuntimeVerification": false
+  },
+  "full": {
+    "files": 1170,
+    "exitCode": 0,
+    "seconds": 1035.433,
+    "frozenChangedSourceFiles": 133,
+    "unchanged": true,
+    "log": "gugo-ui-parity-MHl4UR/full-tests-closure.log"
+  },
+  "targeted": {
+    "files": 12,
+    "tests": 51
+  },
+  "related": {
+    "files": 23,
+    "tests": 281
+  },
+  "sidebar": {
+    "files": 3,
+    "tests": 16
+  },
+  "offline": {
+    "tests": 71,
+    "realProvider": false
+  },
+  "browser": {
+    "isolation": "dedicated profile, database and loopback service",
+    "baselineScreenshots": 12,
+    "fontMigrationExactPixelMatches": 9,
+    "fontMigrationDesktopChatResidualChannels": [
+      7,
+      26,
+      33
+    ],
+    "preferenceCombinations": 54,
+    "popovers": [
+      "model",
+      "context",
+      "permission-mode",
+      "slash"
+    ],
+    "viewportWidths": [
+      360,
+      1440
+    ],
+    "motion": {
+      "userDisabled": true,
+      "systemChangesLive": true,
+      "repeatingAnimationStopped": true,
+      "stableFrameSample": 20
+    },
+    "streaming": "synthetic message growth, not a real provider/SSE benchmark",
+    "sidebarComputedHeights": [
+      34,
+      38,
+      42
+    ]
+  },
+  "gates": [
+    "lint",
+    "typecheck",
+    "18 invalid type fixtures rejected",
+    "debt:check",
+    "audit:functions -- --check",
+    "i18n:check",
+    "i18n:keys",
+    "deps:check",
+    "isolated Web build",
+    "git diff --check"
+  ],
+  "history": [
+    {
+      "log": "full-tests.log",
+      "result": "not final; old lg:absolute source-shape expectation detected"
+    },
+    {
+      "log": "full-tests-final.log",
+      "result": "not final; old fixed sidebar height expectation detected; superseded run stopped"
+    },
+    {
+      "log": "full-tests-closure.log",
+      "result": "fresh frozen PASS"
+    }
+  ],
+  "remaining": [
+    "full approval presentation state contract",
+    "full legacy-button and focus/contrast audit",
+    "remaining spacing/icon/shadow/theme exception batches",
+    "small-text semantic categorization and animation duration/easing inventory"
+  ],
+  "notRun": [
+    "real provider",
+    "Electron installed/native smoke",
+    "OS sandbox or network isolation benchmark"
+  ],
+  "git": {
+    "committed": false,
+    "pushed": false
+  }
+}

@@ -23,7 +23,7 @@ const RESERVED_ROUTE_PATHS = new Set([
 ])
 const RESERVED_SETTINGS_SECTIONS = new Set([
   'general', 'models', 'appearance', 'language', 'plugins', 'web-search', 'permissions',
-  'agent-presets', 'integrations', 'data', 'about', 'features', 'files', 'pet', 'diagnostics',
+  'agent-presets', 'integrations', 'data', 'history', 'about', 'features', 'files', 'pet', 'diagnostics',
 ])
 const RESERVED_WORKBENCH_TABS = new Set(['files', 'chat', 'browser', 'terminal'])
 const contributionsBySlot = new Map(UI_CONTRIBUTION_SLOTS.map((slot) => [slot, new Map()]))

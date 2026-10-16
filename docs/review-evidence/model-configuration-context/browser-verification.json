@@ -1,0 +1,72 @@
+{
+  "addEntryNavigates": true,
+  "savedChatModels": [
+    "fixture-model-2",
+    "fixture-model-17"
+  ],
+  "isolatedHttpModelBinding": true,
+  "draftGrowth": {
+    "low": {
+      "title": "待发送上下文（估算） · 19% · ~19,404 tokens · / 100,000 tokens",
+      "fraction": 0.1940400000000001
+    },
+    "high": {
+      "title": "待发送上下文（估算） · 22% · ~21,804 tokens · / 100,000 tokens",
+      "fraction": 0.21804
+    }
+  },
+  "seventy": {
+    "title": "待发送上下文（估算） · 70% · ~70,000 tokens · / 100,000 tokens",
+    "fraction": 0.7
+  },
+  "views": [
+    {
+      "theme": "light",
+      "width": 1440,
+      "title": "待发送上下文（估算） · 70% · ~70,000 tokens · / 100,000 tokens",
+      "fraction": 0.7
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "title": "待发送上下文（估算） · 70% · ~70,000 tokens · / 100,000 tokens",
+      "fraction": 0.7
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "title": "待发送上下文（估算） · 70% · ~70,000 tokens · / 100,000 tokens",
+      "fraction": 0.7
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "title": "待发送上下文（估算） · 70% · ~70,000 tokens · / 100,000 tokens",
+      "fraction": 0.7
+    },
+    {
+      "theme": "white",
+      "width": 1440,
+      "title": "待发送上下文（估算） · 70% · ~70,000 tokens · / 100,000 tokens",
+      "fraction": 0.7
+    },
+    {
+      "theme": "white",
+      "width": 360,
+      "title": "待发送上下文（估算） · 70% · ~70,000 tokens · / 100,000 tokens",
+      "fraction": 0.7
+    }
+  ],
+  "draftSurvivesSettings": true,
+  "finalStatus": {
+    "configured": true,
+    "models": [
+      {
+        "name": "fixture-model-17",
+        "provider": "fixture",
+        "contextWindow": 100000,
+        "contextWindowEstimated": false
+      }
+    ]
+  }
+}

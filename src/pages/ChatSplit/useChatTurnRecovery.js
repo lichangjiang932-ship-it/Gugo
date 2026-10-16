@@ -89,9 +89,11 @@ export default function useChatTurnRecovery({
     setResumeStates((current) => updateStreamResumeStates(current, sessionId, null))
     setFailedTurnRetry((current) => current?.sessionId === sessionId ? null : current)
   }, [ownerScope, rememberDismissal, setFailedTurnRetry, setResumeStates, stateRef])
+  const dismissApprovalNotice = approvals.dismissApprovalNotice
   const handleTurnStart = useCallback(({ sessionId }) => {
+    if (sessionId === activeSessionId && streamResumeOwnerScope(stateRef.current) === ownerScope) dismissApprovalNotice?.()
     dismissSessionResume(sessionId)
-  }, [dismissSessionResume])
+  }, [activeSessionId, dismissApprovalNotice, dismissSessionResume, ownerScope, stateRef])
   const handleTurnResult = useCallback(({ sessionId, turnId, result }) => {
     if (streamResumeOwnerScope(stateRef.current) !== ownerScope) return
     const session = stateRef.current.sessions.find((item) => item.id === sessionId)

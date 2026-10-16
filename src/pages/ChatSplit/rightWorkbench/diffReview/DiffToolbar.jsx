@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronLeft, ExternalLink, Maximize2, Menu, MoreVertical, RotateCw, X } from 'lucide-react'
+import DiffReadingControls from './DiffReadingControls.jsx'
+import { isCompositionEvent } from '../../../../lib/compositionEvent.js'
 
 const BUTTON = 'flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 disabled:cursor-default disabled:opacity-40'
 const MENU = 'absolute right-0 top-8 z-30 w-64 max-w-[calc(100vw-1rem)] rounded-card border border-ink/10 bg-surface p-1 shadow-xl'
@@ -31,6 +33,7 @@ export default function DiffToolbar({
   onReviewCode,
   onToggleFileList,
   onViewChange,
+  target, onTargetChange,
   t,
   view,
 }) {
@@ -49,11 +52,8 @@ export default function DiffToolbar({
   const flip = (key) => { onViewChange?.({ ...view, [key]: !view[key] }); setMenu('') }
 
   return (
-    <header ref={rootRef} className="flex h-10 shrink-0 items-center gap-1 border-b border-ink/10 px-2" data-testid="diff-toolbar">
-      {/* Three bars, the mark every editor puts on "show me the files". An earlier
-          `···` read as "more options" and a panel-edge glyph read as "collapse
-          this panel"; neither is what the reader is looking for, which is the
-          list of everything in the folder. */}
+    <header ref={rootRef} onKeyDown={event => { if (menu && event.key === 'Escape' && !isCompositionEvent(event)) { event.preventDefault(); event.stopPropagation(); setMenu(''); rootRef.current?.querySelector('[data-testid=diff-more]')?.focus() } }} className="flex h-10 shrink-0 items-center gap-1 border-b border-ink/10 px-2" data-testid="diff-toolbar">
+      {/* One entry for this comparison set; no second diff/file navigation mode. */}
       <button type="button" className={BUTTON} data-testid="diff-toggle-files" aria-pressed={fileListOpen}
         aria-label={t(fileListOpen ? 'diffReview.hideFiles' : 'diffReview.showFiles')}
         title={t(fileListOpen ? 'diffReview.hideFiles' : 'diffReview.showFiles')} onClick={() => onToggleFileList?.()}>
@@ -71,6 +71,7 @@ export default function DiffToolbar({
           <MoreVertical className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />
         </summary>
         <div role="menu" data-testid="diff-view-menu" className={MENU}>
+          {target && onTargetChange && <DiffReadingControls target={target} onTargetChange={onTargetChange} t={t} />}
           <button type="button" role="menuitem" data-testid="diff-collapse-all" className={MENU_ITEM} onClick={() => { setMenu(''); onViewChange?.({ ...view, collapseToken: (view.collapseToken || 0) + 1 }) }}>
             <span className="min-w-0 flex-1">{t('diffReview.collapseAll')}</span>
           </button>
@@ -82,7 +83,6 @@ export default function DiffToolbar({
           <ViewToggle testId="diff-view-wrap" active={view.wordWrap} onClick={() => flip('wordWrap')}>{t('diffReview.wordWrap')}</ViewToggle>
           <ViewToggle testId="diff-view-words" active={view.highlightWords} onClick={() => flip('highlightWords')}>{t('diffReview.highlightWords')}</ViewToggle>
           <ViewToggle testId="diff-view-whitespace" active={view.hideWhitespace} onClick={() => flip('hideWhitespace')}>{t('diffReview.hideWhitespace')}</ViewToggle>
-          <span className="my-1 block h-px bg-ink/10" aria-hidden="true" />
           <span className="my-1 block h-px bg-ink/10" aria-hidden="true" />
           <button type="button" role="menuitem" data-testid="diff-review-code-item" className={MENU_ITEM}
             onClick={() => { setMenu(''); onReviewCode?.() }}>

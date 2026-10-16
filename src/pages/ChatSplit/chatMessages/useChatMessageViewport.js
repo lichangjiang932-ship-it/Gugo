@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createScrollPinning, preferredScrollBehavior, SCROLL_INPUT_COOLDOWN } from '../../../lib/scrollPinning.js'
 import { DEFAULT_MESSAGE_WINDOW_SIZE, getAnchoredWindowStart, getMessageWindow } from '../../../lib/messageWindow.js'
 
 function directoryRequestKey(messages) {
@@ -16,7 +17,7 @@ function directoryRequestKey(messages) {
   ].join(':')
 }
 
-function scrollElementToBottom(element, behavior = 'smooth') {
+function scrollElementToBottom(element, behavior = preferredScrollBehavior()) {
   if (typeof element?.scrollTo === 'function') {
     element.scrollTo({ top: element.scrollHeight, behavior })
     return
@@ -43,7 +44,9 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
   )
   const scrollRef = useRef(null)
   const [atBottom, setAtBottom] = useState(true)
-  const atBottomRef = useRef(true)
+  const pinRef = useRef(null)
+  if (pinRef.current == null) pinRef.current = createScrollPinning()
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   const lastCountRef = useRef(messages.length)
   const lastDirectoryRequestKeyRef = useRef(directoryRequestKey(messages))
   const pendingScrollRestoreRef = useRef(null)
@@ -75,7 +78,8 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
 
   useLayoutEffect(() => {
     const element = scrollRef.current
-    if (!element || routeMessageTarget(routeHash)) return
+    if (!element) return
+    if (routeMessageTarget(routeHash)) { pinRef.current.input(-1); return }
     element.scrollTop = element.scrollHeight
   }, [routeHash])
   useLayoutEffect(() => {
@@ -92,7 +96,7 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
       const target = element.querySelector(`[data-chat-turn-index="${pendingTurnIndex}"]`)
       if (target) {
         pendingTurnIndexRef.current = null
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        target.scrollIntoView({ block: 'center', behavior: preferredScrollBehavior() })
         updateActiveTurn()
       }
       return
@@ -110,14 +114,40 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
     const element = scrollRef.current
     if (!element) return undefined
     const onScroll = () => {
-      const nextAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-      atBottomRef.current = nextAtBottom
-      setAtBottom(nextAtBottom)
+      const observation = pinRef.current.observe(element)
+      setAtBottom(observation.pinned)
+      setShowJumpToLatest(observation.showJump)
       updateActiveTurn()
     }
+    let timer, touchY = null
+    const input = direction => {
+      pinRef.current.input(direction)
+      if (direction < 0) setAtBottom(false)
+      clearTimeout(timer)
+      timer = setTimeout(onScroll, SCROLL_INPUT_COOLDOWN + 1)
+    }
+    const wheel = event => { if (event.deltaY) input(Math.sign(event.deltaY)) }
+    const touchStart = event => { touchY = event.touches[0]?.clientY ?? null }
+    const touchMove = event => {
+      const next = event.touches[0]?.clientY
+      if (touchY != null && next != null && next !== touchY) input(Math.sign(touchY - next))
+      touchY = next ?? null
+    }
+    const key = event => {
+      if (event.target.closest?.('input, textarea, select, [contenteditable=true]')) return
+      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) input(-1)
+      else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) input(1)
+    }
     element.addEventListener('scroll', onScroll, { passive: true })
+    element.addEventListener('wheel', wheel, { passive: true })
+    element.addEventListener('touchstart', touchStart, { passive: true })
+    element.addEventListener('touchmove', touchMove, { passive: true })
+    element.addEventListener('keydown', key)
     onScroll()
-    return () => element.removeEventListener('scroll', onScroll)
+    return () => {
+      clearTimeout(timer)
+      for (const [name, handler] of [['scroll', onScroll], ['wheel', wheel], ['touchstart', touchStart], ['touchmove', touchMove], ['keydown', key]]) element.removeEventListener(name, handler)
+    }
   }, [updateActiveTurn])
   useLayoutEffect(() => {
     const element = scrollRef.current
@@ -128,7 +158,7 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
     const nextDirectoryRequestKey = directoryRequestKey(messages)
     const directoryRequestAppeared = !!nextDirectoryRequestKey
       && nextDirectoryRequestKey !== lastDirectoryRequestKeyRef.current
-    if ((grew || streaming || directoryRequestAppeared) && hiddenAfterCount === 0 && atBottomRef.current) {
+    if ((grew || streaming || directoryRequestAppeared) && hiddenAfterCount === 0 && pinRef.current.shouldPin()) {
       element.scrollTop = element.scrollHeight
     }
     lastCountRef.current = messages.length
@@ -150,11 +180,17 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
       }, 0)
       return () => window.clearTimeout(timer)
     }
-    const timer = window.setTimeout(() => document.getElementById(targetId)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80)
+    const timer = window.setTimeout(() => document.getElementById(targetId)?.scrollIntoView({ block: 'center', behavior: preferredScrollBehavior() }), 80)
     return () => window.clearTimeout(timer)
   }, [hiddenCount, messages, routeHash, visibleMessages.length])
+  const onContentResize = useCallback(() => {
+    const element = scrollRef.current
+    if (element && pinRef.current.shouldPin()) element.scrollTop = element.scrollHeight
+    updateActiveTurn()
+  }, [updateActiveTurn])
   const bindContainer = (element) => { scrollRef.current = element }
   const loadEarlierMessages = () => {
+    pinRef.current.input(-1)
     const element = scrollRef.current
     const anchor = element?.querySelector(`[data-chat-message-index="${hiddenCount}"]`)
     if (element && anchor) {
@@ -166,6 +202,7 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
     setWindowStart(Math.max(0, hiddenCount - Math.floor(DEFAULT_MESSAGE_WINDOW_SIZE / 2)))
   }
   const scrollToBottom = () => {
+    pinRef.current.jump()
     const element = scrollRef.current
     if (!element) return
     if (hiddenAfterCount > 0) {
@@ -176,6 +213,7 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
     scrollElementToBottom(element)
   }
   const scrollToTurn = (messageIndex) => {
+    pinRef.current.input(-1)
     const element = scrollRef.current
     if (!element || !Number.isInteger(messageIndex)) return
     setActiveTurnIndex(messageIndex)
@@ -186,13 +224,15 @@ export default function useChatMessageViewport({ messages, routeHash = '' }) {
       return
     }
     element.querySelector(`[data-chat-turn-index="${messageIndex}"]`)
-      ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      ?.scrollIntoView({ block: 'center', behavior: preferredScrollBehavior() })
   }
   return {
     hiddenCount,
     visibleMessages,
     atBottom: hiddenAfterCount === 0 && atBottom,
     activeTurnIndex,
+    showJumpToLatest: hiddenAfterCount > 0 || showJumpToLatest,
+    onContentResize,
     bindContainer,
     loadEarlierMessages,
     scrollToBottom,

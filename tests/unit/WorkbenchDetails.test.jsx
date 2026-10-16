@@ -16,7 +16,7 @@ async function mount(node) {
   await act(async () => root.render(node))
   return { dom, root, element, close: async () => { await act(async () => root.unmount()); dom.window.close() } }
 }
-test('resident review chrome has only the file-list entry, with modes inside its drawer and Escape returning focus', async () => {
+test('resident review chrome and drawer avoid duplicate modes, with advanced comparison in More and Escape returning focus', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ files: [{ path: '/w/src/a.js', additions: 1, deletions: 0 }] }), { headers: { 'Content-Type': 'application/json' } })
   const view = await mount(<DiffReviewPanel t={t} workspacePath="/w" />)
@@ -27,10 +27,10 @@ test('resident review chrome has only the file-list entry, with modes inside its
     const toggle = toolbar.querySelector('[data-testid=diff-toggle-files]')
     toggle.focus(); await act(async () => toggle.click())
     const drawer = view.element.querySelector('[data-testid=diff-file-list]')
-    assert.ok(drawer.querySelector('[data-testid=diff-mode-file]'))
-    assert.ok(drawer.querySelector('[data-testid=diff-target-select]'))
-    await act(async () => drawer.querySelector('[data-testid=diff-mode-file]').click())
-    assert.equal(drawer.querySelector('[data-testid=diff-mode-file]').getAttribute('aria-pressed'), 'true')
+    assert.equal(Boolean(drawer.querySelector('[data-testid=diff-mode-file]')), false)
+    assert.equal(Boolean(drawer.querySelector('[data-testid=diff-target-select]')), false)
+    await act(async () => toolbar.querySelector('[data-testid=diff-more]').click())
+    assert.ok(toolbar.querySelector('[data-testid=diff-view-menu] [data-testid=diff-target-select]'))
     await act(async () => drawer.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true })))
     assert.equal(Boolean(view.element.querySelector('[data-testid=diff-file-list]')), true, 'IME Escape does not dismiss the drawer')
     await act(async () => drawer.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))

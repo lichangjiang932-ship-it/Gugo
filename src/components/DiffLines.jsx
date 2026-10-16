@@ -59,7 +59,7 @@ export default function DiffLines({ edit, t, wrap = false, fold = true, classNam
   const blocks = fold ? foldContext(lines) : lines.map((entry) => ({ entry }))
   const text = wrap ? 'whitespace-pre-wrap break-all' : 'min-w-max whitespace-pre'
   return (
-    <div className={`overflow-auto rounded-control border border-ink/10 bg-[var(--code-bg)] font-mono text-[13px] leading-6 ${className}`} data-testid={testId}>
+    <div className={`overflow-auto rounded-control border border-ink/10 bg-[var(--code-bg)] font-mono text-[0.8125rem] leading-6 ${className}`} data-testid={testId}>
       {blocks.map((block, index) => {
         if (block.fold) {
           if (opened.has(index)) {

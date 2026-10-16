@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
+import { motion } from '../lib/hostMotion.js'
 import { RefreshCw, ShieldAlert, Check, X, Pencil, Terminal, FilePen, FileText, Globe, MousePointerClick } from 'lucide-react'
 import AppLayout from '../components/AppLayout.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -68,14 +68,14 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
           <Icon className={`w-4 h-4 mt-1 shrink-0 ${tone.text}`} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-mono text-[13px] text-ink truncate">{approval.toolName}</span>
-              <span className={`inline-flex items-center gap-1 font-mono text-[9px] tracking-wider uppercase ${tone.text}`}>
+              <span className="font-mono text-[0.8125rem] text-ink truncate">{approval.toolName}</span>
+              <span className={`inline-flex items-center gap-1 font-mono text-[0.5625rem] tracking-wider uppercase ${tone.text}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
                 {t(`approvals.risk.${approval.risk}`)}
               </span>
               <span
                 data-testid="approval-risk-source"
-                className="font-mono text-[9px] text-ink-fade"
+                className="font-mono text-[0.5625rem] text-ink-fade"
               >
                 {t('approvals.source.label')}: {t(`approvals.source.${metadataSource}`)}
               </span>
@@ -83,7 +83,7 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
             {approval.reason && (
               <p className="font-semibold text-sm text-ink-soft mt-1">{approval.reason}</p>
             )}
-            <p className="font-mono text-[10px] text-ink-fade mt-1">
+            <p className="font-mono text-[0.625rem] text-ink-fade mt-1">
               {t(`approvals.origin.${approval.origin}`)} · {formatTime(approval.createdAt)}
             </p>
           </div>
@@ -226,8 +226,8 @@ export default function ApprovalsInbox() {
     <AppLayout className="h-screen flex bg-paper overflow-hidden" mainAs="main" mainClassName="flex-1 p-8 overflow-y-auto">
         <div className="flex items-end justify-between mb-6">
           <div>
-            <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">APPROVALS</span>
-            <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('approvals.inbox.title')}</h1>
+            <span className="font-mono text-[0.5625rem] tracking-[0.22em] uppercase text-ink-fade">APPROVALS</span>
+            <h1 className="font-semibold text-page text-ink mt-1.5">{t('approvals.inbox.title')}</h1>
             <p className="font-semibold text-base text-ink-soft mt-1">{t('approvals.inbox.subtitle')}</p>
           </div>
           <button
@@ -242,12 +242,12 @@ export default function ApprovalsInbox() {
 
         <div className="grid grid-cols-2 gap-3.5 mb-5 max-w-md">
           <div className="p-3.5 border border-ink/30 rounded-md bg-paper">
-            <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t('approvals.inbox.statPending')}</span>
-            <div className="font-semibold text-[26px] text-ink mt-1.5">{counts.total}</div>
+            <span className="font-mono text-[0.5625rem] tracking-wider text-ink-fade">{t('approvals.inbox.statPending')}</span>
+            <div className="font-semibold text-[1.625rem] text-ink mt-1.5">{counts.total}</div>
           </div>
           <div className="p-3.5 border border-ink/30 rounded-md bg-paper">
-            <span className="font-mono text-[9px] tracking-wider text-danger">{t('approvals.inbox.statHighRisk')}</span>
-            <div className="font-semibold text-[26px] text-ink mt-1.5">{counts.high}</div>
+            <span className="font-mono text-[0.5625rem] tracking-wider text-danger">{t('approvals.inbox.statHighRisk')}</span>
+            <div className="font-semibold text-[1.625rem] text-ink mt-1.5">{counts.high}</div>
           </div>
         </div>
 

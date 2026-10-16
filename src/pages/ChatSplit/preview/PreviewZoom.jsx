@@ -31,7 +31,7 @@ export function ZoomControl({ state, t }) {
         {options.map((option) => (
           <button key={option.value} type="button" role="menuitemradio" aria-checked={zoom === option.value}
             data-testid={`preview-zoom-${option.value}`} onClick={() => choose(option.value)}
-            className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[13px] tabular-nums text-ink hover:bg-ink/[0.05]">
+            className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[0.8125rem] tabular-nums text-ink hover:bg-ink/[0.05]">
             {option.label}
             {zoom === option.value && <Check className="h-3.5 w-3.5 text-accent-ink" aria-hidden="true" />}
           </button>

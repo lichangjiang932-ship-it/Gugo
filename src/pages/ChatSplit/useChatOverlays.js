@@ -28,13 +28,13 @@ export default function useChatOverlays({
     setWorkbenchOpen?.(true)
   }, [setWorkbenchOpen, setWorkbenchTab])
 
-  const openDiffReview = useCallback(() => {
+  const openDiffReview = useCallback((event) => {
     // The review opens *beside* what is already up, not in place of it. It used
     // to close the tool panel on the reasoning that two panels competed for the
     // same edge; sitting the dock next to the tool panel is what the layout is
     // for, so a reader comparing a change against the panel they were reading
     // no longer loses the panel to see the change.
-    openDock()
+    openDock(event?.detail?.mode)
   }, [])
 
   // The chat's change chip asks for the docked review panel through this event,

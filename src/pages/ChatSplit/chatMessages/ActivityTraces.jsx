@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Check, ChevronDown, Loader2 } from 'lucide-react'
+import { Check, ChevronDown } from 'lucide-react'
+import { ProgressDots } from '../../../components/ui/LoadingState.jsx'
 import ToolCallCard from '../../../components/ToolCallCard.jsx'
 import { groupKindCounts, groupToolCalls } from '../../../lib/toolStepKinds.js'
 import SubagentCard from '../../../components/SubagentCard.jsx'
@@ -23,7 +24,7 @@ export function ReasoningTrace({ text = '', streaming = false, completed = false
       data-has-reasoning={Boolean(text)}
     >
       {streaming
-        ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        ? <ProgressDots />
         : <Check className="h-3.5 w-3.5" aria-hidden="true" />}
       <span className="chat-thinking-copy">
         <span>{label || (streaming ? t('chatMessages.reasoningActive') : t('chatMessages.reasoningCompleted'))}</span>

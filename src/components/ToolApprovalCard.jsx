@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronRight, Terminal, FilePen, FileText, Globe, MessageSquare, MousePointerClick, X } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { toolCallLabel } from '../lib/toolCallPresentation.js'
+import { isCompositionEvent } from '../lib/compositionEvent.js'
+import ActionButton from './ui/ActionButton.jsx'
+import { ProgressDots } from './ui/LoadingState.jsx'
 
 const RISK_TONE = {
   high: { accent: 'border-l-danger', text: 'text-danger', dot: 'bg-danger' },
@@ -126,7 +129,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const [feedbackFor, setFeedbackFor] = useState(null)
   const [feedback, setFeedback] = useState('')
   const feedbackOpen = feedbackFor === request
-  const submitFeedback = () => onDecide?.({ approved: false, feedback: feedback.trim() })
+  const submitFeedback = () => { if (!busy && feedback.trim()) onDecide?.({ approved: false, feedback: feedback.trim() }) }
 
   useEffect(() => {
     if (!open || !request || busy) return undefined
@@ -151,7 +154,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const toolLabel = toolCallLabel(name, t)
 
   return (
-    <div ref={approvalRef} className={`rounded-card border border-ink/10 border-l-[3px] ${tone.accent} bg-surface p-3.5 shadow-sm`} data-testid="tool-approval-card">
+    <div ref={approvalRef} className={`rounded-card border border-ink/10 border-l-[3px] ${tone.accent} bg-surface p-3.5 shadow-sm`} data-testid="tool-approval-card" aria-busy={busy || undefined} data-decision-state={busy ? 'submitting' : 'pending'}>
       <div className="flex items-start gap-2.5">
         <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-control bg-ink/[0.05] ${tone.text}`}>
           <Icon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -214,11 +217,13 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
               onSubmit={(event) => { event.preventDefault(); if (feedback.trim()) submitFeedback() }}
             >
               <textarea
+                disabled={busy}
                 autoFocus
                 rows={2}
                 value={feedback}
                 onChange={(event) => setFeedback(event.target.value)}
                 onKeyDown={(event) => {
+                  if (isCompositionEvent(event)) return
                   // Enter sends, Shift+Enter breaks the line, Escape folds the box
                   // away — and none of them reach the card's own shortcuts.
                   if (event.key === 'Escape') { event.preventDefault(); setFeedbackFor(null); return }
@@ -248,41 +253,26 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
           data-testid="tool-approval-hint"
           className="mr-auto text-xs text-ink-fade"
         >
-          {t('toolApproval.hint')}
+          {busy ? <span className="inline-flex items-center gap-1.5"><ProgressDots />{t('toolApproval.decisionSubmitting')}</span> : t('toolApproval.hint')}
         </span>
         <div
           data-testid="tool-approval-actions"
           className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2"
         >
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onDecide?.({ approved: false })}
-            className="flex h-8 items-center gap-1.5 rounded-control border border-ink/15 px-3 text-sm text-ink-soft transition-colors hover:border-ink/30 hover:text-ink disabled:opacity-50"
-          >
+          <ActionButton variant="outline" disabled={busy} onClick={() => onDecide?.({ approved: false })}>
             <X className="h-3.5 w-3.5" aria-hidden="true" />
             {t('toolApproval.deny')}
-          </button>
+          </ActionButton>
           {canRemember && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onDecide?.({ approved: true, remember: true })}
-              className="flex h-8 items-center gap-1.5 rounded-control border border-ink/15 px-3 text-sm text-ink-soft transition-colors hover:border-ink/30 hover:text-ink disabled:opacity-50"
-            >
+            <ActionButton variant="outline" disabled={busy} onClick={() => onDecide?.({ approved: true, remember: true })}>
               <CheckCheck className="h-3.5 w-3.5" aria-hidden="true" />
               {t('toolApproval.alwaysAllow')}
-            </button>
+            </ActionButton>
           )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onDecide?.({ approved: true })}
-            className="flex h-8 items-center gap-1.5 rounded-control bg-ink px-3 text-sm font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
+          <ActionButton variant="neutral" disabled={busy} onClick={() => onDecide?.({ approved: true })}>
             <Check className="h-3.5 w-3.5" aria-hidden="true" />
             {t('toolApproval.allowOnce')}
-          </button>
+          </ActionButton>
         </div>
       </div>
     </div>

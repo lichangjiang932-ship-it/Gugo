@@ -37,7 +37,7 @@
 .left-rail-session-list {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: calc(var(--space-section) + 2px);
   padding-bottom: 8px;
 }
 
@@ -94,7 +94,7 @@
 .left-rail-session-row {
   position: relative;
   display: grid;
-  min-height: 38px;
+  min-height: calc(var(--control-height) + 6px);
   grid-template-columns: minmax(0, 1fr) 32px;
   align-items: center;
   padding-right: 4px;
@@ -118,10 +118,10 @@
 .left-rail-session-open {
   display: flex;
   min-width: 0;
-  min-height: 38px;
+  min-height: calc(var(--control-height) + 6px);
   align-items: center;
   gap: 7px;
-  padding: 7px 8px;
+  padding: calc(var(--space-row) / 2 + 1px) 8px;
   border-radius: var(--radius-control);
   text-align: left;
 }

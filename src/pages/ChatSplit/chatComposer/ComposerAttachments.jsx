@@ -1,4 +1,5 @@
-import { CircleAlert, FileText, LoaderCircle, X } from 'lucide-react'
+import { CircleAlert, FileText, X } from 'lucide-react'
+import { Spinner as LoaderCircle } from '../../../components/ui/LoadingState.jsx'
 
 export default function ComposerAttachments({ attachments, onClear, onOpen, onRemove, t }) {
   if (!attachments.length) return null

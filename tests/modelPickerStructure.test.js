@@ -23,13 +23,13 @@ test('model picker components keep their natural boundaries below 300 lines', ()
   assert.match(source(componentPaths[1]), /import ModelPickerOption from/)
 })
 
-test('desktop model picker stays out of composer flow', () => {
+test('model picker placement is owned by the shared portal rather than composer flow', () => {
   const pickerSource = source(componentPaths[0])
   const panelSource = source(componentPaths[1])
-
-  assert.match(pickerSource, /className="relative /)
-  assert.match(panelSource, /lg:absolute/)
-  assert.match(panelSource, /lg:bottom-\[calc\(100%\+0\.5rem\)\]/)
-  assert.match(panelSource, /lg:right-0/)
-  assert.doesNotMatch(panelSource, /lg:static/)
+  const portalSource = source('../src/components/ui/PopoverPortal.jsx')
+  assert.match(pickerSource, /import PopoverPortal from/)
+  assert.match(portalSource, /createPortal\(/)
+  assert.match(portalSource, /position: 'fixed'/)
+  assert.doesNotMatch(panelSource, /lg:static|lg:absolute/)
+  // Actual body ownership/focus/bounds are covered by component and browser tests.
 })

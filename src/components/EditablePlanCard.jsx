@@ -39,7 +39,7 @@ export default function EditablePlanCard({ plan, disabled = false, onApprove, t 
       <div className="mt-3 space-y-2">
         {steps.map((step, index) => (
           <div key={step.id} className="flex items-start gap-2 rounded-md border border-cyan/20 bg-paper/70 p-2">
-            <span className="w-5 pt-2 text-center font-mono text-[10px] text-ink-fade">{index + 1}</span>
+            <span className="w-5 pt-2 text-center font-mono text-[0.625rem] text-ink-fade">{index + 1}</span>
             <div className="min-w-0 flex-1 space-y-2">
               <input
                 value={step.title}

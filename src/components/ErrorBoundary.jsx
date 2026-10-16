@@ -47,7 +47,7 @@ class ErrorBoundaryImpl extends Component {
         <div className="w-full max-w-xl border border-ink-fade rounded-md p-5 bg-paper-2">
           <div className="flex items-baseline justify-between gap-3 mb-3">
             <h2 className="font-semibold text-xl text-ink">{this.props.t('errorBoundary.title')}</h2>
-            <span className="font-mono text-[10px] tracking-wider text-ink-fade">{this.props.t('errorBoundary.kicker')}</span>
+            <span className="font-mono text-[0.625rem] tracking-wider text-ink-fade">{this.props.t('errorBoundary.kicker')}</span>
           </div>
           <p className="text-sm text-ink-soft mb-3">
             {this.props.t('errorBoundary.description')}
@@ -60,7 +60,7 @@ class ErrorBoundaryImpl extends Component {
               <summary className="text-xs text-ink-fade cursor-pointer hover:text-ink">
                 {this.props.t('errorBoundary.stack')}
               </summary>
-              <pre className="text-[10px] font-mono text-ink-fade mt-2 overflow-auto max-h-40 whitespace-pre-wrap">
+              <pre className="text-[0.625rem] font-mono text-ink-fade mt-2 overflow-auto max-h-40 whitespace-pre-wrap">
                 {stack}
               </pre>
             </details>

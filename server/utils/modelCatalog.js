@@ -6,13 +6,13 @@ function positiveModelLimit(...values) {
   return null
 }
 
-export function parseRemoteModelCatalog(data) {
+export function parseRemoteModelCatalog(data, maxModels = 100) {
   const items = Array.isArray(data?.data)
     ? data.data
     : (Array.isArray(data?.models) ? data.models : [])
   const remoteModels = []
   const remoteModelProfiles = {}
-  for (const item of items.slice(0, 100)) {
+  for (const item of items.slice(0, maxModels)) {
     const name = String(item?.id || item?.name || '').trim()
     if (!name || remoteModels.includes(name)) continue
     remoteModels.push(name)
@@ -47,7 +47,7 @@ export function parseRemoteModelCatalog(data) {
   return { remoteModels, remoteModelProfiles }
 }
 
-export function buildVisibleModelCatalog({ names = [], defaultModel = '', providerModelEntries = [], resolveProfile }) {
+export function buildVisibleModelCatalog({ names = [], defaultModel = '', defaultProviderId = '', providerModelEntries = [], resolveProfile }) {
   const fallbackEntries = [...new Set(names.length ? names : [defaultModel].filter(Boolean))]
     .map((name) => ({ name }))
   const sourceEntries = providerModelEntries.length ? providerModelEntries : fallbackEntries
@@ -68,7 +68,7 @@ export function buildVisibleModelCatalog({ names = [], defaultModel = '', provid
       label: String(entry.providerLabel || '').trim(),
     }
     const profile = resolveProfile(name, provider.id)
-    const active = !activeAssigned && name === defaultModel
+    const active = !activeAssigned && name === defaultModel && (!defaultProviderId || provider.id === defaultProviderId)
     if (active) activeAssigned = true
     return {
       name,

@@ -50,7 +50,8 @@ test('session rows stay bounded and readable while project groups retain disclos
   assert.match(leftRailStyles, /-webkit-line-clamp: 2/)
   assert.match(sessionListSource, /title=\{sessionTooltip\(title, time\)\}/)
   assert.doesNotMatch(sessionListSource, /formatSessionRelativeTime|Intl\.RelativeTimeFormat|bg-accent/)
-  assert.match(leftRailStyles, /\.left-rail-session-row\s*\{[^}]*min-height: 38px;/)
+  // Comfortable remains 38px; compact/loose are computed from the shared control height.
+  assert.match(leftRailStyles, /\.left-rail-session-row\s*\{[^}]*min-height: calc\(var\(--control-height\) \+ 6px\);/)
   assert.match(leftRailStyles, /\.left-rail-session-row\[data-active="true"\][\s\S]*?--color-ink-rgb/)
   assert.match(sessionListSource, /isCollapsed \? Folder : FolderOpen/)
   assert.match(sessionListSource, /data-session-title/)

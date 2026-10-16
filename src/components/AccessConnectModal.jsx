@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, LoaderCircle, QrCode, X } from 'lucide-react'
+import { ExternalLink, QrCode, X } from 'lucide-react'
+import { Spinner as LoaderCircle } from './ui/LoadingState.jsx'
 import {
   getWechatQrcodeApi,
   getIntegrationOAuthStatusApi,

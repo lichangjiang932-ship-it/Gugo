@@ -51,7 +51,7 @@ export default function McpServersView() {
         <div className="mx-auto w-full max-w-[1180px] px-6 py-7 lg:px-9 lg:py-8">
           <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <h1 className="text-[21px] font-semibold leading-tight tracking-[-0.025em] text-ink">{t('mcp.title')}</h1>
+              <h1 className="text-[1.3125rem] font-semibold leading-tight tracking-[-0.025em] text-ink">{t('mcp.title')}</h1>
               <p className="mt-1 text-xs leading-5 text-ink-fade">{t('mcp.subtitle')}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

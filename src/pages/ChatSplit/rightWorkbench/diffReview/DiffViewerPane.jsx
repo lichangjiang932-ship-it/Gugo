@@ -205,7 +205,7 @@ export default function DiffViewerPane({
         <div className="min-h-0 flex-1 overflow-auto" data-testid="diff-rows">
           {diff?.status === 'loading' && <p className="px-3 py-2 text-xs text-ink-fade">{t('diffReview.loading')}</p>}
           {diff?.status === 'error' && <p role="alert" className="px-3 py-2 text-xs text-danger">{diff.error || t('diffReview.failed')}</p>}
-          {diff?.status === 'ready' && rows.length === 0 && <p className="px-3 py-2 text-xs text-ink-fade">{t('diffReview.emptyDiff')}</p>}
+          {diff?.status === 'ready' && rows.length === 0 && <p className="px-3 py-2 text-xs text-ink-fade">{t('diffReview.noTextDiff')}</p>}
           <div>
             {rows.map((row, index) => {
               const rowId = rowKey(file.path, row, index)

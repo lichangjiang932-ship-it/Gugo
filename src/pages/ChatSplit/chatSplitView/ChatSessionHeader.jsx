@@ -11,13 +11,13 @@ export function ChatSessionHeading({ hasWorkspace, title, workspacePath = '', ..
         the project is context, the title is what this header is about. */}
     {hasWorkspace && project && (
       <>
-        <span className="hidden max-w-[12rem] shrink-0 truncate text-[13px] text-ink-fade sm:inline" title={workspacePath} data-testid="chat-session-project">{project}</span>
+        <span className="hidden max-w-[12rem] shrink-0 truncate text-[0.8125rem] text-ink-fade sm:inline" title={workspacePath} data-testid="chat-session-project">{project}</span>
         <span className="hidden shrink-0 text-ink/20 sm:inline" aria-hidden="true">/</span>
       </>
     )}
     <h1
       {...headingAttributes}
-      className="min-w-0 flex-1 truncate text-[14px] font-semibold tracking-[-0.01em] text-ink"
+      className="min-w-0 flex-1 truncate text-ui font-semibold tracking-[-0.01em] text-ink"
       title={title}
     >
       {title}

@@ -3,6 +3,7 @@ import {
   SETTINGS_TAB_AGENT_PRESETS,
   SETTINGS_TAB_APPEARANCE,
   SETTINGS_TAB_DATA,
+  SETTINGS_TAB_HISTORY,
   SETTINGS_TAB_GENERAL,
   SETTINGS_TAB_INTEGRATIONS,
   SETTINGS_TAB_LANGUAGE,
@@ -38,6 +39,7 @@ const SETTINGS_NAV_GROUPS = [
     items: [
       SETTINGS_TAB_INTEGRATIONS,
       SETTINGS_TAB_DATA,
+      SETTINGS_TAB_HISTORY,
       SETTINGS_TAB_USAGE,
       SETTINGS_TAB_RECOVERY,
       SETTINGS_TAB_ABOUT,
@@ -57,6 +59,7 @@ function navLabel(item, t) {
     case SETTINGS_TAB_AGENT_PRESETS: return t('settings.agentPresets')
     case SETTINGS_TAB_INTEGRATIONS: return t('settings.integrations')
     case SETTINGS_TAB_DATA: return t('settings.dataExport')
+    case SETTINGS_TAB_HISTORY: return t('nav.history')
     case SETTINGS_TAB_RECOVERY: return t('sideEffectRecovery.navTitle')
     case SETTINGS_TAB_USAGE: return t('usage.navTitle')
     case SETTINGS_TAB_ABOUT: return t('settings.about')

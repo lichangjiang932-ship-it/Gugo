@@ -12,6 +12,7 @@ import {
 } from './llmConfigStore.js'
 import { registerBuiltinLlmAdapters } from './adapters/index.js'
 import { modelsDevMeta } from './modelsDevCache.js'
+import { parseRemoteModelCatalog } from '../utils/modelCatalog.js'
 import {
   isValidProviderId,
   isSupportedProtocol,
@@ -104,9 +105,9 @@ export function upsertProvider(input = {}, env = process.env) {
   if (!isValidProviderId(id)) throw Object.assign(new Error('LLM_PROVIDER_ID_INVALID'), { code: 'LLM_PROVIDER_ID_INVALID' })
   if (input.apiKey) throw Object.assign(new Error('LLM_PROVIDER_KEY_IN_FORBIDDEN'), { code: 'LLM_PROVIDER_KEY_IN_FORBIDDEN' })
   const preset = presetProviderConfig(id) || {}
-  const api = String(input.api || preset.api || 'openai-completions')
-  requireProtocol(api)
   const previous = providersFromSettings(readSettings(env))[id] || {}
+  const api = String(input.api || previous.api || preset.api || 'openai-completions')
+  requireProtocol(api)
   const provider = {
     displayName: String(input.displayName || previous.displayName || preset.displayName || id),
     api,
@@ -118,7 +119,10 @@ export function upsertProvider(input = {}, env = process.env) {
   }
   const settings = readSettings(env)
   const providers = { ...providersFromSettings(settings), [id]: provider }
-  writeSettings({ ...settings, [LLM_SETTINGS_NAMESPACE]: { ...(settings[LLM_SETTINGS_NAMESPACE] || {}), providers } }, env)
+  const next = { ...settings, [LLM_SETTINGS_NAMESPACE]: { ...(settings[LLM_SETTINGS_NAMESPACE] || {}), providers } }
+  const preferred = readDefaultModel(settings)
+  if (preferred.provider === id && !provider.models.some(model => model.id === preferred.model && model.enabled !== false)) delete next['agent-default-model']
+  writeSettings(next, env)
   return publicProviderView(id, provider, { defaultModel: readDefaultModel(settings), credentials: readCredentials(env), env })
 }
 
@@ -153,7 +157,8 @@ export function setDefaultModel({ provider, model } = {}, env = process.env) {
   const settings = readSettings(env)
   const providerId = String(provider || '').trim()
   const modelId = String(model || '').trim()
-  if (!providerId || !modelId) throw Object.assign(new Error('LLM_DEFAULT_MODEL_INVALID'), { code: 'LLM_DEFAULT_MODEL_INVALID' })
+  const available = providersFromSettings(settings)[providerId]?.models || []
+  if (!providerId || !modelId || !available.some(entry => String(entry?.id || entry) === modelId && entry?.enabled !== false)) throw Object.assign(new Error('LLM_DEFAULT_MODEL_INVALID'), { code: 'LLM_DEFAULT_MODEL_INVALID' })
   writeSettings({ ...settings, 'agent-default-model': { provider: providerId, model: modelId } }, env)
   return { provider: providerId, model: modelId }
 }
@@ -192,7 +197,13 @@ async function fetchModelList({ baseURL, provider = {}, apiKey = '', fetchImpl }
       signal: controller.signal,
     })
     if (!response.ok) throw Object.assign(new Error('LLM_PROBE_HTTP_ERROR'), { code: 'LLM_PROBE_HTTP_ERROR' })
-    return parseProbePayload(await response.json())
+    const payload = await response.json()
+    const { remoteModelProfiles } = parseRemoteModelCatalog(payload, Number.MAX_SAFE_INTEGER)
+    const modelProfiles = Object.fromEntries(Object.entries(remoteModelProfiles).map(([id, profile]) => [id, {
+      ...(profile.contextWindow ? { contextWindow: profile.contextWindow, contextWindowSource: profile.source } : {}),
+      ...(profile.maxOutputTokens ? { maxTokens: profile.maxOutputTokens } : {}),
+    }]))
+    return { discovered: parseProbePayload(payload), ...(Object.keys(modelProfiles).length ? { modelProfiles } : {}) }
   } catch (error) {
     const message = redactSecrets(error?.message || error, [apiKey])
     throw Object.assign(new Error(message || 'LLM_PROBE_FAILED'), { code: error?.code || 'LLM_PROBE_FAILED' })
@@ -208,16 +219,17 @@ async function fetchModelList({ baseURL, provider = {}, apiKey = '', fetchImpl }
  */
 export async function probeDraftModels({ baseURL = '', api = 'openai-completions', apiKey = '' } = {}, { fetchImpl = globalThis.fetch } = {}) {
   requireProtocol(api)
-  const discovered = await fetchModelList({ baseURL, provider: { api }, apiKey, fetchImpl })
-  return { discovered }
+  return fetchModelList({ baseURL, provider: { api }, apiKey, fetchImpl })
 }
 
 export async function probeModels(id, { env = process.env, fetchImpl = globalThis.fetch } = {}) {
   const provider = providersFromSettings(readSettings(env))[id]
   if (!provider) throw Object.assign(new Error('LLM_PROVIDER_NOT_FOUND'), { code: 'LLM_PROVIDER_NOT_FOUND' })
   const { apiKey } = resolveApiKey(id, provider, { env })
-  const discovered = await fetchModelList({ baseURL: provider.baseURL, provider, apiKey, fetchImpl })
-  const merged = normalizeModels([...normalizeModels(provider.models), ...discovered.map((modelId) => ({ id: modelId }))])
+  const result = await fetchModelList({ baseURL: provider.baseURL, provider, apiKey, fetchImpl })
+  const previous = new Map(normalizeModels(provider.models).map(model => [model.id, model]))
+  for (const id of result.discovered) previous.set(id, { ...(result.modelProfiles?.[id] || {}), ...(previous.get(id) || {}), id })
+  const merged = [...previous.values()]
   upsertProvider({ id, models: merged }, env)
-  return { discovered, merged: merged.map((model) => model.id) }
+  return { ...result, merged: merged.map((model) => model.id) }
 }
