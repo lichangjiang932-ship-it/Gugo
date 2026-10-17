@@ -1,7 +1,8 @@
 import { FolderOpen, ShieldCheck, X } from 'lucide-react'
 import { Spinner as Loader2 } from './ui/LoadingState.jsx'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useT } from '../i18n/I18nProvider.jsx'
+import { isCompositionEvent } from '../lib/compositionEvent.js'
 import InlineDirectoryBrowser from './InlineDirectoryBrowser.jsx'
 
 function initialPath(request) {
@@ -23,15 +24,6 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
   const [browserOpen, setBrowserOpen] = useState(false)
   const requiresWrite = initialAccessMode(request) === 'read_write'
 
-  useEffect(() => {
-    if (!open) return undefined
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') onReject?.()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onReject, open])
-
   if (!open || !request) return null
 
   return (
@@ -45,6 +37,18 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
         role="region"
         aria-busy={!!busy}
         aria-labelledby="directory-approval-title"
+        onKeyDown={(event) => {
+          // The card is a region, not a modal. Escape/Enter belong to it only
+          // while focus is inside it; a global listener used to reject the
+          // request from the composer and during IME composition.
+          if (event.defaultPrevented || isCompositionEvent(event)) return
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            if (browserOpen) setBrowserOpen(false)
+            else onReject?.()
+          }
+        }}
       >
         <div className="flex items-start gap-3 border-b border-ink/10 bg-accent/5 px-4 py-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent-ink">
@@ -76,14 +80,16 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               value={path}
               onChange={(event) => setPath(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && path.trim() && !busy) {
+                if (event.key === 'Enter' && !isCompositionEvent(event)
+                  && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
+                  && path.trim() && !busy) {
+                  event.preventDefault()
                   onAuthorize?.({ path: path.trim(), accessMode, authorizationScope, trustWorkspaceConfig })
                 }
               }}
               disabled={!!busy}
               placeholder={t('taskSteering.directoryPathPlaceholder')}
               className="h-10 w-full rounded-md border border-ink/15 bg-paper px-3 font-mono text-xs text-ink outline-none transition-colors focus:border-accent/50 disabled:opacity-60"
-              autoFocus
             />
           </div>
 

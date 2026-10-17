@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react'
 import { highlightChangedWords } from '../../../../lib/diffRows.js'
+import { isCompositionEvent } from '../../../../lib/compositionEvent.js'
 
 const ROW_TINT = Object.freeze({
   added: 'diff-row-added',
@@ -78,7 +79,8 @@ function Row({ comment, draft, onComment, onDraftChange, onSaveComment, onCancel
                 placeholder={t('diffReview.commentPlaceholder')}
                 onChange={(event) => onDraftChange(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Escape') onCancelComment()
+                  if (event.defaultPrevented || isCompositionEvent(event)) return
+                  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancelComment() }
                   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); onSaveComment() }
                 }}
                 className="h-7 min-w-0 flex-1 rounded-control border border-ink/15 bg-paper px-2 text-xs text-ink outline-none focus:border-focus"
@@ -149,7 +151,8 @@ function SideRow({ comment, draft, onCancelComment, onComment, onDraftChange, on
                 placeholder={t('diffReview.commentPlaceholder')}
                 onChange={(event) => onDraftChange(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Escape') onCancelComment()
+                  if (event.defaultPrevented || isCompositionEvent(event)) return
+                  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancelComment() }
                   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); onSaveComment() }
                 }}
                 className="h-7 min-w-0 flex-1 rounded-control border border-ink/15 bg-paper px-2 text-xs text-ink outline-none focus:border-focus"

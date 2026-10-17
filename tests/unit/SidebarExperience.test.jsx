@@ -147,7 +147,7 @@ test('project names omit the visible conversation count while preserving accessi
   })
 })
 
-test('workbench toggle uses one light right-pane icon and preserves button interaction and accessibility', async () => {
+test('workbench toggle uses one right-pane icon and preserves button interaction and accessibility', async () => {
   await withSidebar({ initialSessions: [] }, async ({ element, root }) => {
     function Toggle() {
       const [open, setOpen] = useState(false)
@@ -158,7 +158,7 @@ test('workbench toggle uses one light right-pane icon and preserves button inter
     const button = element.querySelector('button')
     const icon = button.querySelector('svg')
     assert.equal(icon.getAttribute('aria-hidden'), 'true')
-    assert.equal(icon.getAttribute('stroke-width'), '1.5')
+    assert.equal(icon.getAttribute('stroke-width'), '1.75')
     assert.ok(icon.classList.contains('lucide-panel-right'))
     assert.equal(button.getAttribute('aria-expanded'), 'false')
     assert.equal(button.getAttribute('aria-controls'), 'right-workbench')

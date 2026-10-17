@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { getClipboardFiles } from '../../lib/chatAttachmentFiles.js'
 import { attachmentSendState } from '../../lib/chatAttachmentUpload.js'
+import { isCompositionEvent } from '../../lib/compositionEvent.js'
 import { buildAttachmentPreviewArtifact } from '../../lib/attachmentPreview.js'
 import { resolveSlashMenuKey } from '../../lib/slashMenuNavigation.js'
 import { splitLeadingSkillCommand } from './chatComposer/skillCommand.js'
@@ -52,6 +53,7 @@ export default function ChatComposer({
   showWorkspacePicker = false,
   workspaceBusy = false,
   workspaceError = '',
+  directoryApprovalOpen = false,
 }) {
   const { t } = useT()
   const textareaRef = useRef(null)
@@ -65,6 +67,25 @@ export default function ChatComposer({
   const slashMenuOpen = !!slashMatch && !slashMenuDismissed
   const safeSlashIndex = Math.min(slashSelectedIndex, Math.max(0, slashCommands.length - 1))
   const attachmentState = attachmentSendState(attachments)
+  const draftText = String(input || '').trim()
+  const hasAttachments = (attachments?.length || 0) > 0
+  const hasSendableContent = Boolean(draftText) || hasAttachments
+  const sendBlockedReason = directoryApprovalOpen
+    ? t('chatSteering.directoryAuthorizationRequired')
+    : attachmentState.uploading
+      ? t('chatAttachments.waitingForUploads')
+      : attachmentState.failed
+        ? t('chatAttachments.removeFailed')
+        : isGenerating && !draftText && hasAttachments
+          ? t('chatSteering.textOnly')
+          : !hasSendableContent
+            ? t('chatComposer.emptySend')
+            : ''
+  const sendDisabled = Boolean(sendBlockedReason)
+    || attachmentState.uploading
+    || attachmentState.failed
+    || directoryApprovalOpen
+    || (isGenerating && !draftText)
 
   useEffect(() => {
     if (!slashMenuOpen) return undefined
@@ -234,6 +255,11 @@ export default function ChatComposer({
                 ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
               }}
               onKeyDown={(e) => {
+                // Composition confirms a candidate, it does not choose a slash
+                // command, send, or interrupt a turn. The shared helper also
+                // catches keyCode 229, which some IMEs report instead of
+                // isComposing.
+                if (isCompositionEvent(e)) return
                 if (slashMenuOpen) {
                   const action = resolveSlashMenuKey(e.key, safeSlashIndex, slashCommands.length)
                   if (action.handled) {
@@ -293,7 +319,8 @@ export default function ChatComposer({
             onOpenModelPicker={onOpenModelPicker}
             onSend={onSend}
             onToggleContext={onToggleContext}
-            sendDisabled={attachmentState.uploading || attachmentState.failed}
+            sendBlockedReason={sendBlockedReason}
+            sendDisabled={sendDisabled}
             selectedModel={selectedModel}
             selectedModelProviderId={selectedModelProviderId}
             t={t}

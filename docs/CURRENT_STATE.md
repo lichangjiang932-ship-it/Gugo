@@ -14,6 +14,52 @@
 | 类型检查的实际范围 | [tsconfig.protocol-pilot.json](../tsconfig.protocol-pilot.json)、[负向用例注册](../scripts/check-protocol-type-fixtures.mjs) |
 | 实际可运行命令 | [package.json](../package.json) |
 
+## Agent 体验硬化：发送、任务同步、终端、上下文与联网搜索（2026-10-17，未提交）
+
+按用户确认的五项反馈实施：①上下文圆环改为**连续圆**，不再是点状虚线，也不显示可见的 `≈` 角标；点击浮层只显示“上下文已用 + 百分比 / 已用与窗口 / 进度条 / 系统提示词·工具·对话消息”，不再渲染“详情”或诊断说明；自定义 Provider 的 UUID 通过模型 id 回退到随包目录（`mimo-v2.6-flash` 测试锁定 1,048,576）；②发送按钮改为深色实心 `ArrowUp`，空输入、目录审批、上传中/失败都有可访问原因，运行中仅附件仍保留独立 Stop 与 toast 反馈；③`manage_todos` 成功回执实时同步到顶部计数、PlanCard 和对话内任务列表，transcript 作为重载兜底；④桌面终端会话与 React 生命周期解耦，关闭面板只 detach，按项目 replay，显示真实起始目录，支持聚焦、复制/粘贴、Ctrl+C SIGINT、两步 End，主进程在 reload/crash/导航时清理 shell；⑤`web_search` 进入初始可发现工具集，普通“查一下今天…”不再需要先猜 `search_tools`，搜索执行仍受“设置 → 联网搜索”的配置/开关约束。会话标题左侧不再显示多余气泡图标；右上角四入口收进 2px 间距的同一组，图标颜色加深、描边略加粗，名称/图标/顺序/位置不变。
+
+上下文来源优先级为显式 model 设置 > models.dev > 官方能力目录 > 随包 `modelCatalogSnapshot.json`；随包窗口标为估算并显示 `≈`，只有完全无法解析窗口才显示未知。任务中心切任务立即清空旧详情并丢弃迟到响应，Job SSE 的 401/403 进入终态不再无限退避。主布局与右上角四入口未改，暖纸风格、Provider 字段保留和本机安全边界未变。门禁、定向测试、真实 `node-pty` 冒烟与隔离 Web 预览均通过；最终串行全量冻结 **1201 文件 PASS / 退出 0 / 约 2827 秒**，4284 个源码/配置/资源文件前后 SHA-256 一致。两个 preview-server 端口测试在并发下曾偶发超时，单独复跑通过，记录未删除。未调用真实 Provider、未修改 5175 用户实例、未提交/推送/打包。详见[本轮证据](review-evidence/agent-ux-hardening-2026-10-17/freeze-result.json)。
+
+## 直接修复：搜索、Provider 草稿与上下文降频（2026-10-17，未提交）
+
+修复搜索在流式生成时被 `sessions` 引用变化反复重置计时器的问题：本地 getter 移入 ref，`settledQuery` 派生 loading，非空查询第一帧即显示加载态；关闭/改 query 继续取消旧请求。按用户要求，自定义 Provider ID 只更新 ID，不再清空 API Key、Base URL、显示名、协议和模型候选；catalog/模式切换仍作为明确目标切换清空，pending/editing 锁保留。上下文 `context_usage` 流式观测从 200ms 降到 1000ms，保留 prepared/completed/retained 锚点和客户端平滑。`useChatSendFlow` 改为从 ref 读取当前 state，移除整份 state 依赖；Provider 先保存、凭据后保存，避免 provider 失败时留下孤儿凭据。
+
+定向红/绿、12 文件近邻、lint/类型/债务/复杂度/i18n/依赖/许可/离线 71 项、隔离 Web 构建和 diff 检查通过；从头全量 **1193 文件 PASS / 退出 0 / 约 1503 秒**，4254 个冻结文件前后 SHA-256 一致。未调用真实 Provider、未做浏览器视觉或 Electron 验收；未提交/推送/打包。详见[本轮证据](review-evidence/direct-fixes/README.md)。此前 `review-boundary-fixes` 的自定义 ID 清空行为已被本轮的后续用户决定取代，旧验证记录保留不改写。
+
+## 会话执行与实时上下文（上一轮，未提交）
+
+按用户确认的四项修复：发送单飞锁按 backend/owner/session/draft 隔离，旧草稿 ACK 不抢新会话，迟到 preflight 不跨 owner 发送；上下文从物理请求准备、公开文本流、响应完成、工具批次与压缩事件更新，而非只靠最终 retained。补齐授权 Git 状态→具体读回验收，并保留真实缺证据/权限时的失败；普通完成失败改为一条红色提示，文件入口不重复，后台诊断保留。21 文件/312 项定向、离线 71 项和门禁通过；独立浏览器证明 A 未结束时 B 能回复、A 的圆环在完成前增长、红色摘要与文件入口、阻止发送时 toast 可见。最终从头冻结全量 1193 文件 PASS / 1290.284 秒，4254 个源码/配置/资源文件哈希一致，未提交推送。见 [本轮报告](CONVERSATION_RUNTIME_HARDENING_2026-10-17.md)。
+
+## 复审边界修复（上一轮，未提交）
+
+按确认计划修复 Provider 目标/凭据/候选隔离、托管相对引用与卡片一致性、普通及快照 URL 来源校验、搜索防抖/IME/中性焦点，以及离线 Host 的 WS/凭据投影旁路。15 文件/166 项定向与门禁通过，独立浏览器合成夹具复验通过；最终从头冻结全量 1191 文件 PASS / 1143.632 秒，4250 个源码/配置/资源文件哈希一致。跨回合可信索引和本地搜索单次全扫成本分别登记 DEBT-LINK-001、DEBT-SEARCH-001。保留原 1188 exit0 但哈希变化的非冻结记录，不调用真实 Provider，不提交/推送。见 [本轮证据](review-evidence/review-boundary-fixes/README.md)。
+
+## 真实实例文件链接与预览焦点（2026-10-17，未提交）
+
+用户报告真实模型输出中的文件路径仍无超链接。已在原有 `http://localhost:5175/#/chat` 实例、使用已配置 `mimo-v2.6-flash` 复现：行内代码里的仓库相对路径 `docs/...` 被当作“已内联引用”而隐藏交付卡片，却因不是绝对路径/裸文件名而没有真正变成链接。修复只对**本轮已验证收据的绝对路径后缀**解析相对路径，覆盖行内代码、普通文本和显式相对 Markdown 链接；同名歧义、`..`、未验证路径仍不链接。另修复关闭聚焦预览后聊天容器残留 `inert`、输入框无法聚焦的覆盖层/焦点陷阱重复恢复问题。
+
+真实 5175 上原会话的 `docs/GPT-6-Astra-Introduction.md` 已可点击并打开真实文件；新建真实小任务生成 `docs/link-check-2026-10-17.md` 后同样可点击，测试文件已删除。用户再次反馈后，又修正了模型直接链接已被本地文件取代的 managed 快照 URL：仅在收据带有明确 `relatedArtifactIds` 关联时解析到已验证本地文件，未关联的受保护 URL 仍阻止；原会话中“打开《Claude Opus 5.5…》”文字现在是可点击链接，重复卡片隐藏。定向 6 文件/89 项通过、修改文件 ESLint 通过；按用户要求不再跑隔离全量。详见[本轮证据](review-evidence/file-link-relative-paths/README.md)。原模型配置、聊天记录、主布局与四入口未改；未提交/推送/打包。
+
+## 模型入口与搜索焦点（2026-10-17，未提交）
+
+正常入口为 `http://localhost:5175/#/chat`（`gugo-dev`），已恢复launch首位但不以顺序保证宿主默认选择。5181的英文probe错误来自刻意只读offline guard，未删guard、未触用户该页面草稿、未读取/迁移原配置和聊天。本轮不自动启动正常5175或请求真实Provider。
+
+已有完整候选/全选/全不选/逐项模型选择无需重写，32候选/重复获取/元数据/失败保留/保存后聊天刷新回归通过。搜索仅添加局部class/CSS取消输入蓝框，整行中性焦点提示、其他控件ring/尺寸和四入口保持。合并定向10文件/54项通过；静态门禁与offline通过。该轮全量实际完成1188文件PASS/1272.565秒，但运行期间源码被后续链接修复改动、前后哈希不一致，不能作为最终一致快照PASS；当前树仍需重新冻结。浏览器静态5179检查及其焦点/原生键盘限制详见[本轮证据](review-evidence/model-search-focus/README.md)。
+
+## 文件超链接与宿主字体（2026-10-17，未提交）
+
+恢复 Agent 生成文件的既有可点击链接：报告fallback按可见正文去重，展开步骤沿用可信引用/打开回调，首行文件引用不再被gist吞掉；managed交付选择、本地receipt和protected URL限制不放宽。链接近邻13文件/141项通过。宿主字体改为自托管 `Noto Sans SC Variable`，mono、暖纸主布局、四入口和作品默认字体边界保持；字体17文件/142项、生产构建/许可通过。浏览器确认本地中文及Latin WOFF2、400–700（含650）真实加载，并检查三主题/字号/密度代表组合与窄屏；未宣称完整矩阵或作品浏览器全验。
+
+真实模型绑定只读解析被权限策略拒绝，真实请求 **0次**；未绕过。验收CLI和直接compose均封闭live，三个真实任务/取消unknown闭环保持Open（DEBT-VERIFY-002）；普通产品模型功能未禁用。首次冻结全量exit1：唯一最终失败是source-order扫描器误判运行时事件比较，3365项哈希前后一致；原FAIL已归档。回调行为断言修复与新冻结见上节，不能改写历史结果。详见[本轮证据](review-evidence/file-links-font-live/README.md)和同目录verification.json，上一轮1182 PASS不用于证明本轮新快照。未提交、推送、打包或发版。
+
+## 首轮改进：隔离 Web 与模板键盘（2026-10-16，未提交）
+
+基于 `648fd1b`，仅实施本次批准的首轮 0＋1：新增可复用隔离 Web build/preview 入口（sanitized child、独立 HOME/数据/工作区/输出，关闭手工及 Vite 自动 dotenv），模板列表改原生按钮并补双语关闭名称。权限页、登录弹窗、MCP、快照、后台 Agent 和 worktree 路线均未实施；布局及右上角四入口不变。
+
+独立审查发现的 internal-worker 直调绕过已修补为父进程 IPC 请求＋导入 Vite 前完整环境/cwd 校验；新增真实 CLI 构建及拒绝回归。定向 7 文件/46 项、独立 Web 构建、lint、类型（18 个负例）、债务/复杂度/双语/依赖及离线 71 项通过。最终从头冻结全量 **1182 个测试文件 PASS，退出 0，1108.623 秒**；3195 个源码/配置文件前后 SHA-256 一致。前两次因验证启动环境误复用 Web 默认值而失败，未改业务代码或放宽断言消红；失败详情和原冻结记录保留在 [失败记录](review-evidence/isolated-web-agent-template/failed-runs.md)。
+
+浏览器原生键盘/视觉验收仍阻塞：三次请求隔离配置均被宿主预览工具替换为其他 `gugo-usage-panel` 配置（第三次在目录及项目设置重载后尝试），均已停止，不作为本轮证明。未调用真实模型；未提交、推送、打包或发版。新增债务保持 Open，详见 [本轮证据](review-evidence/isolated-web-agent-template/verification.json)。上一报告中“没有 i18n/焦点测试”“历史消息无限渲染”“xlsx/设置未懒加载”“jsdom应移dev”“失败退出恒0”均已反证，不据此修改；无测量的 FPS/TTI/WCAG/对齐百分比不作为现状。
+
 ## UI 细化分批实施
 
 用户已批准甲＋乙，丙档不动。第一阶段的实现、浏览器测量与明确未完成项见 [UI_REFINEMENT.md](UI_REFINEMENT.md)；来源许可见 [THIRD_PARTY_UI_REFERENCES.md](THIRD_PARTY_UI_REFERENCES.md)。本批冻结后从头 1170 文件 PASS，改动源码哈希一致；54 组 Web 设置组合、四类弹层及滚动/动画行为已验证。未完成项仍按后续批次推进。本批尚未提交或推送，不把此前治理轮次的 1167 PASS 当作新 UI 改动的验收。

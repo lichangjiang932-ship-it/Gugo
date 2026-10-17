@@ -2,6 +2,7 @@ import { normalizeThemeMode } from '../../lib/themeMode.js'
 import { createInitialState } from '../appStateBootstrap.js'
 import { TASK_STATUS } from '../taskStatus.js'
 import { writeSessionDraft } from '../../lib/chatDrafts.js'
+import { normalizeSessionTodos, todosSignature } from '../../lib/sessionTodos.js'
 import {
   activatePreviewTab,
   createPreviewTabState,
@@ -260,7 +261,12 @@ export function reduceTaskSettingsState(state, action) {
       // payload: { sessionId?, todos } — \u4e0d\u6307\u5b9a sessionId \u7528 activeSessionId
       const targetId = action.payload?.sessionId || state.activeSessionId
       if (!targetId) return state
-      const todos = Array.isArray(action.payload?.todos) ? action.payload.todos : []
+      const target = state.sessions.find((session) => session.id === targetId)
+      if (!target) return state
+      const todos = normalizeSessionTodos(action.payload?.todos)
+      // Streaming turns can repeat the same manage_todos list; do not churn the
+      // session (and re-open the plan card) when the list did not move.
+      if (todosSignature(target.todos) === todosSignature(todos)) return state
       return {
         ...state,
         sessions: state.sessions.map((s) =>

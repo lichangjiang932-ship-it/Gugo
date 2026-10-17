@@ -1,4 +1,4 @@
-import { Pause, Plus, Send, Square } from 'lucide-react'
+import { ArrowUp, Pause, Plus, Square } from 'lucide-react'
 import { useCallback, useEffect, useId, useRef } from 'react'
 import PopoverPortal from '../../../components/ui/PopoverPortal.jsx'
 import { isCompositionEvent } from '../../../lib/compositionEvent.js'
@@ -11,8 +11,13 @@ import { modelReadinessMessageKey } from '../chatModelReadiness.js'
 /**
  * 上下文用量圆环:满环 = 上下文窗口用满。颜色随用量变化:
  * 绿 < 60% · 琥珀 60-80% · 红 ≥ 80%。点击展开/收起详情面板。
+ *
+ * Three states, never two: an exact window draws a solid arc, a catalogue or
+ * default window draws a thinner arc plus `≈`, and no window at all draws only
+ * a dashed track. Hiding an estimated denominator made the ring say "unknown"
+ * next to a concrete percentage elsewhere.
  */
-function ContextRing({ percent, known = true }) {
+function ContextRing({ percent, known = true, estimated = false }) {
   const radius = 7
   const circumference = 2 * Math.PI * radius
   const clamped = Math.max(0, Math.min(100, Number(percent) || 0))
@@ -25,9 +30,11 @@ function ContextRing({ percent, known = true }) {
       ? 'rgb(var(--color-warning-rgb))'
       : 'rgb(var(--color-success-rgb))'
   return (
-    <svg width="16" height="16" viewBox="0 0 18 18" className="block" aria-hidden="true">
-      <circle cx="9" cy="9" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="2" />
-      <circle cx="9" cy="9" r={radius} fill="none" stroke={color} strokeWidth="2" strokeLinecap="butt" strokeDasharray={circumference} strokeDashoffset={offset} transform="rotate(-90 9 9)" />
+    <svg width="18" height="18" viewBox="0 0 18 18" className="block" aria-hidden="true" data-ring-state={!known ? 'unknown' : estimated ? 'estimated' : 'exact'}>
+      <circle cx="9" cy="9" r={radius} fill="none" stroke="currentColor" strokeOpacity={known ? 0.15 : 0.3} strokeWidth="2" strokeLinecap="round" />
+      {known && (
+        <circle data-testid="context-ring-arc" cx="9" cy="9" r={radius} fill="none" stroke={color} strokeWidth={estimated ? 1.5 : 2} strokeLinecap="butt" strokeDasharray={circumference} strokeDashoffset={offset} transform="rotate(-90 9 9)" />
+      )}
     </svg>
   )
 }
@@ -54,6 +61,7 @@ export default function ComposerActions({
   onOpenModelPicker,
   onSend,
   onToggleContext,
+  sendBlockedReason = '',
   sendDisabled,
   selectedModel,
   selectedModelProviderId,
@@ -84,17 +92,29 @@ export default function ComposerActions({
   const requestPause = typeof onPause === 'function' ? onPause : onAbort
   const hasDraftContent = hasDraftText || hasAttachments
   const primaryActionPausesTurn = isGenerating && !hasDraftContent
+  const localSendBlockedReason = primaryActionPausesTurn ? ''
+    : !hasDraftContent ? t('chatComposer.emptySend')
+      : isGenerating && !hasDraftText ? t('chatComposer.textOnly')
+        : ''
   const primaryActionLabel = primaryActionPausesTurn
     ? t('chatComposer.pause')
     : !isGenerating && readinessMessageKey
       ? t(readinessMessageKey)
       : t('chatComposer.send')
+  const primaryBlockedReason = primaryActionPausesTurn ? ''
+    : sendBlockedReason || localSendBlockedReason
+  const primaryDisabled = primaryActionPausesTurn ? false : (sendDisabled || Boolean(primaryBlockedReason))
+  const primaryTitle = primaryDisabled ? (primaryBlockedReason || primaryActionLabel) : primaryActionLabel
   const usage = contextUsage || {}
   const meter = resolveContextMeter(usage)
+  const windowKnown = meter.contextWindowKnown ?? meter.percent !== null
+  const windowEstimated = meter.contextWindowEstimated === true
   const percent = meter.percent === null ? 0 : Math.max(0, Math.min(100, meter.percent))
   const tokenSummary = `~${Math.ceil(meter.usedTokens).toLocaleString()} tokens`
-  const ringTitle = [t('chat.contextUsage.pendingContext'), formatContextPercent(meter.percent), tokenSummary,
-    meter.contextWindow ? `/ ${meter.contextWindow.toLocaleString()} tokens` : t('chat.contextUsage.windowUnknown')].filter(Boolean).join(' · ')
+  const formattedPercent = formatContextPercent(meter.percent)
+  const ringTitle = [t('chat.contextUsage.pendingContext'), formattedPercent, tokenSummary,
+    windowKnown ? `/ ${meter.contextWindow.toLocaleString()} tokens` : t('chat.contextUsage.windowUnknown'),
+    windowKnown ? t(windowEstimated ? 'chat.contextUsage.windowEstimated' : 'chat.contextUsage.windowExact') : null].filter(Boolean).join(' · ')
 
   useEffect(() => {
     if (!contextPanelOpen) return undefined
@@ -167,10 +187,10 @@ export default function ComposerActions({
             title={ringTitle}
             className={`chat-composer-action-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${contextPanelOpen ? 'bg-paper-2 text-ink' : 'text-ink-fade hover:bg-ink/[0.045] hover:text-ink'}`}
           >
-            <ContextRing percent={percent} known={meter.percent !== null} />
+            <ContextRing percent={percent} known={windowKnown} estimated={windowEstimated} />
           </button>
         </div>
-        {isGenerating && hasDraftText && (
+        {isGenerating && hasDraftContent && (
           <button
             type="button"
             data-testid="composer-stop-action"
@@ -186,14 +206,14 @@ export default function ComposerActions({
           type="button"
           data-testid="composer-primary-action"
           onClick={primaryActionPausesTurn ? requestPause : onSend}
-          disabled={primaryActionPausesTurn ? false : sendDisabled}
-          title={primaryActionLabel}
-          aria-label={primaryActionLabel}
-          className="chat-composer-primary-action flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ink/10 bg-paper-2 text-ink transition-colors hover:bg-ink/[0.07] disabled:cursor-not-allowed disabled:opacity-35"
+          disabled={primaryDisabled}
+          title={primaryTitle}
+          aria-label={primaryTitle}
+          className="chat-composer-primary-action flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ink-soft/20 bg-ink-soft text-paper shadow-[0_1px_2px_rgb(var(--color-ink-rgb)/0.14)] transition-[background-color,color,box-shadow,opacity] hover:bg-ink disabled:cursor-not-allowed disabled:border-ink/10 disabled:bg-ink/10 disabled:text-ink-fade disabled:opacity-100 disabled:shadow-none"
         >
           {primaryActionPausesTurn
             ? <Pause className="h-3.5 w-3.5" />
-            : <Send className="h-3.5 w-3.5" />}
+            : <ArrowUp className="h-4 w-4" strokeWidth={2.4} />}
         </button>
       </div>
     </div>

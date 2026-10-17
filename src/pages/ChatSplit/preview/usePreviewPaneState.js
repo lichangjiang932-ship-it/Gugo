@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isCompositionEvent } from '../../../lib/compositionEvent.js'
 import { isHtmlDeckLike } from '../../../lib/artifactPreview.js'
 import { previewArtifactTabId } from './previewTabs.js'
 import usePreviewContainerWidth from './usePreviewContainerWidth.js'
@@ -16,7 +17,7 @@ function readStoredWidth() {
   catch { return DEFAULT_PREVIEW_PANE_WIDTH }
 }
 
-export default function usePreviewPaneState({ artifact, onClose, paneRef }) {
+export default function usePreviewPaneState({ artifact, embedded = false, onClose, paneRef }) {
   const [view, setView] = useState('preview')
   const [maximized, updateMaximized] = useState(() => isPresentationArtifact(artifact))
   const [preferredWidth, setPreferredWidth] = useState(readStoredWidth)
@@ -36,7 +37,7 @@ export default function usePreviewPaneState({ artifact, onClose, paneRef }) {
     updateMaximized(value)
   }, [stopResize])
   const availableWidth = usePreviewContainerWidth(paneRef, stopResize)
-  const layout = previewPaneLayout(preferredWidth, availableWidth, maximized)
+  const layout = previewPaneLayout(preferredWidth, availableWidth, maximized, { embedded })
   const { paneWidth, overlay } = layout
   const setPaneWidth = useCallback((value) => {
     setPreferredWidth((current) => normalizePreviewPanePreference(typeof value === 'function'
@@ -50,14 +51,31 @@ export default function usePreviewPaneState({ artifact, onClose, paneRef }) {
   useEffect(() => {
     if (!onClose) return undefined
     const handleKeyDown = (event) => {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || event.defaultPrevented || isCompositionEvent(event)) return
+      const pane = paneRef.current
+      const activeElement = document.activeElement
+      // A nested dialog/popover owns Escape first. The enclosing workbench
+      // overlay is allowed through only because the preview itself lives inside
+      // it; a settings modal outside the pane is not.
+      const enclosingDialog = activeElement?.closest?.('[role="dialog"][aria-modal="true"]')
+      if (enclosingDialog && !enclosingDialog.contains(pane)) return
+      const outsideDialog = document.querySelector('[role="dialog"][aria-modal="true"]')
+      if (outsideDialog && !outsideDialog.contains(pane)) return
+      const outsidePopover = document.querySelector('[data-host-popover]')
+      if (outsidePopover && !outsidePopover.contains(pane)) return
+      const focusInside = Boolean(pane?.contains(activeElement))
+      // Embedded side previews do not steal Escape from the composer or a
+      // picker. A focused/overlay preview, a key press while it owns focus, or
+      // a document-level Escape with no focused control still closes; the
+      // legacy global-Escape test and keyboard dismissal use the latter.
+      if (!overlay && !maximized && !focusInside && activeElement !== document.body) return
       event.preventDefault()
       event.stopPropagation()
       onClose()
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+  }, [maximized, onClose, overlay, paneRef])
 
   useEffect(() => {
     if (artifact === previousArtifactRef.current) return

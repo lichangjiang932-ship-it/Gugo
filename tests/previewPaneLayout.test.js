@@ -16,6 +16,16 @@ test('split width reserves readable chat space in the main area after the rail',
   assert.equal(clampPreviewPaneWidth(520, 900), 420)
 })
 
+test('an embedded preview never becomes a focus overlay or reserves a split', () => {
+  for (const available of [320, 600, 800, 839]) {
+    const layout = previewPaneLayout(520, available, false, { embedded: true })
+    assert.equal(layout.focused, false, `embedded preview at ${available}px`)
+    assert.equal(layout.overlay, false)
+  }
+  // A deliberate full-screen preview still isolates, embedded or not.
+  assert.equal(previewPaneLayout(520, 600, true, { embedded: true }).overlay, true)
+})
+
 test('main areas too narrow for two usable panes focus preview without reserving a split', () => {
   for (const available of [320, 600, 800, 839]) {
     assert.equal(previewPaneLayout(520, available).focused, true)

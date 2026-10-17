@@ -87,6 +87,13 @@ export default function useChatCatalogState({
     && (!effectiveSelectedModelProviderId || model?.provider === effectiveSelectedModelProviderId)
   ))
   const selectedContextWindowAuthoritative = isAuthoritativeContextWindow(selectedModelOption)
+  // A window is "known" when the selected model actually carries one. The
+  // resolver's 128k fallback is still returned as a denominator, but it must not
+  // turn into a precise-looking ring for a model whose window is not known.
+  const selectedContextWindowKnown = Number(selectedModelOption?.contextWindow) > 0
+  const selectedContextWindowSource = String(selectedModelOption?.contextWindowSource || '')
+  const selectedContextWindowEstimated = selectedContextWindowKnown
+    && (selectedModelOption?.contextWindowEstimated === true || !selectedContextWindowAuthoritative)
 
   return {
     activeSession,
@@ -102,6 +109,9 @@ export default function useChatCatalogState({
     runtimeSkills,
     selectedContextWindow,
     selectedContextWindowAuthoritative,
+    selectedContextWindowEstimated,
+    selectedContextWindowKnown,
+    selectedContextWindowSource,
     selectedConfigRevision: Number.isInteger(selectedModelOption?.configRevision) ? selectedModelOption.configRevision : null,
     selectedModel,
     selectedModelProviderId,

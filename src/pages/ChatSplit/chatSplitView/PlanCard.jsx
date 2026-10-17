@@ -1,4 +1,5 @@
 import { X } from 'lucide-react'
+import { isCompositionEvent } from '../../../lib/compositionEvent.js'
 import WorkbenchPlan from '../rightWorkbench/WorkbenchPlan.jsx'
 
 /**
@@ -28,7 +29,7 @@ export default function PlanCard({ docked = false, onClose, onRevealTurn, sessio
       data-testid="plan-card"
       aria-label={t('workbench.planCardTitle')}
       onKeyDown={(event) => {
-        if (event.key !== 'Escape' || event.defaultPrevented) return
+        if (event.key !== 'Escape' || event.defaultPrevented || isCompositionEvent(event)) return
         event.preventDefault()
         onClose?.()
       }}

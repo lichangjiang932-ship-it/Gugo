@@ -1,4 +1,4 @@
-import { MessageSquare, PanelRight, Play } from 'lucide-react'
+import { PanelRight, Play } from 'lucide-react'
 import ProjectGlyph from '../../../components/ProjectGlyph.jsx'
 
 export function ChatSessionHeading({ hasWorkspace, title, workspacePath = '', ...headingAttributes }) {
@@ -6,7 +6,7 @@ export function ChatSessionHeading({ hasWorkspace, title, workspacePath = '', ..
   return <>
     {hasWorkspace && project
       ? <ProjectGlyph name={project} open className="chat-session-project-glyph" title={workspacePath} />
-      : <MessageSquare className="chat-session-face h-5 w-5 shrink-0" strokeWidth={1.8} aria-hidden="true" />}
+      : null}
     {/* project / conversation, as Codex and Claude Code show the thread's place:
         the project is context, the title is what this header is about. */}
     {hasWorkspace && project && (
@@ -30,9 +30,9 @@ export function ChatWorkbenchToggle({ open, ...buttonAttributes }) {
     {...buttonAttributes}
     type="button"
     data-open={open || undefined}
-    className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-soft hover:text-ink"
+    className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink hover:bg-ink/[0.05]"
   >
-    <PanelRight className="h-[18px] w-[18px]" strokeWidth={1.5} aria-hidden="true" />
+    <PanelRight className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden="true" />
   </button>
 }
 
@@ -48,9 +48,9 @@ export function ChatPreviewButton({ label, open, shortcut, ...buttonAttributes }
     {...buttonAttributes}
     type="button"
     data-open={open || undefined}
-    className="chat-chrome-button group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-soft hover:text-ink"
+    className="chat-chrome-button group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink hover:bg-ink/[0.05]"
   >
-    <Play className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+    <Play className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
     <span role="tooltip" data-testid="chat-preview-tip" className="chat-chrome-tip">
       <span>{label}</span>
       {shortcut && <span className="chat-chrome-tip-key">{shortcut}</span>}

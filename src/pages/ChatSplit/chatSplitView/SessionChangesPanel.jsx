@@ -3,6 +3,7 @@ import { FileDiff, MoreVertical, X } from 'lucide-react'
 import CurrentFileChange from '../../../components/CurrentFileChange.jsx'
 import DiffLines from '../../../components/DiffLines.jsx'
 import { countRecordedEditLines } from '../../../lib/sessionChanges.js'
+import { isCompositionEvent } from '../../../lib/compositionEvent.js'
 
 function EditBlock({ edit, t }) {
   return <DiffLines edit={edit} t={t} wrap className="max-h-72" />
@@ -42,7 +43,7 @@ export default function SessionChangesPanel({ review, t }) {
       aria-label={t('chat.changes.title')}
       data-testid="session-changes-panel"
       onKeyDown={(event) => {
-        if (event.key !== 'Escape' || event.defaultPrevented) return
+        if (event.key !== 'Escape' || event.defaultPrevented || isCompositionEvent(event)) return
         event.preventDefault()
         close?.()
       }}

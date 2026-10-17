@@ -1,0 +1,16 @@
+{
+  "startedAt": "2026-10-17T15:10:36.454Z",
+  "finishedAt": "2026-10-17T15:57:43.219Z",
+  "secondsApprox": 2827,
+  "files": 4284,
+  "aggregateBefore": "3567e70d16d3565a24c6402e2a88531e72db89aecd32e31e61b01a659612a989",
+  "aggregateAfter": "3567e70d16d3565a24c6402e2a88531e72db89aecd32e31e61b01a659612a989",
+  "hashesUnchanged": true,
+  "changedDuringRun": [],
+  "exitCode": 0,
+  "testFiles": 1201,
+  "finalResult": "PASS (1201 test file(s))",
+  "testConcurrency": 1,
+  "isolatedConcurrency": 1,
+  "note": "Run serially after two preview-server tests flaked under parallel port contention; the isolated rerun of that file passed. Zero top-level not-ok entries, final runner status PASS, and source/config/resource hashes identical before and after."
+}

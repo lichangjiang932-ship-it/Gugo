@@ -13,6 +13,9 @@ fs.mkdirSync(staticDir)
 fs.mkdirSync(siblingDir)
 fs.writeFileSync(path.join(staticDir, 'index.html'), '<!doctype html><title>app</title><script src="./app.js"></script>', 'utf8')
 fs.writeFileSync(path.join(staticDir, 'app.js'), 'export const ready = true', 'utf8')
+const fontBytes = fs.readFileSync(new URL('../node_modules/@fontsource-variable/noto-sans-sc/files/noto-sans-sc-latin-wght-normal.woff2', import.meta.url))
+fs.mkdirSync(path.join(staticDir, 'assets'))
+fs.writeFileSync(path.join(staticDir, 'assets', 'ui-font.woff2'), fontBytes)
 fs.writeFileSync(path.join(siblingDir, 'secret.html'), '<!doctype html><title>sibling secret</title>', 'utf8')
 fs.writeFileSync(path.join(tempDir, 'outside.txt'), 'outside the root', 'utf8')
 
@@ -28,7 +31,10 @@ function request(url) {
       captured.statusCode = statusCode
       captured.headers = headers || {}
     },
-    end(body) { captured.body = Buffer.isBuffer(body) ? body.toString('utf8') : String(body || '') },
+    end(body) {
+      captured.bytes = Buffer.isBuffer(body) ? body : Buffer.from(String(body || ''))
+      captured.body = captured.bytes.toString('utf8')
+    },
   }
   serveStatic({ url }, res, staticDir)
   return captured
@@ -43,6 +49,22 @@ test('static assets inside the root are served', () => {
   const asset = request('/app.js')
   assert.equal(asset.statusCode, 200)
   assert.equal(asset.body, 'export const ready = true')
+})
+
+test('WOFF2 static assets retain their exact bytes and font MIME type', () => {
+  const response = request('/assets/ui-font.woff2?v=5.3.1')
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.headers['Content-Type'], 'font/woff2')
+  assert.deepEqual(response.bytes, fontBytes)
+  assert.equal(response.headers['Cache-Control'], 'public, max-age=3600')
+})
+
+test('a missing WOFF2 asset is a 404, never the SPA index document', () => {
+  const response = request('/assets/missing-font.woff2')
+  assert.equal(response.statusCode, 404)
+  assert.equal(response.headers['Content-Type'], 'text/plain; charset=utf-8')
+  assert.equal(response.body, 'Not Found')
+  assert.doesNotMatch(response.body, /<!doctype|<script/iu)
 })
 
 test('a sibling directory sharing the root prefix is not reachable', () => {

@@ -1,0 +1,15 @@
+{
+  "unchangedPriorFiles": 63,
+  "changedPriorFiles": [
+    "docs/DEBT.md",
+    "src/components/SessionSearchModal.jsx",
+    "src/index.css",
+    "src/lib/artifactReferenceMarkdown.js",
+    "src/lib/artifactReferencePath.js",
+    "tests/unit/ModelConfigurationFlow.test.jsx",
+    "scripts/file-delivery-verification/offlineHttpGuard.mjs",
+    "scripts/file-delivery-verification/server.mjs",
+    "tests/fileDeliveryVerification.test.js",
+    "tests/unit/SessionSearchModal.test.jsx"
+  ]
+}

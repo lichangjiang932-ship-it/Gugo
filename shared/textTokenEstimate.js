@@ -43,3 +43,16 @@ export function textTokens(value) {
   for (const character of text) total += characterTokenWeight(character)
   return Math.ceil(total)
 }
+
+/** Same estimate across chunk boundaries; retain at most one surrogate, not text. */
+export function createStreamingTextTokenCounter() {
+  let total = 0, pending = ''
+  return chunk => {
+    let text = pending + String(chunk || '')
+    pending = ''
+    const last = text.charCodeAt(text.length - 1)
+    if (last >= 0xd800 && last <= 0xdbff) { pending = text.at(-1); text = text.slice(0, -1) }
+    for (const character of text) total += characterTokenWeight(character)
+    return Math.ceil(total + (pending ? 1 : 0))
+  }
+}

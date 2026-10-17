@@ -42,12 +42,14 @@ export function getModelProviders(env = process.env) {
   const ids = parseModelList(env.MODEL_PROVIDERS)
   const fromEnv = ids.map((id) => {
     const prefix = providerEnvPrefix(id)
+    const models = parseModelList(env[`${prefix}_MODELS`])
     return {
       id,
       label: env[`${prefix}_LABEL`]?.trim() || '',
       baseUrl: env[`${prefix}_BASE_URL`]?.trim() || '',
       apiKey: env[`${prefix}_API_KEY`]?.trim() || '',
-      models: parseModelList(env[`${prefix}_MODELS`]),
+      models,
+      modelProfiles: modelRuntimeProfiles(models, env, id),
       headers: parseHeaders(env[`${prefix}_HEADERS`]),
       profileOverrides: parseProfileOverrides(env[`${prefix}_PROFILE`]),
     }
@@ -64,7 +66,7 @@ export function getModelProviders(env = process.env) {
       baseUrl: String(provider.baseURL || ''),
       apiKey: resolveApiKey(id, provider, { env, credentials }).apiKey,
       models: (Array.isArray(provider.models) ? provider.models : []).filter(model => model?.enabled !== false).map((model) => String(model?.id || model || '')).filter(Boolean),
-      modelProfiles: modelRuntimeProfiles(provider.models, env),
+      modelProfiles: modelRuntimeProfiles(provider.models, env, id),
       headers: {},
       profileOverrides: protocolProfileOverrides(provider.api),
       api: String(provider.api || 'openai-completions'),

@@ -45,10 +45,21 @@ function createHarness({ platform = 'win32' } = {}) {
   const spawnOptions = []
   const treeKills = []
   const env = { COMSPEC: 'C:\\Windows\\system32\\cmd.exe', USERPROFILE: 'C:\\Users\\tester' }
+  const webListeners = new Map()
   const window = {
     isDestroyed: () => false,
     once(name, callback) { if (name === 'closed') closed.push(callback) },
-    webContents: { send(channel, payload) { sent.push({ channel, payload }) } },
+    webContents: {
+      send(channel, payload) { sent.push({ channel, payload }) },
+      once() {},
+      on(name, callback) {
+        if (!webListeners.has(name)) webListeners.set(name, [])
+        webListeners.get(name).push(callback)
+      },
+    },
+  }
+  const emitWeb = (name, ...args) => {
+    for (const callback of webListeners.get(name) || []) callback({}, ...args)
   }
   const host = createDesktopTerminalHost({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
@@ -73,7 +84,7 @@ function createHarness({ platform = 'win32' } = {}) {
 
   const trustedEvent = { senderFrame: { url: `${ORIGIN}/chat` }, sender: window.webContents }
   const invoke = (channel, payload, event = trustedEvent) => handlers.get(channel)(event, payload)
-  return { closed, env, host, invoke, ptys, sent, spawnOptions, treeKills, window }
+  return { closed, emitWeb, env, host, invoke, ptys, sent, spawnOptions, treeKills, window }
 }
 
 test('the shell to open is the one the platform actually has', () => {
@@ -100,12 +111,13 @@ test('windowsPty is reported only where ConPTY is the thing being talked to', ()
 })
 
 test('a session is started for the trusted frame only, sized within limits', () => {
-  const { invoke, ptys } = createHarness()
+  const { env, invoke, ptys } = createHarness()
   const started = invoke('desktop:terminal-start', { cols: 5000, rows: 1 })
 
   assert.equal(started.ok, true)
   assert.equal(started.id, 'terminal-1')
   assert.equal(started.shell, 'C:\\Windows\\system32\\cmd.exe')
+  assert.equal(started.cwd, env.USERPROFILE)
   // Compared against the resolver's own answer for this host's platform: the
   // build number comes from the machine actually running the test, so a literal
   // would only pass on the maintainer's Windows box.
@@ -193,7 +205,7 @@ test('a shell is reported as exited exactly once, whichever end killed it', () =
 test('a shell starts in the project the panel asked for, when that project still exists', () => {
   const { env, invoke, spawnOptions } = createHarness()
   const project = mkdtempSync(path.join(tmpdir(), 'gugo-terminal-cwd-'))
-  invoke('desktop:terminal-start', { cwd: project })
+  assert.equal(invoke('desktop:terminal-start', { cwd: project }).cwd, project)
   assert.equal(spawnOptions[0].cwd, project)
 
   // A stale path (deleted project, renamed folder) must not stop the terminal
@@ -249,6 +261,31 @@ test('ending a shell takes its process tree with it, and releases the pty either
   assert.deepEqual(failing.invoke('desktop:terminal-kill', { id: failingSession.id }), { ok: true })
   assert.equal(failing.ptys[0].killed, 1, 'the pty is released even when the tree kill throws')
   assert.equal(failing.host.sessions.size, 0)
+})
+
+test('a renderer reload or main-frame navigation does not leave an orphan shell', () => {
+  const { emitWeb, host, invoke, ptys } = createHarness()
+  const first = invoke('desktop:terminal-start', {})
+  invoke('desktop:terminal-start', {})
+  assert.equal(host.sessions.size, 2)
+
+  emitWeb('did-start-navigation', 'http://127.0.0.1:3210/chat', false, true)
+  assert.equal(host.sessions.size, 0)
+  assert.deepEqual(ptys.map((pty) => pty.killed), [1, 1])
+  assert.equal(invoke('desktop:terminal-write', { id: first.id, data: 'x' }).ok, false)
+
+  // A subframe navigating is not the panel reloading; it must not end the shell.
+  const next = invoke('desktop:terminal-start', {})
+  emitWeb('did-start-navigation', 'http://127.0.0.1:3210/frame', false, false)
+  assert.equal(host.sessions.has(next.id), true)
+})
+
+test('the renderer crashing takes its shells with it', () => {
+  const { emitWeb, host, invoke, ptys } = createHarness()
+  invoke('desktop:terminal-start', {})
+  emitWeb('render-process-gone', {}, { reason: 'crashed' })
+  assert.equal(host.sessions.size, 0)
+  assert.deepEqual(ptys.map((pty) => pty.killed), [1])
 })
 
 test('quitting releases every shell, and does so without throwing twice', () => {

@@ -7,6 +7,7 @@ import { promptCompilerDiagnosticsSchema } from '../../../shared/promptCompilerD
 import { modelContextUsageSchema } from '../../../shared/modelContextUsage.js'
 import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
 import { announceGoalPlanChanged, inspectGoalPlanSignal } from '../goalPlanSignals.js'
+import { manageTodosFromToolResult } from '../sessionTodos.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
 import { modelActivityFromPhase } from './modelActivityProgress.js'
 import {
@@ -376,6 +377,13 @@ export async function dispatchTurnEvent(sourceEvent, {
           : []
     for (const artifact of completedArtifacts) {
       onArtifact?.({ ...artifact, name: payload.name, toolCallId: payload.toolCallId })
+    }
+    // The task list is live state, not a tool trace. A failed call must not
+    // overwrite the last good list; an empty successful list clears it.
+    if (payload.name === 'manage_todos') {
+      const todos = manageTodosFromToolResult(payload.result, payload.args)
+      const sessionId = messageTarget?.sessionId || event.sessionId
+      if (todos && sessionId) dispatch?.({ type: 'SET_TODOS', payload: { sessionId, todos } })
     }
     cursorCommitted = true
   } else if (event.type === 'approval.required') {

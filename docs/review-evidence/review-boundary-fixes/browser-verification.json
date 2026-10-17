@@ -1,0 +1,95 @@
+{
+  "provider": {
+    "probes": [
+      {
+        "baseURL": "https://override-a.fixture.invalid/v1",
+        "api": "openai-completions",
+        "correctA": true,
+        "correctB": false
+      },
+      {
+        "baseURL": "https://b.fixture.invalid/v1",
+        "api": "anthropic-messages",
+        "correctA": false,
+        "correctB": true
+      }
+    ],
+    "credentials": [
+      {
+        "url": "/api/llm/providers/anthropic/credential",
+        "correctB": true
+      }
+    ],
+    "saved": [
+      {
+        "id": "anthropic",
+        "models": [
+          {
+            "id": "from-b"
+          }
+        ]
+      }
+    ]
+  },
+  "focus": [
+    {
+      "theme": "light",
+      "width": 1440,
+      "shadow": "rgb(87, 83, 78) 0px -2px 0px 0px inset",
+      "paper": "rgb(250, 249, 245)",
+      "focused": true,
+      "overflow": false,
+      "contrast": 7.241830847829202
+    },
+    {
+      "theme": "light",
+      "width": 360,
+      "shadow": "rgb(87, 83, 78) 0px -2px 0px 0px inset",
+      "paper": "rgb(250, 249, 245)",
+      "focused": true,
+      "overflow": false,
+      "contrast": 7.241830847829202
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "shadow": "rgb(212, 212, 216) 0px -2px 0px 0px inset",
+      "paper": "rgb(24, 24, 27)",
+      "focused": true,
+      "overflow": false,
+      "contrast": 11.986974864049339
+    },
+    {
+      "theme": "dark",
+      "width": 360,
+      "shadow": "rgb(212, 212, 216) 0px -2px 0px 0px inset",
+      "paper": "rgb(24, 24, 27)",
+      "focused": true,
+      "overflow": false,
+      "contrast": 11.986974864049339
+    },
+    {
+      "theme": "white",
+      "width": 1440,
+      "shadow": "rgb(75, 85, 99) 0px -2px 0px 0px inset",
+      "paper": "rgb(255, 255, 255)",
+      "focused": true,
+      "overflow": false,
+      "contrast": 7.557378129674007
+    },
+    {
+      "theme": "white",
+      "width": 360,
+      "shadow": "rgb(75, 85, 99) 0px -2px 0px 0px inset",
+      "paper": "rgb(255, 255, 255)",
+      "focused": true,
+      "overflow": false,
+      "contrast": 7.557378129674007
+    }
+  ],
+  "hostedInlineOpensRegisteredUrl": true,
+  "externalSnapshotBlocked": true,
+  "imeEscapePreservesDialog": true,
+  "nativeEscapeCloses": true,
+  "syntheticFetchOnly": true
+}

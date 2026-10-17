@@ -37,6 +37,16 @@ test('dark surfaces use dark elevation instead of an inverse white glow', () => 
   }
 })
 
+test('host typography uses the self-hosted variable font without replacing the original fallback or mono stack', () => {
+  const fallback = '-apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "Inter", "PingFang SC", "Microsoft YaHei", sans-serif'
+  assert.equal(styles.match(/--font-ui:\s*([^;]+);/u)?.[1], `"Noto Sans SC Variable", ${fallback}`)
+  assert.equal(styles.match(/--font-artifact-default:\s*([^;]+);/u)?.[1], fallback)
+  assert.match(styles, /^@import\s+["']@fontsource-variable\/noto-sans-sc["'];/u)
+  assert.doesNotMatch(styles, /NotoSansSC-Regular\.ttf|@import\s+url\(https?:/u)
+  assert.equal(styles.match(/--font-mono:\s*([^;]+);/u)?.[1], '"JetBrains Mono", "Noto Sans Mono CJK SC", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace')
+  assert.match(styles, /\.chat-markdown strong\s*\{[^}]*font-weight:\s*650;/u)
+})
+
 test('system typography and sidebar text share a readable scale without changing saved preferences', () => {
   assert.match(styles, /--font-ui:[^;]*Segoe UI[^;]*Microsoft YaHei/)
   assert.match(styles, /font-family: var\(--font-ui\)/)

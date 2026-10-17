@@ -5,6 +5,8 @@ import {
   decodedPathText,
   findArtifactReferenceByFilename,
   findArtifactReferenceByLocalPath,
+  findArtifactReferenceByRelativePath,
+  normalizeArtifactRelativePath,
   localFileHrefMatchesReference,
   normalizeArtifactLocalPath,
   sameArtifactReference,
@@ -57,7 +59,7 @@ function findFilenameMatch(value = '', references = [], fromIndex = 0) {
   return best
 }
 
-function markdownWithoutNonLinkableContent(content = '') {
+function markdownWithoutNonLinkableContent(content = '', preserveLinks = false) {
   const visibleLines = []
   let fence = null
   for (const line of String(content || '').split(/\r?\n/)) {
@@ -73,6 +75,7 @@ function markdownWithoutNonLinkableContent(content = '') {
     if (/^(?: {4}|\t)/.test(line)) continue
     visibleLines.push(line)
   }
+  if (preserveLinks) return visibleLines.join('\n')
   return visibleLines.join('\n')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[[^\]]*\]\([^)]*\)/g, '')
@@ -105,16 +108,21 @@ function absoluteFilePathSpans(value = '') {
 
 export function artifactHasInlineReference(content = '', artifact = {}, references = [artifact]) {
   const candidates = Array.isArray(references) && references.length > 0 ? references : [artifact]
-  if (artifactHasInlineLink(content, artifact, candidates)) return true
+  let linkedCode = false
+  const withoutCode = markdownWithoutNonLinkableContent(content, true).replace(/(`+)([\s\S]*?)\1(?!`)/g, (span, delimiter, value) => {
+    if (sameArtifactReference(inlineArtifactReference(value, candidates), artifact)) linkedCode = true
+    return ' '.repeat(span.length)
+  })
+  if (linkedCode || artifactHasInlineLink(withoutCode, artifact, candidates)) return true
   const filename = String(artifact?.filename || artifact?.title || '').trim()
   if (!filename) return false
-  const visibleContent = markdownWithoutNonLinkableContent(content)
+  const visibleContent = markdownWithoutNonLinkableContent(withoutCode)
   const absoluteSpans = absoluteFilePathSpans(visibleContent)
   for (const span of absoluteSpans) {
     const reference = findArtifactReferenceByLocalPath(candidates, span.path)
     if (sameArtifactReference(reference, artifact)) return true
   }
-  const maskedContent = [...visibleContent]
+  const maskedContent = visibleContent.split('')
   for (const span of absoluteSpans) {
     for (let index = span.start; index < span.end; index += 1) maskedContent[index] = ' '
   }
@@ -292,6 +300,12 @@ function persistedReferenceForLocalFileLink(node, references) {
   if (absoluteReference && artifactFilenameAliases(absoluteReference).some((alias) => alias.normalized === normalizedLabel)) {
     return absoluteReference
   }
+  const relativeHref = normalizeArtifactRelativePath(node.url)
+  const relativeLabel = normalizeArtifactRelativePath(label)
+  if (relativeHref && relativeLabel && relativeHref.toLowerCase() === relativeLabel.toLowerCase()) {
+    const relativeReference = findArtifactReferenceByRelativePath(references, relativeHref)
+    if (relativeReference) return relativeReference
+  }
   if (normalizeArtifactLocalPath(node.url)) return null
   return uniqueArtifactReference(references.filter((reference) => (
     reference?.url
@@ -300,16 +314,19 @@ function persistedReferenceForLocalFileLink(node, references) {
   )))
 }
 
+function inlineArtifactReference(value, references) {
+  const trimmed = String(value || '').trim()
+  if (normalizeArtifactLocalPath(trimmed)) return findArtifactReferenceByLocalPath(references, trimmed)
+  if (normalizeArtifactRelativePath(trimmed)) return findArtifactReferenceByRelativePath(references, trimmed)
+  return findArtifactReferenceByFilename(references, trimmed)
+}
+
 function linkArtifactNodes(parent, references, markdownSource) {
   if (!Array.isArray(parent?.children)) return
   parent.children = parent.children.flatMap((node) => {
     if (node?.type === 'text') return linkVerifiedAbsolutePaths(String(node.value || ''), references)
     if (node?.type === 'inlineCode') {
-      const source = String(node.value || '')
-      const trimmed = source.trim()
-      const reference = normalizeArtifactLocalPath(trimmed)
-        ? findArtifactReferenceByLocalPath(references, trimmed)
-        : findArtifactReferenceByFilename(references, trimmed)
+      const reference = inlineArtifactReference(node.value, references)
       if (!reference) return [node]
       return [{ type: 'link', url: reference.url, children: [node] }]
     }

@@ -37,6 +37,7 @@ export default function AssistantAnswer({
   artifactPreview,
   artifactReferences,
   canPresentDeliverables,
+  completionSummary = '',
   deliveryArtifacts,
   isCurrentStreamingMessage,
   isMessageComplete,
@@ -175,6 +176,7 @@ export default function AssistantAnswer({
               // every real call inside the round that asked for it.
               <AgentRoundList
                 artifacts={inlineFileReferences}
+                onLinkClick={openInlineArtifact}
                 onOpenArtifact={openToolArtifact}
                 rounds={rounds}
                 workspacePath={workspacePath}
@@ -198,6 +200,8 @@ export default function AssistantAnswer({
           <RuntimeRecoveryCard msg={msg} t={t} />
         ) : modelSetupFailure ? (
           <ModelSetupFailureCard msg={msg} onManageModels={onManageModels} t={t} />
+        ) : completionSummary ? (
+          <p className="chat-assistant-answer text-sm text-danger" data-testid="incomplete-task-notice" role="alert">{completionSummary}</p>
         ) : visibleAnswer ? (
           <div className="chat-assistant-answer">
             <MarkdownRenderer
@@ -228,7 +232,7 @@ export default function AssistantAnswer({
           msg={msg}
           preview={artifactPreview}
           onOpen={onOpenArtifact}
-          referenceContent={presentation.answer}
+          referenceContent={runtimeRestartRequired || modelSetupFailure ? '' : completionSummary || visibleAnswer}
           retainedLocalFileReferences={retainedLocalFileReferences}
           verifiedLocalFileReferences={verifiedLocalFileReferences}
         />

@@ -1,0 +1,83 @@
+{
+  "root": "C:\\Users\\21161\\AppData\\Local\\Temp\\gugo-direct-fix-gates2-LhF2Wu",
+  "results": [
+    {
+      "name": "lint",
+      "exitCode": 0,
+      "seconds": 43.156,
+      "log": "lint.log"
+    },
+    {
+      "name": "types-contracts",
+      "exitCode": 0,
+      "seconds": 1.342,
+      "log": "types-contracts.log"
+    },
+    {
+      "name": "types-protocol",
+      "exitCode": 0,
+      "seconds": 1.132,
+      "log": "types-protocol.log"
+    },
+    {
+      "name": "negative-types",
+      "exitCode": 0,
+      "seconds": 1.605,
+      "log": "negative-types.log"
+    },
+    {
+      "name": "debt",
+      "exitCode": 0,
+      "seconds": 0.936,
+      "log": "debt.log"
+    },
+    {
+      "name": "functions",
+      "exitCode": 0,
+      "seconds": 1.564,
+      "log": "functions.log"
+    },
+    {
+      "name": "i18n",
+      "exitCode": 0,
+      "seconds": 0.309,
+      "log": "i18n.log"
+    },
+    {
+      "name": "i18n-keys",
+      "exitCode": 0,
+      "seconds": 0.168,
+      "log": "i18n-keys.log"
+    },
+    {
+      "name": "dependencies",
+      "exitCode": 0,
+      "seconds": 0.233,
+      "log": "dependencies.log"
+    },
+    {
+      "name": "licenses",
+      "exitCode": 0,
+      "seconds": 0.147,
+      "log": "licenses.log"
+    },
+    {
+      "name": "offline-eval",
+      "exitCode": 0,
+      "seconds": 126.929,
+      "log": "offline-eval.log"
+    },
+    {
+      "name": "isolated-build",
+      "exitCode": 0,
+      "seconds": 5.004,
+      "log": "isolated-build.log"
+    },
+    {
+      "name": "diff-check",
+      "exitCode": 0,
+      "seconds": 0.122,
+      "log": "diff-check.log"
+    }
+  ]
+}

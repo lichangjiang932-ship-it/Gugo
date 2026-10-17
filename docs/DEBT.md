@@ -5,6 +5,78 @@ as `A3`, `S4`, or `M3.5` found in old comments describe delivery milestones and
 must not be reused as debt identifiers. New entries use `DEBT-<AREA>-NNN`, link
 to reproducible evidence, and define an observable exit condition.
 
+## DEBT-LINK-001 — Cross-turn trusted file references
+
+**Status:** Open
+**Priority:** P2
+**Area:** File delivery / message rendering
+
+**Evidence / reproduction:** A later assistant message containing `docs/guide.html` but carrying no current `verifiedLocalFiles` or `serverArtifacts` has no trusted reference to resolve. The current per-message renderer intentionally does not infer filesystem access from prose. Hosted-only references within their own delivery turn and external-URL origin confusion are addressed by `tests/artifactReferenceBoundary.test.js`; that fix does not authorize cross-turn lookup.
+
+**Exit criteria:** Define a trusted session-level file index keyed by backend/owner/session and durable receipt identity. Cover reload, file replacement/deletion, revocation, ambiguous names, stale responses and cross-owner/session negative tests. Resolve only persisted, authorized deliveries; never scan arbitrary message text or read unknown paths during render. Obtain a separate scope decision before implementing this index.
+
+**Verification:** Add dedicated index and real-component tests before closing. Current report: `review-evidence/review-boundary-fixes/README.md`.
+
+## DEBT-SEARCH-001 — Worst-case local history scan cost
+
+**Status:** Open
+**Priority:** P2
+**Area:** Local session search
+
+**Evidence / reproduction:** Local work now runs inside the cancellable 250ms search debounce, not synchronously on every keystroke or while closed, and still supplements server results with unsynced messages. The getter is read through a ref so streamed session updates no longer restart the debounce; loading is derived from the settled query. A no-match scan can nevertheless visit all local messages; no incremental index, worker or chunked scheduler has been added.
+
+**Exit criteria:** Measure agreed synthetic history sizes and implement bounded/cancellable or indexed local search without hiding older results. Preserve backend/owner/session isolation and server/local deduplication, and report latency/work counts rather than unmeasured FPS claims.
+
+**Verification:** `tests/unit/SessionSearchWork.test.jsx`, `tests/unit/SidebarSearchResults.test.jsx`, `tests/unit/SessionSearchModal.test.jsx`; current debounce and stale-query behavior is covered, large-history single-scan cost remains open.
+
+## DEBT-UI-002 — Agent template keyboard activation and verification
+
+**Status:** Open
+**Priority:** P2
+**Area:** Agent template selection
+
+**Evidence / reproduction:** At `648fd1b`, template selection is attached to a non-focusable li and the icon-only close action has no accessible name. The new real-component regression failed before the fix. The li now contains a native button and the close action uses a shared zh/en key; targeted DOM tests pass, but native browser activation has not been accepted yet.
+
+**Exit criteria:** Native Tab/Enter/Space can select and use the correct template, Escape respects composition, focus returns to the launcher, and the existing appearance is preserved. Frozen regression gates passed (1182 test files, exit 0, 3195 source/config hashes unchanged). Keep this debt open while browser verification is blocked.
+
+**Verification:** `tests/unit/AgentTemplateModal.test.jsx`, `tests/unit/Modal.test.jsx`, `tests/unit/SettingsModalFocus.test.jsx`; current evidence: `review-evidence/isolated-web-agent-template/verification.json`. The preview tool returned a different launch configuration on three attempts (including after directory/settings reload); all owned starts were stopped, and no visual/native-keyboard PASS is claimed.
+
+## DEBT-VERIFY-001 — Reusable isolated Web verification
+
+**Status:** Open
+**Priority:** P2
+**Area:** Verification tooling
+
+**Evidence / reproduction:** `GUGO_LOAD_DOTENV=0` disables the explicit Vite loadEnv call but not Vite's own automatic env loading. The new opt-in `scripts/verify-isolated-web.mjs` additionally uses envDir=false, a sanitized child environment, isolated home/data/workspace/output roots, and build/preview only (no development backend). Direct worker invocation is now rejected without parent IPC; the worker validates the full environment and project cwd before importing Vite. Synthetic dotenv tests, polluted/invalid CLI rejection, and a production CLI build from an unrelated cwd pass. The synthetic dotenv fixture does not prove every future mutation of the production config's manual loadEnv gate would be caught.
+
+**Exit criteria:** The isolated entry remains fail-closed, preserves project-anchored CSS configuration, and can launch a correctly identified preview for native UI acceptance without touching real credentials, configuration, sessions or data. Ordinary application startup remains unchanged.
+
+**Verification:** `tests/isolatedWebVerification.test.js`, `tests/desktopSmokeEnvironment.test.js`, `tests/devServerRoutes.test.js`; `review-evidence/isolated-web-agent-template/verification.json`. Browser launch is currently blocked by the host configuration mismatch, not counted as an isolated-preview PASS.
+
+## DEBT-VERIFY-003 — Unattributed command mutations outside a verifiable project
+
+**Status:** Open
+**Priority:** P2
+**Area:** Post-mutation acceptance / artifact helper execution
+
+**Evidence / reproduction:** A script executed without authoritative changedPaths/expected_outputs can leave the conservative `<workspace>` mutation target. Independently validated PPT/helper file receipts do not prove that an arbitrary command touched no other files. Host recovery now uses an already-enabled canonical `git_status` at the explicit project root, then reads the concrete files, but it does not enable Git permission, invent a repository, or accept selected output receipts as whole-workspace proof. A non-Git or permission-denied workspace can still correctly remain incomplete. Dirty pre-existing project files may also enlarge the verification set. Common credential/config/private-key inventory entries are not automatically read into model tool results and remain pending; this is a conservative blocklist, not a complete data-loss-prevention boundary.
+
+**Exit criteria:** Add a bounded, authorized before/after change inventory or an equally strong execution receipt for unattributed non-Git commands, with owner/session/root binding, ignored/untracked paths, deletion and stale-evidence tests. Do not waive the workspace target by extension, filename, or the mere existence of deliverables. Prefer explicit expected_outputs where appropriate; never rerun generation just to create verification evidence.
+
+**Verification:** `tests/automaticMutationVerification.test.js`, `tests/toolLoopExecutionRegression.test.js`; current scope and limits: `CONVERSATION_RUNTIME_HARDENING_2026-10-17.md`.
+
+## DEBT-VERIFY-002 — Live file-delivery acceptance is unavailable
+
+**Status:** Open
+**Priority:** P2
+**Area:** Explicit model-backed acceptance tooling
+
+**Evidence / reproduction:** The approved file-link/font verification attempted a read-only current-model binding, but the session permission policy denied that action. No real model request was issued. The new CLI rejects `--live` before broker access, and direct host composition rejects non-null model bindings before env/runtime setup. Synthetic broker/transport tests are not live task success. See `review-evidence/file-links-font-live/README.md` and `tests/fileDeliveryVerification.test.js`.
+
+**Exit criteria:** Obtain access through the normal permission process; complete exactly-three-task admission with task-specific restrictive tools, shared physical-request accounting, cancellation/approval-denial/unknown-result stop wiring, and faithful effective endpoint profile projection. Then verify production Turn → real receipts/artifacts → persisted messages → DOM links → open/download bytes → same-session reload using an isolated host. Do not enable live merely by removing the fail-closed guards. No automatic retry after unknown outcomes or provider switching.
+
+**Verification:** `tests/fileDeliveryModelBinding.test.js`, `tests/fileDeliveryVerification.test.js`, `tests/hostVerificationPolicy.test.js`; browser and model evidence must remain separately reported. Normal product model configuration is not disabled by this verification-only restriction. The verification host no longer attaches Turn WebSocket consumers, rejects upgrade requests through its own transport plugin, and no longer exports a credential-to-process-environment projection. Any future live path must use an explicitly reviewed in-memory transport rather than reintroducing credential environment variables.
+
 ## DEBT-COUPLING-001 — Shared Loop dependency/state surface
 
 **Status:** Open

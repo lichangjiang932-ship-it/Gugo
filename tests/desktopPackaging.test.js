@@ -32,6 +32,7 @@ const read = (relativePath) => fs.readFileSync(new URL(`../${relativePath}`, imp
 
 test('desktop package keeps Electron isolated from renderer content', () => {
   const main = read('desktop/main.js')
+  const clipboardIpc = read('desktop/clipboardIpc.js')
   const mainWindowSecurity = read('desktop/mainWindowSecurity.js')
   const appServer = read('server/appServer.js')
   const preload = read('desktop/preload.cjs')
@@ -40,8 +41,9 @@ test('desktop package keeps Electron isolated from renderer content', () => {
   assert.match(main, /sandbox:\s*true/)
   assert.match(main, /webviewTag:\s*false/)
   assert.match(main, /assertTrustedIpc/)
-  assert.match(main, /desktop:write-clipboard-text/)
-  assert.match(main, /clipboard\.writeText/)
+  assert.match(clipboardIpc, /desktop:write-clipboard-text/)
+  assert.match(clipboardIpc, /clipboard\.writeText/)
+  assert.match(clipboardIpc, /assertTrusted\(event\)/)
   assert.match(mainWindowSecurity, /setWindowOpenHandler/)
   assert.match(mainWindowSecurity, /will-navigate/)
   assert.match(mainWindowSecurity, /will-redirect/)

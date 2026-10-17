@@ -45,9 +45,9 @@ export default function SessionChangesReview({ review, t }) {
         aria-label={t('chat.changes.toggle')}
         title={count > 0 ? t('chat.changes.toggleCount', { count }) : t('chat.changes.toggle')}
         data-testid="session-changes-toggle"
-        className={`chat-chrome-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-ink-soft hover:text-ink ${count > 0 ? 'chat-changes-chip' : ''}`}
+        className={`chat-chrome-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control px-1.5 text-xs text-ink hover:bg-ink/[0.05] ${count > 0 ? 'chat-changes-chip' : ''}`}
       >
-        <FileDiff className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+        <FileDiff className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
         {/* Codex's diff stat: the size of what changed, in the colours of a diff. */}
         {count > 0 && (
           <span className="flex items-center gap-1 font-mono tabular-nums" aria-hidden="true" data-testid="session-changes-stat">

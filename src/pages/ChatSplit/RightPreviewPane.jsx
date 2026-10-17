@@ -81,14 +81,19 @@ export default function RightPreviewPane({
     onClose?.()
   }, [onClose, restoreTriggerFocus])
 
-  const pane = usePreviewPaneState({ artifact: activeArtifact, onClose: closePane, paneRef })
+  const pane = usePreviewPaneState({ artifact: activeArtifact, embedded, onClose: closePane, paneRef })
 
   useEffect(() => {
     if (!pane.overlay) return
     const activeElement = document.activeElement
     const main = paneRef.current?.closest('[data-chat-main-area]')
-    const targets = [main?.querySelector('.chat-main-pane'),
-      pane.maximized ? main?.parentElement?.querySelector(':scope > .left-rail') : null]
+    // The workbench's modal focus trap already isolates every background
+    // sibling. Restoring the same attribute from two owners in undefined order
+    // left the chat inert after closing the preview, so only the trap owns it
+    // when this pane is rendered inside its dialog.
+    const enclosingModal = paneRef.current?.closest('[role="dialog"][aria-modal="true"]')
+    const targets = (enclosingModal ? [] : [main?.querySelector('.chat-main-pane'),
+      pane.maximized ? main?.parentElement?.querySelector(':scope > .left-rail') : null])
       .filter(Boolean).map((element) => ({ element, hadInert: element.hasAttribute('inert'), ariaHidden: element.getAttribute('aria-hidden') }))
     for (const { element } of targets) {
       element.setAttribute('inert', '')

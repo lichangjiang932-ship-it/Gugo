@@ -1,0 +1,51 @@
+{
+  "first": {
+    "title": "待发送上下文（估算） · 18% · ~18,234 tokens · / 100,000 tokens",
+    "fraction": 0.18234000000000006
+  },
+  "growing": {
+    "title": "待发送上下文（估算） · 19% · ~18,919 tokens · / 100,000 tokens",
+    "fraction": 0.18918999999999997
+  },
+  "concurrent": {
+    "aOpen": true,
+    "bStarted": true,
+    "distinctSessions": true
+  },
+  "aCompletesSeparately": true,
+  "compact": {
+    "summary": "任务尚未完全通过验证。已完成的本地修改会保留；请检查后继续。",
+    "color": "rgb(180, 35, 24)",
+    "expected": "180 35 24",
+    "cards": 2,
+    "codeVisible": false,
+    "missingVisible": false,
+    "diagnosticsKept": true
+  },
+  "realProvider": false,
+  "calls": {
+    "aOpen": false,
+    "calls": [
+      {
+        "marker": "A",
+        "model": "runtime-fixture",
+        "stream": true
+      },
+      {
+        "marker": "B",
+        "model": "runtime-fixture",
+        "stream": true
+      },
+      {
+        "marker": "title",
+        "model": "runtime-fixture",
+        "stream": false
+      },
+      {
+        "marker": "title",
+        "model": "runtime-fixture",
+        "stream": false
+      }
+    ]
+  }
+}

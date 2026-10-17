@@ -31,6 +31,7 @@ const MIME_TYPES = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
 }
 
 function send(res, statusCode, body, headers = {}) {
@@ -59,9 +60,14 @@ export function serveStatic(req, res, staticDir) {
     return
   }
 
-  const finalPath = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
-    ? filePath
-    : path.join(root, 'index.html')
+  const isFile = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
+  // A missing font is an asset failure, not an SPA navigation. Returning the
+  // index here conceals broken font URLs behind a successful HTML response.
+  if (!isFile && path.extname(filePath) === '.woff2') {
+    send(res, 404, 'Not Found', { 'Content-Type': 'text/plain; charset=utf-8' })
+    return
+  }
+  const finalPath = isFile ? filePath : path.join(root, 'index.html')
   const ext = path.extname(finalPath)
   const headers = {
     'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',

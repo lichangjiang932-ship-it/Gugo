@@ -1,0 +1,56 @@
+{
+  "kind": "relative-path-file-links-on-real-instance",
+  "date": "2026-10-17",
+  "base": "648fd1bbae8be698f2d0473fc1beba962ca1398a",
+  "status": "verified-on-real-5175-instance",
+  "problem": "inline-code repository-relative paths were treated as inline references for fallback suppression but were never rendered as links",
+  "fix": {
+    "relativePathResolution": "only against verified absolute receipts with a unique path suffix",
+    "inlineCode": true,
+    "plainText": "bare filename behavior unchanged; relative full paths resolve when unique",
+    "explicitRelativeMarkdownLink": "rewritten only when visible label equals href",
+    "protectedUrlAndAmbiguityGuardsRetained": true,
+    "supersededManagedArtifactHref": "resolved to the verified local file only when the receipt carries a persisted relatedArtifactIds association and the filename matches; unassociated protected URLs stay blocked",
+    "duplicateFallbackCard": "suppressed once the inline link resolves"
+  },
+  "adjacentFix": {
+    "issue": "chat main pane stayed inert after closing a focused preview inside the workbench overlay",
+    "cause": "preview pane and modal focus trap both restored the same inert attribute in conflicting order",
+    "resolution": "inside the overlay dialog only the modal focus trap owns background isolation"
+  },
+  "realInstance": {
+    "url": "http://localhost:5175/#/chat",
+    "isolatedEnvironment": false,
+    "existingSessionChecked": "48ffc084-2cd4-4d9a-89ba-43fdbbcdec25",
+    "existingChatAndFilesPreserved": true,
+    "existingFileLinkOpenedContent": true,
+    "newModel": "mimo-v2.6-flash",
+    "newTurnTools": 3,
+    "newTurnLatencyMs": 30822,
+    "newTurnVerifiedFileLink": "docs/link-check-2026-10-17.md",
+    "newTurnLinkOpenedRealBytes": true,
+    "existingHtmlSessionChecked": "e339c6a8-5bf9-4c66-97ff-0540fed33d40",
+    "existingHtmlInlineLinkNowClickable": true,
+    "existingHtmlDuplicateCardSuppressed": true,
+    "testFileRemovedAfterVerification": true,
+    "testConversationRetained": true,
+    "realModelTurns": 1,
+    "realCredentialOrSessionContentPrinted": false
+  },
+  "targeted": {
+    "artifactReferenceLinks": { "tests": 48, "exitCode": 0 },
+    "previewPaneLayout": { "tests": 8, "exitCode": 0 },
+    "mergedNeighbors": { "files": 6, "tests": 89, "exitCode": 0, "logRoot": "gugo-link-final-neighbors-oJKZbs" },
+    "eslintChangedFiles": 0
+  },
+  "notVerified": [
+    "cross-turn inference for older messages without receipts",
+    "real provider pagination",
+    "provider target race",
+    "Electron package",
+    "OS sandbox",
+    "long-term performance",
+    "isolated full freeze (interrupted; not a PASS)"
+  ],
+  "git": { "staged": false, "committed": false, "pushed": false, "pullRequestCreated": false, "packaged": false, "released": false }
+}

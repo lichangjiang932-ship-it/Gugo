@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 import DiffReviewPanel from '../../src/pages/ChatSplit/rightWorkbench/diffReview/DiffReviewPanel.jsx'
 import { PreviewHeader } from '../../src/pages/ChatSplit/preview/PreviewChrome.jsx'
 import FileIdentity from '../../src/pages/ChatSplit/preview/FileIdentity.jsx'
-import { SourceView } from '../../src/pages/ChatSplit/preview/ArtifactRenderers.jsx'
+import { DocxPreview, HtmlPreview, PptxPreview, SourceView, XlsxPreview } from '../../src/pages/ChatSplit/preview/ArtifactRenderers.jsx'
 import DirectFilePreview from '../../src/pages/ChatSplit/preview/DirectFilePreview.jsx'
 const t = key => key
 async function mount(node) {
@@ -67,6 +67,52 @@ test('source defaults to unwrapped reading and retains exact whitespace and newl
     assert.equal(view.element.querySelector('pre').getAttribute('data-wrap'), 'true')
   } finally { await view.close() }
 })
+test('only the same-page DOCX fallback body and XLSX content root keep the original default font', async () => {
+  const view = await mount(<div>
+    <button data-host-chrome>Preview</button>
+    <DocxPreview title="Document title" blocks={[
+      { type: 'heading', text: 'Heading' },
+      { type: 'paragraph', text: '正文 body' },
+      { type: 'bullet', text: <span data-authored-font style={{ fontFamily: 'Georgia' }}>Authored font</span> },
+    ]} />
+    <XlsxPreview rows={[
+      ['Name', 'Value'],
+      ['正文 cell', <span data-authored-font style={{ fontFamily: 'Tahoma' }}>Authored cell</span>],
+    ]} />
+    <SourceView content="const exact = 1" />
+  </div>)
+  try {
+    const body = [...view.element.querySelectorAll('.chat-document-page p')].find(node => node.textContent === '正文 body').parentElement
+    const workbook = view.element.querySelector('table').parentElement
+    assert.equal(body.style.fontFamily, 'var(--font-artifact-default)')
+    assert.equal(workbook.style.fontFamily, 'var(--font-artifact-default)')
+    assert.equal(view.element.querySelector('.chat-document-page').style.fontFamily, '')
+    assert.equal(view.element.querySelector('.font-display').style.fontFamily, '', 'the document title retains its display face')
+    assert.equal(view.element.querySelector('[data-host-chrome]').style.fontFamily, '')
+    assert.equal(body.querySelector('p').style.fontFamily, '', 'do not stamp a font onto descendants')
+    assert.equal(workbook.querySelector('td').style.fontFamily, '')
+    assert.deepEqual([...view.element.querySelectorAll('[data-authored-font]')].map(node => node.style.fontFamily), ['Georgia', 'Tahoma'])
+    assert.ok([...workbook.querySelectorAll('.font-mono')].every(node => node.style.fontFamily === ''), 'row numbers keep their mono utility')
+    assert.ok(view.element.querySelector('pre.font-mono'))
+    assert.equal(view.element.querySelector('pre').style.fontFamily, '')
+  } finally { await view.close() }
+})
+
+test('HTML and presentation iframe documents do not inherit the host font or fallback boundary', async () => {
+  const html = '<!doctype html><html><head><style>body{font-family:Georgia,serif}</style></head><body><p>Authored HTML</p></body></html>'
+  const view = await mount(<div><HtmlPreview html={html} /><PptxPreview content="# Slide\n\nAuthored presentation" /></div>)
+  try {
+    const frames = [...view.element.querySelectorAll('iframe')]
+    assert.equal(frames.length, 2)
+    for (const frame of frames) {
+      assert.equal(frame.style.fontFamily, '')
+      assert.doesNotMatch(frame.getAttribute('srcdoc'), /Noto Sans SC Variable|--font-ui|--font-artifact-default|@fontsource/u)
+    }
+    assert.match(frames[0].getAttribute('srcdoc'), /font-family:Georgia,serif/u)
+    assert.match(frames[1].getAttribute('srcdoc'), /font-family/u)
+  } finally { await view.close() }
+})
+
 test('Markdown file typography is scoped to the reader without changing authored content', async () => {
   const originalFetch = globalThis.fetch
   const markdown = '# Heading\n\n`LONG_FILE_NAME.md`\n\n| Name | Result |\n| --- | --- |\n| 示例 | PASS |'

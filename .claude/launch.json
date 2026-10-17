@@ -7,6 +7,19 @@
       "runtimeArgs": ["run", "dev", "--", "--host", "127.0.0.1", "--port", "5175"],
       "port": 5175,
       "autoPort": true
+    },
+    {
+      "name": "gugo-file-delivery-offline",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/verify-file-delivery.mjs", "--serve", "--port", "5181"],
+      "port": 5181,
+      "url": "http://127.0.0.1:5181"
+    },
+    {
+      "name": "gugo-isolated-verification",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/verify-isolated-web.mjs", "--preview", "--port", "5179"],
+      "port": 5179
     }
   ]
 }

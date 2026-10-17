@@ -19,7 +19,7 @@ test('chat composer keeps only essential input controls', () => {
   assert.match(composerSource, /<PermissionModeSwitcher/)
   assert.match(composerSource, /<ModelPicker/)
   assert.match(composerSource, /data-testid="context-ring"/)
-  assert.match(composerSource, /<Send/)
+  assert.match(composerSource, /<ArrowUp/)
   assert.doesNotMatch(composerSource, />Enter<\/span>/)
   assert.doesNotMatch(
     composerSource,

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import RequestCacheUsage from '../../src/pages/ChatSplit/chatMessages/RequestCacheUsage.jsx'
-import ContextUsagePanel from '../../src/pages/ChatSplit/chatMessages/ContextUsagePanel.jsx'
 import { translateKey } from '../../src/i18n/translations.js'
 
 const t = (key) => translateKey(key, 'en')
@@ -29,10 +28,9 @@ test('genuine zero and actual cache writes are preserved independently', () => {
 })
 
 test('ratio uses the reported request input, never the client context estimate', () => {
-  const html = renderToStaticMarkup(<ContextUsagePanel contextUsage={{
-    estimatedTokens: 20_000, actualPromptTokens: 1000, contextWindow: 32_000,
-    modelUsage: { promptTokens: 1000, cacheHitTokens: 800, cacheCreationTokens: 100, uncachedInputTokens: 100 },
-  }} contextWindow={32_000} t={t} />)
+  const html = render({
+    promptTokens: 1000, cacheHitTokens: 800, cacheCreationTokens: 100, uncachedInputTokens: 100,
+  })
   assert.match(html, /Latest request cache/)
   assert.match(html, /80%/)
   assert.doesNotMatch(html, /~800|~100/)

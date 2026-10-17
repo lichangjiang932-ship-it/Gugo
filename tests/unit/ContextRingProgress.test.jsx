@@ -13,6 +13,7 @@ function Harness({ retained = 7000, input = '', selectedModel = 'm', known = tru
     configuredModelName: 'm', configuredProviderId: 'p', configRevision: null, contextWindow: 10000, inputEstimatedTokens: 8000, inputTokens: 8000, retainedEstimatedTokens: retained }
   const messages = [{ id: 'u', role: 'user', content: 'fixture' }, { id: 'a', role: 'assistant', content: 'fixture answer', meta: { modelContextUsage: observation, modelUsage: { promptTokens: 9999999, cacheHitTokens: 9999999 } } }]
   const usage = useChatContextUsage({ messages, contextToolSpecs: [], contextSystemPrompt: '', contextWindow: 20000, contextWindowAuthoritative: known,
+    contextWindowKnown: known, contextWindowEstimated: false,
     input, selectedModel, selectedModelProviderId: 'p', recoveryOwnerScope: 'fixture', activeSessionId: 's' })
   return <ComposerActions contextUsage={usage} approvalMode="normal" contextPanelOpen={open} onToggleContext={() => setOpen(value => !value)} fileInputRef={ref}
     modelPickerOpen={false} modelOptions={[]} isGenerating={false} onApprovalModeChange={() => {}} t={t} />
@@ -23,7 +24,10 @@ test('the production composer arc tracks 0/25/70/99%, draft growth and compactio
   const root = createRoot(document.getElementById('root'))
   context.after(async () => { await act(async () => root.unmount()); dom.window.close() })
   const render = async props => { await act(async () => root.render(<I18nProvider><Harness {...props} /></I18nProvider>)) }
-  const fraction = () => { const arc = document.querySelector('[data-testid=context-ring] circle:last-child'); return 1 - Number(arc.getAttribute('stroke-dashoffset')) / Number(arc.getAttribute('stroke-dasharray')) }
+  const fraction = () => {
+    const arc = document.querySelector('[data-testid=context-ring-arc]')
+    return arc ? 1 - Number(arc.getAttribute('stroke-dashoffset')) / Number(arc.getAttribute('stroke-dasharray')) : 0
+  }
   for (const percent of [0, 25, 70, 99]) {
     await render({ retained: percent * 100 })
     assert.ok(Math.abs(fraction() - percent / 100) < .0001)

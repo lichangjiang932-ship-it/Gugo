@@ -23,8 +23,12 @@ export function clampPreviewPaneWidth(value, availableWidth = previewViewportWid
   return Math.min(previewPaneMaxWidth(availableWidth), normalizePreviewPanePreference(value))
 }
 
-export function previewPaneLayout(preferredWidth, availableWidth, maximized = false) {
-  const focused = !maximized && availableWidth < MIN_SPLIT_PREVIEW_WIDTH
+export function previewPaneLayout(preferredWidth, availableWidth, maximized = false, { embedded = false } = {}) {
+  // An embedded preview lives inside the right workbench region, not over the
+  // chat. It must not "focus" merely because the main area is narrow: the region
+  // still owns its own layout, and inerting the composer there made the chat
+  // unclickable while the preview was visibly only a side pane.
+  const focused = !maximized && !embedded && availableWidth < MIN_SPLIT_PREVIEW_WIDTH
   return {
     focused,
     overlay: maximized || focused,

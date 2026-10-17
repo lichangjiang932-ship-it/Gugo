@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-17",
+  "baseline": "648fd1b",
+  "scope": [
+    "send button and blocked-send feedback",
+    "live task list in header, plan card and transcript",
+    "desktop terminal session lifetime, cwd, focus, clipboard and exit handling",
+    "real context-window provenance from the bundled model catalogue",
+    "preview/IME/escape interactions and task-center stale/unauthorized states"
+  ],
+  "tests": {
+    "focused": [
+      "tests/unit/ComposerPrimaryAction.test.jsx",
+      "tests/unit/ChatComposerFocus.test.jsx",
+      "tests/unit/ChatSendActionsFeedback.test.js",
+      "tests/unit/ChatComposerSlashMenu.test.jsx",
+      "tests/unit/DirectoryApprovalModal.test.jsx",
+      "tests/unit/PreviewPaneLayout.test.jsx",
+      "tests/unit/RightPreviewPane.test.jsx",
+      "tests/sessionTodos.test.js",
+      "tests/unit/ConversationTodoList.test.jsx",
+      "tests/desktopTerminalHost.test.js",
+      "tests/desktopTerminalSessions.test.js",
+      "tests/unit/PtyTerminalPanel.test.jsx",
+      "tests/unit/RightWorkbenchTerminal.test.jsx",
+      "tests/bundledModelCatalog.test.js",
+      "tests/contextWindowTruth.test.js",
+      "tests/unit/ContextUsagePanel.test.jsx",
+      "tests/unit/ContextRingProgress.test.jsx",
+      "tests/unit/ContextMeterDraft.test.jsx",
+      "tests/unit/LiveContextPipeline.test.jsx",
+      "tests/taskRunSelection.test.jsx",
+      "tests/jobClient.test.js",
+      "tests/chatToolSelection.test.js",
+      "tests/serverTurnFlow.test.js",
+      "tests/webSearchService.test.js",
+      "tests/webSearchRoutes.test.js"
+    ],
+    "regressionBatch": "20 files PASS including modelProxy, llmRuntimeSelection, chatRuntimeCatalog, endpointProfile, taskCenterWiring, ChatStatusCard, SlashInlinePanelHost, uiExperienceRegression",
+    "fullSuite": "1201 test files PASS, exit 0, serial run; 4284 source/config/resource hashes identical before and after"
+  },
+  "ptySmoke": {
+    "backend": "real node-pty + cmd.exe",
+    "command": "echo GUGO_PTY_OK",
+    "result": "output received; actual starting directory returned; shell killed",
+    "exitCode": 0
+  },
+  "browser": {
+    "server": "gugo-isolated-verification on 127.0.0.1:5179",
+    "isolation": "temporary HOME/cache, no backend, no model provider, no user 5175 instance",
+    "checks": [
+      "empty composer: primary action disabled with an accessible reason and light disabled style",
+      "typed draft: primary action becomes dark solid with ArrowUp",
+      "context ring is a continuous circle, including the unknown state, with no visible ≈ badge",
+      "context popover shows only the concise summary; there is no details disclosure or advanced diagnostics",
+      "conversation title has no leading bubble icon; the four header controls are grouped tightly with darker icons",
+      "no configured model: context panel reports an unknown window and shows no fabricated percentage"
+    ],
+    "notVerified": [
+      "real model context window in the browser (no provider configured by design; unit/integration tests lock mimo-v2.6-flash at 1,048,576)",
+      "live manage_todos streaming in the browser (no backend in the isolated preview)",
+      "live web search call with a real configured provider (no provider configured by design)",
+      "Electron window PTY interaction"
+    ]
+  },
+  "boundaries": [
+    "no real provider or real key read",
+    "no user 5175 instance or session touched",
+    "no commit, push, package or release",
+    "DEBT-LINK-001, DEBT-SEARCH-001, DEBT-VERIFY-002/003, DEBT-RELEASE-001/002 and DEBT-NET-002 remain open"
+  ]
+}

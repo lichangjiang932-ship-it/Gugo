@@ -1,5 +1,72 @@
 # 工程经验
 
+## 2026-10-17：流式搜索、Provider 草稿与上下文降频
+
+- 搜索计时器被流式 `sessions` 引用变化重置：父组件的 `getLocalResults` 每个 token 换新引用，hook 的 effect 依赖它就会反复 `clearTimeout`。把 getter/fallback 放进 ref，effect 只看 open/规范化 query/t；用 `settledQuery` 派生 loading，避免防抖窗口显示旧结果或“没有匹配”。组件测试必须模拟 getter 身份变化，不能只测稳定 getter。
+- 用户明确要求自定义 Provider ID 只改 ID，不得自动清空 Key/地址/候选；catalog/模式切换才是目标切换。不要再用“安全”理由恢复逐字符清空；身份锁和 pending 锁仍保留。
+- `context_usage` 的 200ms 流式观测逐条 flush + 独立事务 + INSERT；降到 1000ms 是低成本止血，不是零持久化。真正根治需要非持久 activity 通道，需单独批准。
+- `useChatSendFlow` 的整份 state 依赖让每个 token 重建回调；回调内从 `currentStateRef.current` 读当前状态并移除 state 依赖即可，但异步过程中的 owner 比较仍要保留发送开始时的快照语义。
+- Provider 保存先于凭据：provider 失败不写 credential；credential 失败留下可恢复的无 key provider，而非未创建 ID 下的孤儿密钥。
+
+## 会话并发、生产计量与写后验收
+
+- 组件级发送 boolean 会跨会话占锁到流结束；按 backend/owner/session/draft-version 锁定，保留同作用域单飞。旧草稿 ACK 只能后台入库，不可清空/激活新草稿；owner 变更后的旧 preflight 不可提交旧文本。
+- 圆环 SVG 正确不等于生产链路实时。只认最终 retained 会忽略准备和流阶段；持久 Provider UUID 与 runtime key 也不能直接判不同路由。用主物理尝试绑定校验、事件分发/reducer/Hook 串联测试，以及真实本机 SSE 验证。
+- 暂存未展示的公开文本也已占生成上下文。共享 token 权重做数字增量，按 200ms 节流发观测；不存提示正文，不额外调模型，不按 chunk 向上取整导致累计膨胀，跨 surrogate 不多算。
+- post-mutation 的 workspace sentinel 不是“已有两个文件链接”能清除的。有显式根和已授权 canonical git_status 才自动解析后读回，仍走原 checkpoint/审批/工具；不能暗开 Git 权限或重跑生成。模型额度恰好用尽不应挡合法 Host 读取，真实超限/墙钟/取消仍停止。
+- 用户只要一行红字，普通完成失败在展示层压缩即可；保留结构化诊断与一次文件入口，取消/暂停/未知结果恢复控件另保语义。复用旧双语文案避免新 key 把 600 行模块推到 602，不提高债务上限。
+- 阻止反馈不能只写可能关闭的右工作台；toast 必须可见并保留草稿。加入后全量发现 index.jsx 304 行超过已有 300 行边界，抽出真实反馈 presenter 而不改阈值。旧非终局日志保留，最终再从头运行。
+- 自动 Git 清单可能含用户既有凭据，常见 .env/credentials/settings.yaml/私钥条目不自动读给模型，对应 pending 仍不清除；不以部分 blocklist 冒称完整 DLP。
+- 全量捕获子代理精确调用序列断言，不能简单容忍多一个 git_status 就结束：新增命令实际 cwd 与项目根绑定，拒绝用别的已授权项目作证。测试保留范围审批（含缓存复用）、白名单、最多两次只读状态检查和生成不重放；旧失败不是终局 PASS。
+- 终局：1193 文件从头 PASS / 1290.284 秒，4254 个源码/配置/资源文件哈希一致；定向 21 文件/312 项、离线 71 项及门禁通过。实际浏览器 A 未结束 B 能回复、实时数字流驱动圆环、红色单行和等待 toast 均过。未调用真实 Provider、未重启真实服务、未提交推送。
+
+## 本轮：按真实消费者复核 Claude Code 审查
+
+- 先快照未提交现场，不回滚其他代理工作。Provider 草稿不能共用跨目标 Key/URL/候选；同 Provider 重选保持草稿，换模式/目录/自定义身份则清空，忙时锁目标，卸载让操作令牌失效。
+- URL 身份不能只比 pathname；修快照旁路时同时核对普通 href 匹配。未知 scheme 拒绝进入相对路径规范化；仅托管 URL 引用的 basename 回退不能扩展到不匹配的本地收据。
+- 隐藏交付卡片必须与真正可渲染链接对齐。未解析行内代码、歧义或代码块伪链接不能吞唯一入口。
+- 搜索的本地结果确实用于补充未同步消息；不能因审查写“服务端展示”就删掉回退。把扫描移到共享防抖/取消生命周期，保留合并；局部焦点按主题 token 计算并在浏览器等待样式收敛。
+- 离线 Host 的 HTTP middleware 不覆盖 upgrade/message，不能挂可写 Turn WS。安装统一 transport 拒绝升级并删除未使用的凭据环境投影，不接通 live。
+- 不复用早期临时浏览器启动器的安全假设：最终 Host 显式 envDir:false、dotenv关闭、独立数据/home/profile；同 URL 导航可能不是新文档，先确认夹具已安装再做动作。React 优化模块需要正确 default 导出适配，不能混入第二份 React。
+- 跨回合可信索引不隐式实现，记录 owner/session/回执/失效等退出条件；单次 O(N) 本地扫描也保留开放债务。
+- 终局：1191 文件从头 PASS / 1143.632 秒，4250 个源码/配置/资源文件哈希一致；定向 15 文件/166 项、离线 71 项、门禁及最终显式 envDir:false 的浏览器复验通过。本轮未提交，旧哈希变化的全量仍不是冻结 PASS。
+
+## 2026-10-17：真实实例文件链接与预览焦点
+
+- 症状：真实模型回复写了 `` `docs/xxx.md` ``，但页面只有行内代码，没有链接；消息本身已有 verifiedLocalFiles 收据。
+- 根因：`artifactHasInlineReference` 把正文裸文件名当成“已内联引用”隐藏交付卡片，而渲染器只处理裸文件名/Windows 绝对路径/artifact URL，不处理仓库相对路径；两者判定不一致。
+- 修复：相对路径只对已验证收据的绝对路径做唯一后缀匹配；行内代码、文本、显式相对 Markdown 链接共用。不要跨回合推断未验证文件，也不要因同名后缀有歧义就任选其一。
+- 相邻缺陷：工作台覆盖层和预览自身的 inert 恢复顺序互相覆盖，关闭预览后聊天被锁死。覆盖层内只让模态焦点陷阱管理背景隔离，独立预览保留原行为；真实浏览器确认关闭后 textarea 可聚焦。
+- 第二类根因：模型把可见文案写成 `/api/artifacts/...` Markdown 链接，而该 managed 快照已被同名 verifiedLocalFiles 收据取代；受保护 URL 找不到引用就被渲染成 blocked span。收据自己的 `relatedArtifactIds` 必须进入引用，显式关联的快照 URL 才映射到本地文件；没有关联不能放行。内联链接成立后隐藏重复卡片。
+- 教训：在用户原有实例复现时用其真实历史数据最可信；不要用隔离空实例解释“无模型/无链接”。调用真实模型前明确这是用户要求，验收后清理自己创建的测试文件。
+
+## 2026-10-17：正常入口、候选选择与搜索焦点
+
+- 目标：获取模型后完整候选/全选/全不选/手选，去掉搜索蓝框；不重置原配置/聊天或改主布局。
+- 踩坑：5181是临时只读offline验收host，其英文probe拒绝不是上游空列表；正常5175启动配置须按名明确选择，不能靠配置顺序保证宿主行为，更不能删guard或读取真实配置绕过权限拒绝。
+- 解决：已有模型选择生产链路无需重写，以32候选、失败保留、重探测和挂载聊天重读行为回归证明；真实上游未调用须明说。
+- 踩坑：全局input:focus-visible比outline-none更具体，文本输入鼠标聚焦也可能匹配；搜索专用input规则和整行中性focus-within替代，不移除全局键盘ring。JSDOM不证明CSS，合成keydown也不证明真实键盘模态；后台preview焦点/画布缩放限制须记录。
+- 踩坑：source-order规范正则也匹配运行时事件indexOf比较；保留门禁，改为drain/release回调现场状态断言并保留原挂起关闭测试。旧冻结FAIL原样归档，新代码重新冻结全量。
+
+## 2026-10-17：Agent 文件链接、字体与隔离验收
+
+- 目标：恢复 Agent 文件超链接，替换中文宿主字体，并按现有配置验证交付链路；保留主布局及右上角四入口。
+- 踩坑：完成报告按包含折叠步骤的全文去重，会隐藏文末交付链接；步骤 Markdown 缺少可信引用/点击回调，首行 gist 普通文本又吞掉链接。按真正可见正文去重，步骤透传原引用与打开回调，首行可信文件引用保留完整 Markdown；13文件/141项回归通过，不删除protected URL guard。
+- 字体：采用独立家族 Noto Sans SC Variable、自托管可变WOFF2；保留mono和作品默认栈。正式静态服务须返回font/woff2，缺失字体404；完整OFL许可随分发。浏览器需FontFaceSet、实际同源字体字节与字形测量，computed family不等于下载成功。
+- 踩坑：production环境运行独立Vite dev时，React refresh transform/wrapper错配出现$RefreshSig未定义。仅验收host禁HMR；第二轮真实页面渲染成功。一次rAF矩阵等待超时，读取状态确认完成并改代表组合验证，不计作全部矩阵PASS。
+- 安全止点：现有模型默认绑定只读解析被权限策略拒绝，不能转preview/代理绕过。真实请求0次。未完成三任务admission/取消unknown闭环时，CLI及直接compose都封闭live入口，不交付半开放付费runner。
+- 审查：生成transport hook不覆盖人工Provider metadata probe，离线验收host需额外默认拒绝HTTP mutation/探测，不把手工操作误称模型逃逸；IPC worker关闭须finally释放lease/监听并disconnect，启动失败也需rollback。
+- 踩坑：新增工具投影使turnToolSpecs达到601行，真实内联合并单用途变量到已有流水线，不提高600行门槛或删空行掩饰。process.env有特殊原型，未赋值断言需两侧plain快照；失败历史保留。
+
+## 2026-10-16：隔离 Web 验证的配置与工具身份
+
+- 目标：仅验证当前前端，不读取真实配置、密钥、数据库或启动模型后端。
+- 踩坑：GUGO_LOAD_DOTENV=0 只关闭项目手工 loadEnv，Vite 自动 dotenv 还需 envDir:false；通过临时合成哨兵和普通 Vite 对照测试两层，不读取真实 .env。
+- 踩坑：把子进程 cwd 移到临时根，构建仍退出 0，但 Tailwind 找不到项目 content，CSS 不完整。保留项目 cwd，另将 HOME/配置/数据/缓存/输出逐项指到临时根；修复后重新构建，不接受首次绿码为样式证明。
+- 工具身份：请求隔离 preview 却返回其他配置时，立即停止本轮自有服务，不在错误服务上继续测试，也不绕过 preview 工具另启服务器。DOM 测试不能替代浏览器原生 Enter/Space 和视觉验收；阻塞债务保持 Open。
+- 踩坑：命名为 internal-worker 的 CLI 参数并非信任边界，直接执行会跳过外层环境清洗。改为父进程 IPC 传递请求，导入 Vite 前核对清洗后的完整环境与项目 cwd；通过真实 CLI 和直调拒绝测试，而非只测试环境构造器。
+- 踩坑：不能把 Web 构建环境原封不动用于 npm test：production 会移除 React act，强制本机模式会污染跨模式 fixture，合成 Windows 域会破坏临时密钥的真实 ACL 账号解析。保持数据/home 隔离，测试使用 NODE_ENV=test、不强制本机模式，仅保留必要 OS 账号发现；先用代表性失败复验。首次144个失败记录和冻结证据保留，不改业务代码或放宽权限断言消红。第二次仍带 Web 的工具禁用、Node SQLite 驱动和工作区覆盖，13文件失败；改为独立 OS 白名单＋临时数据根后138项通过，最终从头全量1182文件PASS／1108.623秒，3195个源码/配置哈希一致。
+
 ## 2026-10-16：模型选择必须贯通保存、运行时与计量
 
 - 候选与选用不是一份删除列表：保留候选对象及元数据，以 enabled:false 取消选用，批量操作和重探测不恢复已取消项；后端允许目录同时过滤，不能只在 UI 隐藏。
@@ -144,4 +211,17 @@
 - 关键踩坑：processModelResult 会清理 modelInvocation；最终保留观测应继承已校验的完成观测，不能延长句柄或改重放策略。已补句柄清理后的回归与实际浏览器验证。
 - UI 新鲜度摘要只用于显示，不是安全/执行权威；消息或工具配置改变后作废旧基准，旧记录缺信息保持未知。
 - 定向 11 文件/244 项、补充 6 文件/23 项及离线 71 项通过；新的从头完整全量 1161 文件 PASS、退出码 0。验收见 docs/CONTEXT_METER_2026-10-14.md。
+
+## 2026-10-17：Agent 体验硬化
+
+- 发送按钮的可用性必须和原因一起呈现：空输入、目录审批、上传中/失败、运行中仅附件各有 blocked reason；运行中仅附件时 Stop 必须独立可达，不能把“发送”伪装成“暂停/停止”。
+- `manage_todos` 只有成功回执才能发布 `SET_TODOS`；失败不覆盖、空成功列表清空。顶层计数、浮动 PlanCard 和对话内列表必须读同一份规范化列表，reducer 用签名去重，避免流式重复触发卡片重开。
+- 终端会话属于主进程，不属于 React 组件。面板卸载只 detach；输出先按 session id 缓冲，start 回复前到达的 chunk 用 pending map 挂起；只有显式 New/End/Restart 和 renderer reload/crash 才结束 shell。
+- 终端 Ctrl+C 不是复制：Windows 用 Ctrl+Shift+C/V，mac 用 Cmd+C/V；普通 Ctrl+C 必须留给 SIGINT。Windows/Linux 默认应用菜单会吞掉 Ctrl+C/Ctrl+R，必须移除；复制/粘贴通过已有桌面剪贴板桥降级。
+- 上下文窗口不能因为“非权威”就显示 unknown：随包目录/默认值仍是实际压缩分母，应显示估算百分比并加 ≈；只有确实解析不到窗口才 unknown。服务端观测始终优先，官方能力目录优先于随包 models.dev 快照。
+- 生成的 catalogue profile 只含 limits，不能遮蔽用户显式的 per-model 能力/窗口覆盖；合并时保留显式字段，并把显式窗口的来源改为 provider_override。
+- 任务中心切换任务要先清空旧详情，并用 ref 丢弃不匹配的迟到响应；SSE ticket 的 401/403 是终态，不是可退避的网络错误。
+- 验收冻结必须在代码稳定后再开始；冻结期间只改 docs/证据文件，不改源码。真实 PTY 冒烟可独立于 Electron 用 `node-pty` 验证命令输出和 cwd，但不能替代安装包/OS 沙箱验收。
+- 上下文浮层只保留用户需要扫一眼的内容（已用、窗口、进度条、三类来源）；不显示“详情”展开，也不把估算口径/缓存/诊断铺在面板里。未知窗口的圆环必须是连续浅色圆，不能画成点状虚线；用户明确不要可见的 `≈` 角标。
+- 联网搜索不能依赖模型先发现 `search_tools` 或命中窄短语：`web_search` 应进入每个 chat turn 的初始只读工具集；`fetch_url` 仍可按查网页意图加入。搜索配置/开关仍由独立设置页控制，未配置时返回明确错误。
 

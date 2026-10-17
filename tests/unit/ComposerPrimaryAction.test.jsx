@@ -28,21 +28,26 @@ test('composer primary action sends steering text while keeping stop independent
   let stops = 0
   const t = (key) => ({
     'chatComposer.attachment': 'Attach',
+    'chatComposer.emptySend': 'Type a message to send',
     'chatComposer.send': 'Send',
     'chatComposer.stop': 'Stop',
     'chatComposer.pause': 'Pause',
+    'chatComposer.textOnly': 'Send text guidance while the task runs',
     'chat.modelPicker.unconfiguredSendBlocked': 'Configure a model first',
   })[key] || key
   const renderActions = ({
     hasDraftText = false,
+    hasAttachments = false,
     isGenerating = false,
     modelReadiness = { kind: 'ready', canSend: true },
+    sendBlockedReason = '',
     sendDisabled = false,
   } = {}) => (
     <ComposerActions
       approvalMode="normal"
       fileInputRef={{ current: null }}
       hasDraftText={hasDraftText}
+      hasAttachments={hasAttachments}
       isGenerating={isGenerating}
       modelOptions={[{ name: 'local-model' }]}
       modelReadiness={modelReadiness}
@@ -55,12 +60,10 @@ test('composer primary action sends steering text while keeping stop independent
       onModelChange={() => {}}
       onOpenModelPicker={() => {}}
       onSend={() => { sends += 1 }}
+      sendBlockedReason={sendBlockedReason}
       sendDisabled={sendDisabled}
-      onVoiceClick={() => {}}
       selectedModel="local-model"
       t={t}
-      voiceLabel="Voice"
-      voiceState="idle"
     />
   )
 
@@ -70,11 +73,25 @@ test('composer primary action sends steering text while keeping stop independent
     const fileInput = rootElement.querySelector('input[type="file"]')
     assert.match(fileInput.accept, /audio\/\*/)
     assert.match(fileInput.accept, /video\/\*/)
-    assert.equal(sendButton.getAttribute('aria-label'), 'Send')
-    assert.equal(sendButton.getAttribute('title'), 'Send')
     assert.match(sendButton.className, /\bh-8\b/)
     assert.match(sendButton.className, /\bw-8\b/)
-    assert.ok(sendButton.querySelector('.lucide-send'))
+    assert.match(sendButton.className, /\bbg-ink-soft\b/)
+    assert.match(sendButton.className, /\btext-paper\b/)
+    // Empty input is a disabled send with a reason, not a click that silently
+    // does nothing.
+    assert.equal(sendButton.disabled, true)
+    assert.equal(sendButton.getAttribute('aria-label'), 'Type a message to send')
+    assert.equal(sendButton.getAttribute('title'), 'Type a message to send')
+    assert.ok(sendButton.querySelector('.lucide-arrow-up'))
+    await act(async () => sendButton.click())
+    assert.equal(sends, 0)
+    assert.equal(stops, 0)
+
+    await act(async () => root.render(renderActions({ hasDraftText: true })))
+    assert.equal(sendButton.disabled, false)
+    assert.equal(sendButton.getAttribute('aria-label'), 'Send')
+    assert.equal(sendButton.getAttribute('title'), 'Send')
+    assert.ok(sendButton.querySelector('.lucide-arrow-up'))
     await act(async () => sendButton.click())
     assert.equal(sends, 1)
     assert.equal(stops, 0)
@@ -107,7 +124,7 @@ test('composer primary action sends steering text while keeping stop independent
     assert.equal(steerButton.disabled, false)
     assert.equal(steerButton.getAttribute('aria-label'), 'Send')
     assert.equal(steerButton.getAttribute('title'), 'Send')
-    assert.ok(steerButton.querySelector('.lucide-send'))
+    assert.ok(steerButton.querySelector('.lucide-arrow-up'))
     assert.ok(independentStopButton)
     assert.equal(independentStopButton.getAttribute('aria-label'), 'Stop')
     assert.equal(independentStopButton.getAttribute('title'), 'Stop')
@@ -119,12 +136,31 @@ test('composer primary action sends steering text while keeping stop independent
     assert.equal(sends, 2)
     assert.equal(stops, 2)
 
-    await act(async () => root.render(renderActions({ sendDisabled: true })))
+    // An attachment-only draft while the task runs cannot be sent as steering.
+    // The primary explains why, and Stop stays independently reachable.
+    await act(async () => root.render(renderActions({
+      hasAttachments: true,
+      isGenerating: true,
+      sendBlockedReason: 'Send text guidance while the task runs',
+      sendDisabled: true,
+    })))
+    assert.equal(sendButton.disabled, true)
+    assert.equal(sendButton.getAttribute('aria-label'), 'Send text guidance while the task runs')
+    assert.equal(sendButton.getAttribute('title'), 'Send text guidance while the task runs')
+    assert.ok(rootElement.querySelector('.lucide-arrow-up'))
+    const attachmentStopButton = rootElement.querySelector('[data-testid="composer-stop-action"]')
+    assert.ok(attachmentStopButton)
+    await act(async () => attachmentStopButton.click())
+    assert.equal(sends, 2)
+    assert.equal(stops, 3)
+
+    await act(async () => root.render(renderActions({ hasDraftText: true, sendDisabled: true })))
     assert.equal(rootElement.querySelector('[data-testid="composer-primary-action"]'), sendButton)
     assert.equal(sendButton.disabled, true)
     assert.equal(rootElement.querySelectorAll('[data-testid="composer-primary-action"]').length, 1)
 
     await act(async () => root.render(renderActions({
+      hasDraftText: true,
       modelReadiness: { kind: 'unconfigured', canSend: false },
     })))
     assert.equal(sendButton.disabled, false)

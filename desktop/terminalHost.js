@@ -103,6 +103,7 @@ export function createDesktopTerminalHost({
   cwd = () => env.USERPROFILE || env.HOME || process.cwd(),
 } = {}) {
   const sessions = new Map()
+  const guardedWebContents = new WeakSet()
   let nextId = 0
 
   function assertTrusted(event) {
@@ -166,20 +167,41 @@ export function createDesktopTerminalHost({
     for (const id of [...sessions.keys()]) disposeSession(id)
   }
 
+  /**
+   * A renderer reload or main-frame navigation replaces the panel that owns the
+   * shell. Without this the pty would outlive the only UI that can reach it —
+   * an orphan process the reader cannot see or stop. Register once per webContents:
+   * one listener per session piled up until the window closed.
+   */
+  function guardWindowLifetime(window) {
+    const webContents = window?.webContents
+    if (!webContents || guardedWebContents.has(webContents)) return
+    guardedWebContents.add(webContents)
+    const cleanup = () => disposeAll()
+    window.once?.('closed', cleanup)
+    webContents.once?.('destroyed', cleanup)
+    webContents.on?.('render-process-gone', cleanup)
+    webContents.on?.('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+      if (isMainFrame) cleanup()
+    })
+  }
+
   function register() {
     ipcMain.handle('desktop:terminal-start', (event, options = {}) => {
       const window = assertTrusted(event)
+      guardWindowLifetime(window)
       const cols = clampDimension(options?.cols, TERMINAL_MIN_COLS, TERMINAL_MAX_COLS, TERMINAL_DEFAULT_COLS)
       const rows = clampDimension(options?.rows, TERMINAL_MIN_ROWS, TERMINAL_MAX_ROWS, TERMINAL_DEFAULT_ROWS)
       const shell = resolveDefaultShell({ env, platform })
       const id = `terminal-${nextId += 1}`
+      const sessionCwd = resolveSessionCwd(options?.cwd, cwd())
 
-      const session = { id, cols, rows, pty: null, reported: false }
+      const session = { id, cols, rows, cwd: sessionCwd, pty: null, reported: false }
       const pty = spawnPty(shell.file, shell.args, {
         name: 'xterm-256color',
         cols,
         rows,
-        cwd: resolveSessionCwd(options?.cwd, cwd()),
+        cwd: sessionCwd,
         env: platform === 'win32' ? env : { TERM: 'xterm-256color', ...env },
         // ConPTY or winpty is left to node-pty: it already picks whichever the OS
         // supports, and pinning one would break the other.
@@ -201,14 +223,13 @@ export function createDesktopTerminalHost({
         send(TERMINAL_EXIT_CHANNEL, { id, exitCode: exitCode ?? null, signal: signal ?? null })
       }
       pty.onExit(onExit)
-      // A window that goes away must not leave an orphaned shell behind.
-      window.once('closed', () => disposeSession(id))
 
       return {
         ok: true,
         id,
         cols,
         rows,
+        cwd: sessionCwd,
         shell: shell.file,
         windowsPty: resolveWindowsPty({ platform }),
       }

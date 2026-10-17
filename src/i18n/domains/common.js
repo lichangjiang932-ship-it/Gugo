@@ -3,6 +3,7 @@ const translations = {
     "loading": "加载中…",
     "confirm": "确定",
     "cancel": "取消",
+    "close": "关闭",
     "save": "保存",
     "saving": "保存中…",
     "delete": "删除"
@@ -11,6 +12,7 @@ const translations = {
     "loading": "Loading…",
     "confirm": "Confirm",
     "cancel": "Cancel",
+    "close": "Close",
     "save": "Save",
     "saving": "Saving…",
     "delete": "Delete"

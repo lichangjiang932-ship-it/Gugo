@@ -275,9 +275,22 @@ function modelProfileEntry(collection, modelName = '') {
 }
 
 function exactModelProfile({ modelName = '', overrides = {}, modelProfiles = null } = {}) {
-  for (const source of [modelProfiles, overrides?.modelProfiles, overrides?.models]) {
-    const matched = modelProfileEntry(source, modelName)
-    if (matched) return matched
+  const matched = modelProfileEntry(modelProfiles, modelName)
+  if (matched) {
+    if (matched.catalogOnly !== true) return matched
+    // A generated catalogue entry only knows limits. Explicit per-model
+    // overrides still own capability flags and any limit they set.
+    const explicitModels = modelProfileEntry(overrides?.models, modelName) || {}
+    const explicitProfiles = modelProfileEntry(overrides?.modelProfiles, modelName) || {}
+    const merged = { ...matched, ...explicitModels, ...explicitProfiles }
+    if (explicitModels.contextWindow || explicitProfiles.contextWindow) {
+      merged.source = explicitProfiles.source || explicitModels.source || 'provider_override'
+    }
+    return merged
+  }
+  for (const source of [overrides?.modelProfiles, overrides?.models]) {
+    const explicit = modelProfileEntry(source, modelName)
+    if (explicit) return explicit
   }
   return null
 }
@@ -404,7 +417,9 @@ export function resolveEndpointProfile({
     contextWindowSource = isLocal ? 'local_default' : 'cloud_default'
   }
   contextWindow = Math.max(MIN_CONTEXT_WINDOW, contextWindow)
-  const contextWindowEstimated = contextWindowSource === 'local_default' || contextWindowSource === 'cloud_default'
+  const contextWindowEstimated = contextWindowSource === 'local_default'
+    || contextWindowSource === 'cloud_default'
+    || contextWindowSource === 'bundled_catalog'
   const maxOutputTokens = positiveInt(selectedModelProfile.maxOutputTokens)
     || positiveInt(officialModelProfile.maxOutputTokens)
 

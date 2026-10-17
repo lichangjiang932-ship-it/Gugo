@@ -678,6 +678,35 @@ test('subscribeToJobEvents gets a fresh one-time ticket after the stream disconn
   unsubscribe()
 })
 
+test('subscribeToJobEvents treats 401/403 as terminal instead of backing off forever', async () => {
+  const calls = []
+  const timers = []
+  const states = []
+  class FakeES {
+    constructor() { throw new Error('an unauthorized ticket must not open a stream') }
+  }
+  const unsubscribe = subscribeToJobEvents(() => {}, {
+    EventSourceImpl: FakeES,
+    fetchImpl: async (url) => {
+      calls.push(url)
+      return { ok: false, status: 403, json: async () => ({ ok: false, error: { message: 'forbidden' } }) }
+    },
+    setTimeoutImpl: (callback, delay) => {
+      timers.push({ callback, delay })
+      return timers.length
+    },
+    clearTimeoutImpl: () => {},
+    onConnectionChange: (state) => states.push(state),
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assert.equal(calls.length, 1)
+  assert.equal(timers.length, 0, 'an authorization failure is not retried')
+  assert.deepEqual(states.at(-1), { state: 'unauthorized', status: 403 })
+  unsubscribe()
+  assert.deepEqual(states.at(-1), { state: 'closed' })
+})
+
 test('subscribeToJobEvents retries ticket exchange failures without opening an unauthenticated stream', async () => {
   const calls = []
   const instances = []

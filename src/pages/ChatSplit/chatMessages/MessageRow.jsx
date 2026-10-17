@@ -161,6 +161,12 @@ function MessageRow({
     && msg.meta?.serverConnectionState !== 'reconnecting'
     && (msg.meta?.serverConnectionState === 'blocked' || !isPreExecutionFailure(msg))
 
+  const compactIncomplete = showIncompleteTaskNotice
+    && !showSideEffectRecoveryCard && !showModelRequestRecoveryCard
+    && msg.meta?.cancelled !== true && msg.meta?.paused !== true && msg.meta?.interrupted !== true
+    && msg.meta?.serverConnectionState !== 'blocked'
+    && !['model_request_outcome_unknown', 'side_effect_outcome_unknown'].includes(normalizeIncompleteReasonCode(serverFailure?.incompleteReason))
+
   return (
     <div
       key={rowKey}
@@ -190,6 +196,7 @@ function MessageRow({
             />
           ) : (
             <AssistantAnswer
+              completionSummary={compactIncomplete ? t('chatMessages.replyPartiallyCompleted') : ''}
               artifactPreview={artifactPreview}
               artifactReferences={artifactReferences}
               canPresentDeliverables={canPresentDeliverables}
@@ -254,7 +261,7 @@ function MessageRow({
             t={t}
           />
         )}
-        {showIncompleteTaskNotice && (
+        {showIncompleteTaskNotice && !compactIncomplete && (
           <IncompleteTaskNotice
             expectsFileReceipt={expectsFileReceipt}
             msg={msg}

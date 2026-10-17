@@ -58,6 +58,10 @@ const BASE_DISCOVERY_TOOL_NAMES = new Set([
   'request_clarification',
   'search_tools',
   'set_deliverables',
+  // Research is a safe read-only capability the model should not have to
+  // discover before answering "what is the latest…". `fetch_url` still joins
+  // explicitly on lookup intent; the search tool is what finds the URL.
+  'web_search',
 ])
 const LOCAL_READ_CORE_TOOL_NAMES = new Set([
   ...BASE_DISCOVERY_TOOL_NAMES,

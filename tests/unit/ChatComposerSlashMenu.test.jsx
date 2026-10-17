@@ -78,6 +78,28 @@ async function renderComposer(onSelect, handleKeyDown = () => {}) {
   }
 }
 
+test('a composition confirm never selects a slash command or reaches the send handler', async () => {
+  const selected = []
+  let fallbackKeydowns = 0
+  const { dom, rootElement, cleanup } = await renderComposer(
+    (entry) => selected.push(entry.name),
+    () => { fallbackKeydowns += 1 },
+  )
+  try {
+    const textarea = rootElement.querySelector('textarea')
+    assert.ok(document.querySelector('[data-testid="slash-command-menu"]'))
+    await act(async () => {
+      textarea.dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+        key: 'Enter', isComposing: true, bubbles: true, cancelable: true,
+      }))
+    })
+    assert.deepEqual(selected, [])
+    assert.equal(fallbackKeydowns, 0)
+  } finally {
+    await cleanup()
+  }
+})
+
 test('typing slash opens an inline action menu and click selection does not send', async () => {
   const selected = []
   let fallbackKeydowns = 0

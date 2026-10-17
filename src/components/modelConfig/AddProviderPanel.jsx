@@ -1,5 +1,5 @@
 import Segmented from '../ui/Segmented.jsx'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Plus, RefreshCw } from 'lucide-react'
 import { probeLlmDraft, saveLlmCredential, saveLlmProvider } from '../../lib/llmConfigClient.js'
 import ModelSelectionList from './ModelSelectionList.jsx'
@@ -40,7 +40,15 @@ function Field({ children, hint, label }) {
  * endpoint before anything is saved, and the picked list is written with the
  * provider — so the picker is never empty right after adding one.
  */
-export default function AddProviderPanel({ catalog, editing, initialCatalogEntryId = '', onCancel, onSaved, t }) {
+function initialForm(editing) {
+  return { apiKey: '', baseURL: editing?.baseURL || '', id: editing?.id || '', displayName: editing?.displayName || '', api: editing?.api || 'openai-completions' }
+}
+
+export default function AddProviderPanel(props) {
+  return <ProviderDraft key={JSON.stringify([props.editing?.id || '', props.initialCatalogEntryId || ''])} {...props} />
+}
+
+function ProviderDraft({ catalog, editing, initialCatalogEntryId = '', onCancel, onSaved, t }) {
   const [tab, setTab] = useState(editing?.custom ? 'custom' : 'catalog')
   const [customOpen, setCustomOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -49,13 +57,23 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
   const [catalogId, setCatalogId] = useState(editing?.id || initialCatalogEntryId || 'openai')
   const [models, setModels] = useState(() => (editing?.models || []).map(model => typeof model === 'string' ? { id: model } : model))
   const [modelDraft, setModelDraft] = useState('')
-  const [form, setForm] = useState(() => ({
-    apiKey: '',
-    baseURL: editing?.baseURL || '',
-    id: editing?.id || '',
-    displayName: editing?.displayName || '',
-    api: editing?.api || 'openai-completions',
-  }))
+  const [form, setForm] = useState(() => initialForm(editing))
+  const pending = useRef(null)
+  useEffect(() => () => { pending.current = null }, [])
+  const resetDraft = (nextForm = initialForm()) => {
+    setForm(nextForm)
+    setModels([])
+    setModelDraft('')
+    setNote('')
+    setError('')
+    setCustomOpen(false)
+  }
+  const changeTarget = (nextTab, nextId = catalogId) => {
+    if (pending.current || editing || (nextTab === tab && nextId === catalogId)) return
+    setTab(nextTab)
+    setCatalogId(nextId)
+    resetDraft()
+  }
   const patch = (values) => setForm((current) => ({ ...current, ...values }))
   const preset = (catalog?.cloud || []).find((entry) => entry.id === catalogId)
     || (catalog?.local || []).find((entry) => entry.id === catalogId)
@@ -65,17 +83,21 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
     : { api: preset?.api || 'openai-completions', baseURL: form.baseURL.trim() || preset?.baseURL || '' }
 
   const probe = async () => {
+    if (pending.current) return
+    const operation = {}
+    pending.current = operation
     setBusy(true)
     setNote('')
     try {
       const result = await probeLlmDraft({ ...target, apiKey: form.apiKey.trim() })
+      if (pending.current !== operation) return
       const discovered = result.discovered || []
       setModels(current => mergeModelCandidates(current, discovered, result.modelProfiles))
       setNote(t('settingsModels.probeFound', { count: discovered.length }))
     } catch (failure) {
-      setNote(failure.message)
+      if (pending.current === operation) setNote(failure.message)
     } finally {
-      setBusy(false)
+      if (pending.current === operation) { pending.current = null; setBusy(false) }
     }
   }
   const addModel = () => {
@@ -86,6 +108,9 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
   }
   const submit = async (event) => {
     event.preventDefault()
+    if (pending.current) return
+    const operation = {}
+    pending.current = operation
     setBusy(true)
     setError('')
     try {
@@ -95,29 +120,33 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
       if (!provider.id) throw new Error(t('settingsModels.providerIdRequired'))
       // The live saved directory below must not be overwritten by an old form snapshot.
       if (!editing && models.length > 0) provider.models = models
-      if (form.apiKey.trim()) await saveLlmCredential(provider.id, form.apiKey.trim())
+      // Create/update the provider first: a later credential failure then leaves
+      // a recoverable provider without a key instead of a credential orphaned
+      // under an ID that was never saved.
       await saveLlmProvider(provider)
-      await onSaved?.()
+      if (pending.current !== operation) return
+      if (form.apiKey.trim()) await saveLlmCredential(provider.id, form.apiKey.trim())
+      if (pending.current === operation) await onSaved?.()
     } catch (failure) {
-      setError(failure.message)
+      if (pending.current === operation) setError(failure.message)
     } finally {
-      setBusy(false)
+      if (pending.current === operation) { pending.current = null; setBusy(false) }
     }
   }
 
   return (
     <form className="flex flex-col gap-3" data-testid="add-provider-panel" onSubmit={submit}>
-      <Segmented role="tablist" value={tab} onChange={setTab} label={t('settingsModels.tabCatalog') + ' / ' + t('settingsModels.tabCustom')}
-        options={[{ value: 'catalog', label: t('settingsModels.tabCatalog'), buttonProps: { 'data-testid': 'tab-catalog' } },
-          { value: 'custom', label: t('settingsModels.tabCustom'), buttonProps: { 'data-testid': 'tab-custom' } }]} />
+      <Segmented role="tablist" value={tab} onChange={next => changeTarget(next)} label={t('settingsModels.tabCatalog') + ' / ' + t('settingsModels.tabCustom')}
+        options={[{ value: 'catalog', disabled: busy || Boolean(editing && tab !== 'catalog'), label: t('settingsModels.tabCatalog'), buttonProps: { 'data-testid': 'tab-catalog' } },
+          { value: 'custom', disabled: busy || Boolean(editing && tab !== 'custom'), label: t('settingsModels.tabCustom'), buttonProps: { 'data-testid': 'tab-custom' } }]} />
 
       {tab === 'catalog' ? (
         <>
           <p className="text-xs text-ink-fade">{t('settingsModels.catalogHint')}</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" data-testid="catalog-grid">
             {(catalog?.cloud || []).map((entry) => (
-              <button key={entry.id} type="button" data-testid="catalog-entry" data-provider={entry.id}
-                aria-pressed={catalogId === entry.id} onClick={() => setCatalogId(entry.id)}
+              <button key={entry.id} type="button" data-testid="catalog-entry" data-provider={entry.id} disabled={busy || Boolean(editing)}
+                aria-pressed={catalogId === entry.id} onClick={() => changeTarget(tab, entry.id)}
                 className={`flex items-center rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
                   catalogId === entry.id ? 'border-accent bg-accent/8 font-medium text-ink' : 'border-ink/12 bg-surface text-ink hover:border-ink/30'}`}>
                 {entry.displayName}
@@ -127,8 +156,8 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
           <p className="text-xs text-ink-fade">{t('settingsModels.localPresets')}</p>
           <div className="flex flex-wrap gap-1.5" data-testid="local-presets">
             {(catalog?.local || []).map((entry) => (
-              <button key={entry.id} type="button" data-testid="catalog-local" data-provider={entry.id}
-                aria-pressed={catalogId === entry.id} onClick={() => setCatalogId(entry.id)}
+              <button key={entry.id} type="button" data-testid="catalog-local" data-provider={entry.id} disabled={busy || Boolean(editing)}
+                aria-pressed={catalogId === entry.id} onClick={() => changeTarget(tab, entry.id)}
                 className={`rounded-control border px-2.5 py-1 text-xs ${
                   catalogId === entry.id ? 'border-accent text-accent-ink' : 'border-ink/15 text-ink-soft hover:text-ink'}`}>
                 {entry.displayName}
@@ -136,7 +165,7 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
             ))}
           </div>
           <Field label={t('settingsModels.apiKey')}>
-            <input className={INPUT} data-testid="provider-api-key" type="password" autoComplete="off"
+            <input className={INPUT} data-testid="provider-api-key" disabled={busy} type="password" autoComplete="off"
               value={form.apiKey} onChange={(event) => patch({ apiKey: event.target.value })}
               placeholder={t('settingsModels.apiKeyPlaceholder')} />
           </Field>
@@ -147,7 +176,7 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
           </button>
           {customOpen && (
             <Field label={t('settingsModels.baseURL')} hint={t('settingsModels.baseURLHint')}>
-              <input className={INPUT} data-testid="provider-base-url" value={form.baseURL}
+              <input className={INPUT} data-testid="provider-base-url" disabled={busy} value={form.baseURL}
                 onChange={(event) => patch({ baseURL: event.target.value })} placeholder={preset?.baseURL || t('settingsModels.providerDefault')} />
             </Field>
           )}
@@ -156,7 +185,7 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
         <>
           <p className="text-xs text-ink-fade">{t('settingsModels.customHint')}</p>
           <Field label="Provider ID" hint={t('settingsModels.providerIdHint')}>
-            <input className={INPUT} data-testid="custom-provider-id" value={form.id} placeholder="acme-gateway"
+            <input className={INPUT} data-testid="custom-provider-id" disabled={busy || Boolean(editing)} value={form.id} placeholder="acme-gateway"
               onChange={(event) => patch({ id: event.target.value })} />
           </Field>
           <Field label={t('settingsModels.displayName')}>
@@ -164,18 +193,18 @@ export default function AddProviderPanel({ catalog, editing, initialCatalogEntry
               onChange={(event) => patch({ displayName: event.target.value })} placeholder={t('settingsModels.displayName')} />
           </Field>
           <Field label={t('settingsModels.baseURL')}>
-            <input className={INPUT} data-testid="custom-base-url" value={form.baseURL} placeholder="https://gateway.example/v1"
+            <input className={INPUT} data-testid="custom-base-url" disabled={busy} value={form.baseURL} placeholder="https://gateway.example/v1"
               onChange={(event) => patch({ baseURL: event.target.value })} />
           </Field>
           <Field label={t('settingsModels.protocol')}>
-            <select className={INPUT} data-testid="custom-protocol" value={form.api} onChange={(event) => patch({ api: event.target.value })}>
+            <select className={INPUT} data-testid="custom-protocol" disabled={busy} value={form.api} onChange={(event) => patch({ api: event.target.value })}>
               {(catalog?.protocols?.length ? catalog.protocols : FALLBACK_PROTOCOLS).map((protocol) => (
                 <option key={protocol.id} value={protocol.id}>{protocol.label}</option>
               ))}
             </select>
           </Field>
           <Field label={t('settingsModels.apiKey')}>
-            <input className={INPUT} data-testid="custom-api-key" type="password" autoComplete="off" value={form.apiKey}
+            <input className={INPUT} data-testid="custom-api-key" disabled={busy} type="password" autoComplete="off" value={form.apiKey}
               onChange={(event) => patch({ apiKey: event.target.value })} placeholder={t('settingsModels.apiKeyPlaceholderCustom')} />
           </Field>
         </>

@@ -45,6 +45,8 @@ files:
   - src/lib/presentationExport/presentationParseHelpers.js
   - src/lib/presentationExport/presentationParser.js
   - desktop/main.js
+  - desktop/clipboardIpc.js
+  - desktop/desktopMenu.js
   - desktop/mainWindowSecurity.js
   - desktop/browserHost.js
   - desktop/desktopHosts.js

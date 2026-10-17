@@ -227,7 +227,13 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
   useEffect(() => {
     let active = true
     if (!selectedJobId) return undefined
-    getJob(selectedJobId).then(({ job }) => { if (active) setSelectedJob(job) }).catch((reason) => { if (active) setError(reason.message) })
+    getJob(selectedJobId).then(({ job }) => {
+      // A slower reply for the job the reader just left must not replace the
+      // one now selected.
+      if (active && selectedJobIdRef.current === selectedJobId) setSelectedJob(job)
+    }).catch((reason) => {
+      if (active && selectedJobIdRef.current === selectedJobId) setError(reason.message)
+    })
     return () => { active = false }
   }, [selectedJobId])
 
@@ -420,6 +426,15 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
     jobFailureRecovery,
     pendingClarification, pendingPlan, pendingDirectoryRequest, handleCreate, handleCancel, handleRetry, handleRetryStep,
     handleSteer, handleApprovePlan, handleDirectoryAuthorization,
-    selectJob: (id) => { clearTaskError(); setSelectedArtifact(null); setSelectedJobId(id) },
+    selectJob: (id) => {
+      const nextId = id ? String(id) : null
+      clearTaskError()
+      setSelectedArtifact(null)
+      // The previous job's details must disappear now, not after the new
+      // request resolves; otherwise the pane shows one job under another's row.
+      setSelectedJob(null)
+      selectedJobIdRef.current = nextId
+      setSelectedJobId(nextId)
+    },
   }
 }

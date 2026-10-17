@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   isDesktop: true,
   platform: process.platform,
   writeClipboardText: (value) => ipcRenderer.invoke('desktop:write-clipboard-text', String(value ?? '')),
+  readClipboardText: () => ipcRenderer.invoke('desktop:read-clipboard-text'),
   openDirectory: ({ defaultPath = '' } = {}) => ipcRenderer.invoke('desktop:select-directory', {
     defaultPath: String(defaultPath ?? ''),
   }),

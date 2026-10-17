@@ -21,6 +21,172 @@ function setupDom() {
   return dom
 }
 
+const FINAL_ROUND_ARTIFACT = {
+  id: 'final-docx',
+  filename: 'final.docx',
+  type: 'docx',
+  url: '/api/artifacts/final.docx',
+}
+const FINAL_ROUND_LINK = '[final.docx](/api/artifacts/final.docx)'
+
+async function renderReportReference(t, { observation, report = '已完成', meta = {} }) {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const opened = []
+  const msg = {
+    id: 'round-reference-message',
+    role: 'assistant',
+    content: `【Observation】${observation}\n【任务完成报告】\n${report}`,
+    meta: {
+      serverArtifacts: [FINAL_ROUND_ARTIFACT],
+      serverDeliveryArtifactIds: [FINAL_ROUND_ARTIFACT.id],
+      ...meta,
+    },
+  }
+  t.after(async () => { await act(async () => root.unmount()); dom.window.close() })
+  await act(async () => root.render(
+    <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" lang="zh"
+      onOpenArtifact={(artifact) => opened.push(artifact)} t={(key) => key} />,
+  ))
+  const click = (node) => act(async () => node.dispatchEvent(new dom.window.MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+  })))
+  const toggle = () => click(element.querySelector('[data-testid="execution-toggle"]'))
+  return { element, opened, click, toggle }
+}
+
+test('a selected file mentioned only in a folded Observation keeps a visible clickable fallback', async (t) => {
+  const { element, opened, click, toggle } = await renderReportReference(t, {
+    observation: `已生成 ${FINAL_ROUND_LINK}`,
+  })
+  assert.equal(element.querySelector('.chat-assistant-answer').textContent, '已完成')
+  assert.equal(element.querySelector('[data-testid="execution-toggle"]').getAttribute('aria-expanded'), 'false')
+  assert.equal(element.querySelector('[data-testid="agent-rounds"]'), null)
+  const fallback = element.querySelector('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]')
+  assert.ok(fallback, 'a link hidden in the steps cannot replace the top-level delivery link')
+  await click(fallback)
+  assert.equal(opened.length, 1)
+  assert.equal(opened[0].messageId, 'round-reference-message')
+  assert.equal(opened[0].directFile.url, FINAL_ROUND_ARTIFACT.url)
+  await toggle()
+  await toggle()
+  assert.ok(element.querySelector('[data-testid="artifact-open-card"]'), 'folding the steps again keeps the file reachable')
+})
+
+for (const [shape, observation] of [
+  ['single-line Markdown', `已生成 ${FINAL_ROUND_LINK}`],
+  ['single-line bare filename', '已生成 final.docx'],
+  ['multiline body', `校验成功\n已生成 ${FINAL_ROUND_LINK}\n内容已核对`],
+  ['first-line Markdown', `已生成 ${FINAL_ROUND_LINK}\n内容已核对`],
+  ['long first-line Markdown', `${'内容已检查，'.repeat(14)}已生成 ${FINAL_ROUND_LINK}\n内容已核对`],
+  ['sentence gist Markdown', `已生成 ${FINAL_ROUND_LINK}。内容已核对`],
+  ['first-line bare filename', '已生成 final.docx\n内容已核对'],
+  ['long first-line bare filename', `${'内容已检查，'.repeat(14)}已生成 final.docx\n内容已核对`],
+  ['sentence gist bare filename', '已生成 final.docx。内容已核对'],
+]) {
+  test(`a ${shape} Observation opens its selected artifact from the expanded real MessageRow`, async (t) => {
+    const { element, opened, click, toggle } = await renderReportReference(t, { observation })
+    await toggle()
+    const round = element.querySelector('[data-round-kind="observation"]')
+    const links = round.querySelectorAll('[data-testid="inline-artifact-link"]')
+    assert.equal(links.length, 1, 'the complete step reference renders once, not as blocked text or a clipped gist')
+    assert.equal(round.querySelector('[data-testid="blocked-artifact-link"]'), null)
+    assert.equal(links[0].textContent, 'final.docx')
+    assert.equal(round.textContent.split('final.docx').length - 1, 1, 'the gist and body do not duplicate the reference')
+    if (observation.includes('内容已核对')) assert.match(round.textContent, /内容已核对/)
+    if (observation.startsWith('内容已检查')) {
+      assert.match(round.textContent, new RegExp('内容已检查，'.repeat(14)), 'a linked opening line is not sliced at the gist limit')
+    }
+    await click(links[0])
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].messageId, 'round-reference-message')
+    assert.equal(opened[0].directFile.id, FINAL_ROUND_ARTIFACT.id)
+    assert.equal(opened[0].directFile.url, FINAL_ROUND_ARTIFACT.url)
+  })
+}
+
+for (const report of [`已完成 ${FINAL_ROUND_LINK}`, '已完成 final.docx']) {
+  test(`a visible report reference (${report.includes('](') ? 'Markdown' : 'bare filename'}) suppresses only the duplicate fallback`, async (t) => {
+    const { element, opened, click, toggle } = await renderReportReference(t, {
+      observation: `已生成 ${FINAL_ROUND_LINK}`,
+      report,
+    })
+    assert.equal(element.querySelector('[data-testid="artifact-reference-links"]'), null)
+    const link = element.querySelector('.chat-assistant-answer [data-testid="inline-artifact-link"]')
+    assert.ok(link)
+    await click(link)
+    assert.equal(opened[0].directFile.url, FINAL_ROUND_ARTIFACT.url)
+    await toggle()
+    assert.equal(element.querySelector('[data-testid="artifact-reference-links"]'), null)
+  })
+}
+
+for (const [selection, meta] of [
+  ['absent', { serverDeliveryArtifactIds: undefined }],
+  ['empty', { serverDeliveryArtifactIds: [] }],
+  ['different artifact', {
+    serverArtifacts: [FINAL_ROUND_ARTIFACT, { id: 'draft', filename: 'draft.docx', type: 'docx', url: '/api/artifacts/draft.docx' }],
+    serverDeliveryArtifactIds: ['draft'],
+  }],
+]) {
+  test(`expanded step links cannot expose an unselected managed file (${selection} selection)`, async (t) => {
+    const { element, opened, click, toggle } = await renderReportReference(t, {
+      observation: `文件结果\n${FINAL_ROUND_LINK}`,
+      meta,
+    })
+    await toggle()
+    const round = element.querySelector('[data-round-kind="observation"]')
+    assert.equal(round.querySelector('[data-testid="inline-artifact-link"]'), null)
+    assert.equal(round.querySelector('a[href*="final.docx"]'), null)
+    const blocked = round.querySelector('[data-testid="blocked-artifact-link"]')
+    assert.equal(blocked?.textContent, 'final.docx')
+    await click(blocked)
+    assert.equal(opened.length, 0)
+    assert.equal([...element.querySelectorAll('[data-testid="artifact-open-card"]')]
+      .some((node) => node.textContent.includes('final.docx')), false)
+  })
+}
+
+test('expanded step local-file URLs and absolute paths still require a trusted receipt', async (t) => {
+  const { element, opened, click, toggle } = await renderReportReference(t, {
+    observation: '文件结果\n[final.docx](/api/local-files/verified/missing?turnId=round-turn)\n[本地文件](file:///D:/workspace/final.docx)',
+    meta: { serverDeliveryArtifactIds: [] },
+  })
+  await toggle()
+  const round = element.querySelector('[data-round-kind="observation"]')
+  assert.equal(round.querySelectorAll('a').length, 0)
+  const blocked = round.querySelector('[data-testid="blocked-artifact-link"]')
+  const unverified = round.querySelector('[data-testid="unverified-local-path"]')
+  assert.equal(blocked?.textContent, 'final.docx')
+  assert.equal(unverified?.textContent, '本地文件')
+  await click(blocked)
+  await click(unverified)
+  assert.equal(opened.length, 0)
+})
+
+test('a first-line local path with a trusted receipt opens the original file from the round', async (t) => {
+  const filePath = 'D:\\workspace\\final.docx'
+  const { element, opened, click, toggle } = await renderReportReference(t, {
+    observation: `已生成 \`${filePath}\`\n内容已核对`,
+    meta: {
+      serverTurnId: 'round-turn',
+      serverArtifacts: [],
+      serverDeliveryArtifactIds: [],
+      verifiedLocalFiles: [{ id: 'final-receipt', path: filePath, filename: 'final.docx', size: 128 }],
+    },
+  })
+  await toggle()
+  const links = element.querySelectorAll('[data-round-kind="observation"] [data-testid="inline-artifact-link"]')
+  assert.equal(links.length, 1)
+  assert.equal(links[0].textContent, filePath)
+  await click(links[0])
+  assert.equal(opened.length, 1)
+  assert.equal(opened[0].directFile.path, filePath)
+  assert.equal(opened[0].directFile.url, '/api/local-files/verified/final-receipt?turnId=round-turn')
+})
+
 test('delivery artifact filtering fails closed without a selection and preserves explicit final ids', () => {
   const artifacts = [
     { id: 'draft', filename: 'draft.py' },
@@ -669,35 +835,13 @@ test('a failed turn exposes its retained file as pending verification without up
       />,
     ))
 
-    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
-    assert.ok(link)
-    assert.equal(
-      link.getAttribute('href'),
-      '/api/local-files/retained/retained-answer-path-file?turnId=retained-answer-path-turn',
-    )
-    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'chatMessages.incompleteTitle')
-    assert.equal(
-      rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent,
-      'chatMessages.incompleteReasonLabelchatMessages.incompleteReasonFallback',
-    )
-    assert.equal(
-      rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent,
-      'chatMessages.incompleteMissingLabelchatMessages.incompleteMissingFallback',
-    )
-    assert.equal(
-      rootElement.querySelector('[data-testid="incomplete-task-next-step"]')?.textContent,
-      'chatMessages.incompleteNextStepLabelchatMessages.incompleteNextAdjust',
-    )
-    assert.equal(
-      rootElement.querySelector('[data-testid="incomplete-task-file-state"] > p')?.textContent,
-      'chatMessages.incompletePendingFiles',
-    )
-
-    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
-      bubbles: true,
-      cancelable: true,
-    })))
+    const card = rootElement.querySelector('[data-testid="artifact-open-card"]')
+    assert.ok(card, 'compact failure keeps the original pending file reachable')
+    assert.equal(rootElement.querySelector('[data-testid="incomplete-task-notice"]').classList.contains('text-danger'), true)
+    assert.equal(Boolean(rootElement.querySelector('[data-testid="incomplete-task-missing"]')), false)
+    await act(async () => card.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
     assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.url, '/api/local-files/retained/retained-answer-path-file?turnId=retained-answer-path-turn')
     assert.equal(opened[0].retainedLocalFile, true)
     assert.equal(opened[0].verificationPending, true)
     assert.equal(opened[0].directFile.retainedLocalFile, true)
@@ -1200,6 +1344,193 @@ test('a verified local edit turns the final inline-code filename into a workbenc
       meta: { toolCalls: [editCall] },
     })
     assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a verified relative path in inline code and an explicit relative link open the real file', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'relative-path-turn'
+  const fileId = 'local-file-relative'
+  const path = 'D:\\workspace\\docs\\GPT-6-Astra-Introduction.md'
+  const renderMessage = async (content) => act(async () => root.render(
+    <MessageRow
+      msg={{
+        id: `${fileId}-message`,
+        role: 'assistant',
+        content,
+        timestamp: Date.now(),
+        meta: {
+          serverTurnId: turnId,
+          verifiedLocalFiles: [{
+            id: fileId,
+            path,
+            filename: 'GPT-6-Astra-Introduction.md',
+            size: 1799,
+            verifiedAt: Date.now(),
+          }],
+        },
+      }}
+      rowKey={`${fileId}-message`}
+      generatingMessageId=""
+      lang="zh"
+      onOpenArtifact={(artifact) => opened.push(artifact)}
+      t={(key) => key}
+    />,
+  ))
+
+  try {
+    await renderMessage('已生成 `docs/GPT-6-Astra-Introduction.md`，可直接打开。')
+    const inlineLink = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(inlineLink, 'an inline-code relative path resolves against the verified receipt')
+    assert.equal(inlineLink.textContent, 'docs/GPT-6-Astra-Introduction.md')
+    assert.match(inlineLink.getAttribute('href'), /^\/api\/local-files\/verified\//)
+    assert.equal(rootElement.querySelector('[data-testid="blocked-artifact-link"]'), null)
+    await act(async () => inlineLink.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.id, fileId)
+    assert.equal(opened[0].directFile.path, path)
+
+    await renderMessage('路径：[docs/GPT-6-Astra-Introduction.md](docs/GPT-6-Astra-Introduction.md)')
+    const markdownLink = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(markdownLink, 'an explicit relative Markdown link resolves to the same trusted file')
+    assert.equal(markdownLink.getAttribute('href'), `/api/local-files/verified/${fileId}?turnId=${turnId}`)
+    await act(async () => markdownLink.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 2)
+    assert.equal(opened[1].directFile.path, path)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an ambiguous relative path never links to one of several same-suffix verified files', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const renderMessage = async () => act(async () => root.render(
+    <MessageRow
+      msg={{
+        id: 'ambiguous-relative-message',
+        role: 'assistant',
+        content: '已生成 `docs/report.md`。',
+        timestamp: Date.now(),
+        meta: {
+          serverTurnId: 'ambiguous-relative-turn',
+          verifiedLocalFiles: [
+            { id: 'local-file-a', path: 'D:\\workspace\\a\\docs\\report.md', filename: 'report.md', verifiedAt: Date.now() },
+            { id: 'local-file-b', path: 'D:\\workspace\\b\\docs\\report.md', filename: 'report.md', verifiedAt: Date.now() },
+          ],
+        },
+      }}
+      rowKey="ambiguous-relative-message"
+      generatingMessageId=""
+      lang="zh"
+      onOpenArtifact={() => {}}
+      t={(key) => key}
+    />,
+  ))
+
+  try {
+    await renderMessage()
+    assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]').length, 2)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an inline link to a managed snapshot superseded by the verified local file opens the local file', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const managedId = 'managed-guide'
+  const localId = 'local-file-guide'
+  const path = 'D:\\workspace\\guide.html'
+  const href = '/api/artifacts/guide.html'
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={{
+          id: 'superseded-artifact-link-message',
+          role: 'assistant',
+          content: `已生成。\n\n[打开《核验指南》]( ${href} )`,
+          timestamp: Date.now(),
+          meta: {
+            serverTurnId: 'superseded-artifact-link-turn',
+            serverArtifacts: [{ id: managedId, filename: 'guide.html', title: 'Guide', type: 'html', url: href }],
+            serverDeliveryArtifactIds: [managedId],
+            verifiedLocalFiles: [{
+              id: localId,
+              filename: 'guide.html',
+              path,
+              relatedArtifactIds: [managedId],
+              verifiedAt: Date.now(),
+            }],
+          },
+        }}
+        rowKey="superseded-artifact-link-message"
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+    assert.equal(rootElement.querySelector('[data-testid="blocked-artifact-link"]'), null)
+    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(link, 'the model-written snapshot link resolves to the verified local file')
+    assert.equal(link.textContent, '打开《核验指南》')
+    assert.match(link.getAttribute('href'), /^\/api\/local-files\/verified\//)
+    assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null, 'the inline link replaces the duplicate card')
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.id, localId)
+    assert.equal(opened[0].directFile.path, path)
+
+    await act(async () => root.render(
+      <MessageRow
+        msg={{
+          id: 'unrelated-artifact-link-message',
+          role: 'assistant',
+          content: `已生成。\n\n[打开《核验指南》]( ${href} )`,
+          timestamp: Date.now(),
+          meta: {
+            serverTurnId: 'unrelated-artifact-link-turn',
+            serverArtifacts: [{ id: managedId, filename: 'guide.html', title: 'Guide', type: 'html', url: href }],
+            serverDeliveryArtifactIds: [],
+            verifiedLocalFiles: [{
+              id: localId,
+              filename: 'guide.html',
+              path,
+              verifiedAt: Date.now(),
+            }],
+          },
+        }}
+        rowKey="unrelated-artifact-link-message"
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+    assert.ok(rootElement.querySelector('[data-testid="blocked-artifact-link"]'), 'without a persisted association the snapshot link stays blocked')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

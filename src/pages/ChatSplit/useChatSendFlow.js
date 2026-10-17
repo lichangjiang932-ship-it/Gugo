@@ -1,4 +1,5 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
+import { chatSendOwnerScope, chatSendScope } from './chatSendScope.js'
 import { serializeAttachmentReferences } from '../../lib/attachmentClient.js'
 import { isLoggedInLocally, setAuthToken } from '../../lib/accountClient.js'
 import { isModelSetupFailure } from '../../lib/chatFlowGuards.js'
@@ -56,8 +57,13 @@ export default function useChatSendFlow({
   preflightModelSelection = preflightChatModelSelection,
   runChatTurn = runServerChatTurn,
 }) {
-  const sendInFlightRef = useRef(false)
+  const sendInFlightRef = useRef(new Set())
+  const currentStateRef = useRef(state)
+  useLayoutEffect(() => { currentStateRef.current = state }, [state])
   return useCallback(async (content, explicitAttachments = null, historyLimit = null, onAccepted = null) => {
+    // Read the current store through the ref so streamed token updates do not
+    // rebuild this callback (and the listeners that depend on it) every token.
+    const state = currentStateRef.current
     if (isGenerating) {
       onSendBlocked?.('turn-running')
       return false
@@ -66,11 +72,14 @@ export default function useChatSendFlow({
       onSendBlocked?.('directory-approval')
       return false
     }
-    if (sendInFlightRef.current) {
+    const sendScope = chatSendScope(state)
+    if (sendInFlightRef.current.has(sendScope)) {
       onSendBlocked?.('send-pending')
       return false
     }
-    sendInFlightRef.current = true
+    sendInFlightRef.current.add(sendScope)
+    const ownsSend = () => chatSendOwnerScope(currentStateRef.current) === chatSendOwnerScope(state)
+    const rejectStaleOwner = () => { onSendBlocked?.('owner-changed'); return false }
     try {
     if (!isLoggedInLocally()) {
       onAuthenticationRequired?.()
@@ -117,6 +126,7 @@ export default function useChatSendFlow({
       modelConfigRevision: candidateConfigRevision,
     }
     let preflight = await preflightModelSelection(preflightInput)
+    if (!ownsSend()) return rejectStaleOwner()
     if (preflight?.authenticationRequired === true && typeof refreshAuth === 'function') {
       const refreshed = await refreshAuth({ retryDelays: [0] })
       if (refreshed?.authenticated === true && isLoggedInLocally()) {
@@ -125,6 +135,7 @@ export default function useChatSendFlow({
         preflight = await preflightModelSelection(preflightInput)
       }
     }
+    if (!ownsSend()) return rejectStaleOwner()
     if (!preflight?.ok) {
       if (preflight?.authenticationRequired === true) {
         setAuthToken('')
@@ -186,7 +197,9 @@ export default function useChatSendFlow({
         return false
       }
     }
+    if (!ownsSend()) return rejectStaleOwner()
     const localPathAccess = await ensureLocalPathAccess(content)
+    if (!ownsSend()) return rejectStaleOwner()
     if (!localPathAccess.proceed) return false
     const effectiveAgentMode = planExecutionConfirmation?.agentMode || state.agentMode
     const intentMode = planExecutionConfirmation?.intentMode || intentModeForAgentMode(effectiveAgentMode)
@@ -195,17 +208,20 @@ export default function useChatSendFlow({
     const commitClientTurn = () => {
       if (clientCommitted) return
       clientCommitted = true
-      // Persist edits made while the server ACK was pending before NEW_SESSION
-      // activates the accepted session and its lifecycle restores that draft.
-      onAccepted?.({ sessionId })
+      // An older ACK may finish after the reader has opened another draft.
+      // Keep that session in the background; never clear or reactivate the new one.
+      if (chatSendOwnerScope(currentStateRef.current) !== chatSendOwnerScope(state)) return
+      const activate = chatSendScope(currentStateRef.current) === sendScope
+      if (activate) onAccepted?.({ sessionId })
       if (!state.activeSessionId) {
-        abortSessionIdRef.current = sessionId
+        if (activate) abortSessionIdRef.current = sessionId
         dispatch({
           type: 'NEW_SESSION',
           payload: {
             id: sessionId,
             title: activeSession.title,
             agentId: effectiveAgentId || null,
+            ...(activate ? {} : { activate: false }),
             ...(workspacePath ? { workspacePath } : {}),
           },
         })
@@ -292,7 +308,7 @@ export default function useChatSendFlow({
     onTurnResult?.({ sessionId, turnId, result: turnResult })
     return clientCommitted
     } finally {
-      sendInFlightRef.current = false
+      sendInFlightRef.current.delete(sendScope)
     }
   }, [
     abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments, approvalMode, changeApprovalMode,
@@ -300,6 +316,6 @@ export default function useChatSendFlow({
     ensureLocalPathAccess, isGenerating, lang, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendBlocked, onSendRejected, onTurnResult, onTurnStart, onWorkspaceUnavailable, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
     refreshAuth, resolveToolApprovalForOwner, runChatTurn, runtimeSkills, selectedModel, selectedModelProviderId,
     setContextSystemPrompts, clearToolApprovalForOwner,
-    state.activeSessionId, state.agentMode, state.draftSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t,
+    t,
   ])
 }

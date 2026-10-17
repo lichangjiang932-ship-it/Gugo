@@ -56,6 +56,29 @@ for (const maxIters of [1, 8]) {
   })
 }
 
+test('an authorized git status resolves an unattributed generation command before exact PPT/helper readback', async context => {
+  const root = process.env.YMA_TEST_DATA_ROOT
+  const previous = process.env.WORKSPACE_ROOT
+  process.env.WORKSPACE_ROOT = root
+  context.after(() => { if (previous === undefined) delete process.env.WORKSPACE_ROOT; else process.env.WORKSPACE_ROOT = previous })
+  const f = fixture({ toolSpecs: ['write_file','bash_exec','read_file','git_status'].map(spec), projectDirectory: root })
+  let modelCalls = 0
+  f.options.runModel = async () => ++modelCalls === 1
+    ? { content: '', toolCalls: [call('helper', 'write_file', { path: 'make_ppt.py', content: 'updated' }), call('generate', 'bash_exec', { command: 'python make_ppt.py', cwd: root })] }
+    : { content: 'The generated files were verified.', toolCalls: [] }
+  f.options.executeTool = async ({ name, args }) => {
+    f.executions.push({ name, args })
+    if (name === 'git_status') return { ok: true, root, files: [{ path: 'slides.pptx' }, { path: 'make_ppt.py' }] }
+    if (name === 'bash_exec') return { ok: true, code: 0, stdout: 'generated', cwd: root }
+    return { ok: true, path: args.path, content: 'updated', truncated: false, ...(args.path?.endsWith('.pptx') ? { extractionStatus: 'text', formatValidated: true } : {}) }
+  }
+  const result = await runToolsLoop(f.options)
+  assert.equal(result.incomplete, undefined, JSON.stringify(result))
+  assert.equal(f.executions.filter(tool => tool.name === 'bash_exec').length, 1, 'verification never reruns generation')
+  assert.equal(f.executions.filter(tool => tool.name === 'git_status').length, 1)
+  assert.ok(f.executions.some(tool => tool.name === 'read_file' && tool.args.path.endsWith('slides.pptx')))
+})
+
 test('automatic Office readback retains a genuine format failure and stops with bounded attempts', async () => {
   const f = fixture({ targets: ['slides.pptx'] })
   const execute = f.options.executeTool
@@ -273,6 +296,54 @@ test('automatic planner rejects malformed budgets and retains independent batch/
     s.iter += 1
   }
   assert.equal(planned, MAX_AUTOMATIC_VERIFICATION_CALLS)
+})
+
+test('automatic readback does not disclose sensitive inventory entries as model tool results', async () => {
+  const budget = { used: 0, maxTotalCalls: 10, elapsed: 0, maxWallMs: 0, modelCalls: 0, maxModelCalls: 0, modelTokens: 0, maxModelTokens: 0 }
+  for (const filename of ['.env', '.env.local', '.credentials.yaml', 'credentials.json', 'settings.yaml', 'private.pem']) {
+    const s = plannerFixture(budget)
+    s.pendingMutationTargets = new Set([filename])
+    assert.equal(await scheduleMutationVerificationRecovery(s), false, filename)
+    assert.equal(s.pendingMutationTargets.has(filename), true)
+  }
+})
+
+test('workspace recovery never invents a repository or enables a missing git capability', async () => {
+  const budget = { used: 0, maxTotalCalls: 10, elapsed: 0, maxWallMs: 0, modelCalls: 0, maxModelCalls: 0, modelTokens: 0, maxModelTokens: 0 }
+  const s = plannerFixture(budget)
+  s.pendingMutationTargets = new Set(['<workspace>'])
+  s.verificationProjectDirectory = process.env.YMA_TEST_DATA_ROOT
+  assert.equal(await scheduleMutationVerificationRecovery(s), false)
+  s.activeToolSpecs = [spec('git_status')]
+  s.verificationProjectDirectory = ''
+  assert.equal(await scheduleMutationVerificationRecovery(s), false)
+  s.verificationProjectDirectory = process.env.YMA_TEST_DATA_ROOT
+  s.convo = [{ role: 'assistant', tool_calls: [{ id: 'root-bound-call', function: { name: 'bash_exec', arguments: JSON.stringify({ command: 'python make.py', cwd: s.verificationProjectDirectory }) } }] },
+    { role: 'tool', tool_call_id: 'root-bound-call', content: JSON.stringify({ ok: true, executionCwd: s.verificationProjectDirectory }) }]
+  assert.equal(await scheduleMutationVerificationRecovery(s), true)
+  assert.deepEqual(s.checkpointCalls[0].args, { cwd: process.env.YMA_TEST_DATA_ROOT })
+})
+
+test('automatic status cannot verify an unknown command by looking at a different granted project', async () => {
+  const s = plannerFixture({ used: 0, maxTotalCalls: 10, elapsed: 0, maxWallMs: 0, modelCalls: 0, maxModelCalls: 0, modelTokens: 0, maxModelTokens: 0 })
+  s.pendingMutationTargets = new Set(['<workspace>'])
+  s.activeToolSpecs = [spec('git_status')]
+  s.verificationProjectDirectory = process.env.YMA_TEST_DATA_ROOT
+  s.convo = [{ role: 'assistant', tool_calls: [{ id: 'foreign-call', function: { name: 'bash_exec', arguments: JSON.stringify({ command: 'python make.py', cwd: 'foreign' }) } }] },
+    { role: 'tool', tool_call_id: 'foreign-call', content: JSON.stringify({ ok: true, executionCwd: 'foreign' }) }]
+  assert.equal(await scheduleMutationVerificationRecovery(s), false)
+})
+
+test('exhausted model budgets do not block authorized host-only readback within tool and wall budgets', async () => {
+  const valid = { used: 0, maxTotalCalls: 10, elapsed: 0, maxWallMs: 100, modelCalls: 1, maxModelCalls: 1, modelTokens: 100, maxModelTokens: 100 }
+  const s = plannerFixture(valid)
+  assert.equal(await scheduleMutationVerificationRecovery(s), true)
+  assert.ok(s.checkpointCalls.every(call => call.name === 'read_file'))
+  const expired = plannerFixture({ ...valid, elapsed: 100 })
+  assert.equal(await scheduleMutationVerificationRecovery(expired), false)
+  for (const over of [{ modelCalls: 2 }, { modelTokens: 101 }]) {
+    assert.equal(await scheduleMutationVerificationRecovery(plannerFixture({ ...valid, ...over })), false)
+  }
 })
 
 test('automatic root-drive deletion verification never turns the parent into a drive-relative path', async () => {

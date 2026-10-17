@@ -129,8 +129,8 @@ test('composer sends steering drafts while preserving an independent stop action
   // still cancels. Without a pause handler the primary degrades to onAbort
   // instead of becoming a dead button.
   assert.match(composerActionsSource, /const requestPause = typeof onPause === 'function' \? onPause : onAbort/)
-  assert.match(composerActionsSource, /disabled=\{primaryActionPausesTurn \? false : sendDisabled\}/)
-  assert.match(composerActionsSource, /\{primaryActionPausesTurn[\s\S]*?<Pause[\s\S]*?<Send/)
+  assert.match(composerActionsSource, /const primaryDisabled = primaryActionPausesTurn \? false : \(sendDisabled \|\| Boolean\(primaryBlockedReason\)\)/)
+  assert.match(composerActionsSource, /\{primaryActionPausesTurn[\s\S]*?<Pause[\s\S]*?<ArrowUp/)
   assert.match(composerActionsSource, /chatComposer\.pause/)
   assert.doesNotMatch(composerActionsSource, /chatComposer\.steer/)
   assert.doesNotMatch(composerSource, />Enter<\/span>/)

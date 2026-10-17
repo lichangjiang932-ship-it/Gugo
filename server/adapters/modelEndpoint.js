@@ -2,6 +2,7 @@ import { isLocalEndpoint, resolveEndpointProfile } from '../utils/endpointProfil
 import { parseRemoteModelCatalog } from '../utils/modelCatalog.js'
 import { fetchSafeOutbound, maskOutboundUrl } from '../utils/outboundNetworkGuard.js'
 import { fetchWithEnvProxy } from './proxyFetch.js'
+import { beforeModelRequest, isHostVerificationPolicyConfigured } from '../core/hostVerificationPolicy.js'
 import {
   endpointProbeErrorCode,
   MODEL_CONFIG_MISSING_CODE,
@@ -40,12 +41,20 @@ export function fetchModelOutbound(url, init = {}, {
   onRequestStart,
 } = {}) {
   const shouldResolveDns = resolveDns ?? (typeof lookup === 'function' || fetchImpl === fetchWithEnvProxy)
-  const outboundFetch = typeof onRequestStart === 'function'
+  const requestFetch = typeof onRequestStart === 'function'
     ? (...args) => {
         onRequestStart()
         return fetchImpl(...args)
       }
     : fetchImpl
+  // Unconfigured hosts retain the original transport identity (including the
+  // outbound guard's global-fetch proxy handling), not just equivalent output.
+  const outboundFetch = isHostVerificationPolicyConfigured()
+    ? (...args) => {
+        beforeModelRequest(args[0])
+        return requestFetch(...args)
+      }
+    : requestFetch
   return fetchSafeOutbound(url, init, {
     fetchImpl: outboundFetch,
     allowLocal: isLocalModelEndpoint(config.baseUrl),

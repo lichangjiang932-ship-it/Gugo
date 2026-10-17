@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import { getAuthToken, setAuthToken } from '../src/lib/accountClient.js'
 import useChatSendFlow from '../src/pages/ChatSplit/useChatSendFlow.js'
+import { presentChatSendBlocked } from '../src/pages/ChatSplit/chatSendFeedback.js'
 import { reduceSessionLifecycleState } from '../src/store/reducers/sessionLifecycleReducer.js'
 
 function setupDom() {
@@ -100,6 +101,63 @@ function Harness({
   return createElement('output')
 }
 
+const STABLE_MODEL_OPTIONS = [{ name: 'model-a', provider: 'provider-a', configRevision: 7 }]
+const STABLE_MODEL_READINESS = { kind: 'ready', canSend: true, configRevision: 7 }
+const STABLE_EMPTY_LIST = []
+const stableNoop = () => {}
+const stablePreflight = async () => ({ ok: true, selection: { modelName: 'model-a', modelProviderId: 'provider-a', modelConfigRevision: 7, modelMode: 'agent' } })
+const stableEnsureAccess = async () => ({ proceed: true, paths: [] })
+const stableRefreshAuth = async () => ({ authenticated: true })
+const stableProbeAccess = async () => ({ proceed: true })
+const stableRequestApproval = async () => ({ approved: false })
+const stableChangeApproval = async () => 'normal'
+const stableT = key => key
+
+function StableHarness({ dispatch, onReady, runChatTurn, state }) {
+  const abortCtrlRef = useRef(null)
+  const abortSessionIdRef = useRef(null)
+  const directoryApprovalResolveRef = useRef(null)
+  const triggerSend = useChatSendFlow({
+    activateWorkspaceForTurn: stableNoop,
+    abortCtrlRef,
+    abortSessionIdRef,
+    attachments: STABLE_EMPTY_LIST,
+    approvalMode: 'normal',
+    changeApprovalMode: stableChangeApproval,
+    clearToolApprovalForOwner: stableNoop,
+    directoryApprovalResolveRef,
+    dispatch,
+    draftWorkspacePath: '',
+    effectiveAgentId: null,
+    ensureLocalPathAccess: stableEnsureAccess,
+    isGenerating: false,
+    modelOptions: STABLE_MODEL_OPTIONS,
+    modelReadiness: STABLE_MODEL_READINESS,
+    onAuthenticationRequired: stableNoop,
+    onModelCatalogChanged: stableNoop,
+    onModelUnavailable: stableNoop,
+    onSendRejected: stableNoop,
+    onSendBlocked: stableNoop,
+    onTurnResult: stableNoop,
+    onTurnStart: stableNoop,
+    onWorkspaceUnavailable: stableNoop,
+    preflightModelSelection: stablePreflight,
+    probeLocalPathAccess: stableProbeAccess,
+    refreshAuth: stableRefreshAuth,
+    requestServerToolApproval: stableRequestApproval,
+    resolveToolApprovalForOwner: stableNoop,
+    runChatTurn,
+    runtimeSkills: STABLE_EMPTY_LIST,
+    selectedModel: 'model-a',
+    selectedModelProviderId: 'provider-a',
+    setContextSystemPrompts: stableNoop,
+    state,
+    t: stableT,
+  })
+  useEffect(() => { onReady(triggerSend) }, [onReady, triggerSend])
+  return createElement('output')
+}
+
 function BlockedModelHarness({ dispatch, onAuthenticationRequired, onModelUnavailable, onReady, onTurnStart }) {
   const abortCtrlRef = useRef(null)
   const abortSessionIdRef = useRef(null)
@@ -132,6 +190,119 @@ function BlockedModelHarness({ dispatch, onAuthenticationRequired, onModelUnavai
   useEffect(() => onReady(triggerSend), [onReady, triggerSend])
   return createElement('output')
 }
+
+test('streamed state updates keep a stable send callback that reads the latest session', async () => {
+  const dom = setupDom(), root = createRoot(document.getElementById('root'))
+  const triggers = []
+  let started = null
+  const onReady = value => { triggers.push(value) }
+  const dispatch = () => {}
+  const runChatTurn = async request => { started = request; request.onTurnAccepted?.({ turnId: 'turn-stable' }); return { completed: true } }
+  const stateFor = id => ({
+    activeSessionId: id,
+    newDraftVersion: 1,
+    user: { id: 'owner' },
+    sessionCatalogSource: { backendInstanceId: 'backend' },
+    agentMode: 'chat',
+    sessions: [{ id, title: 'Existing', messages: [], modelName: 'model-a', modelProviderId: 'provider-a' }],
+    skillConfigs: {},
+    toolsConfig: {},
+  })
+  const render = async id => act(async () => root.render(createElement(StableHarness, { state: stateFor(id), dispatch, onReady, runChatTurn })))
+  setAuthToken('local-test-token')
+  try {
+    await render('session-a')
+    assert.equal(triggers.length, 1)
+    const first = triggers[0]
+    await render('session-b')
+    assert.equal(triggers.length, 1, 'streamed state changes must not rebuild the send callback')
+    assert.equal(triggers[0], first)
+    let accepted
+    await act(async () => { accepted = await first('work in the latest session') })
+    assert.equal(accepted, true)
+    assert.equal(started.sessionId, 'session-b', 'the stable callback reads the current state, not the first render')
+  } finally {
+    setAuthToken('')
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('blocked send feedback reaches both the visible toast and optional workbench', () => {
+  for (const reason of ['owner-changed', 'directory-approval', 'send-pending', 'turn-running']) {
+    const events = []
+    presentChatSendBlocked(reason, { t: key => key, setWorkbenchMessage: value => events.push(['workbench', value]), toast: { info: value => events.push(['toast', value]) } })
+    assert.equal(events.length, 2)
+    assert.equal(events[0][1], events[1][1])
+    assert.equal(events[1][0], 'toast')
+  }
+})
+
+test('a late preflight cannot submit old-owner text through a new-owner connection', async () => {
+  const dom = setupDom(), root = createRoot(document.getElementById('root'))
+  let trigger, finish, runs = 0
+  const preflightModelSelection = () => new Promise(resolve => { finish = resolve })
+  const render = owner => act(async () => root.render(createElement(Harness, { dispatch: () => {}, onReady: value => { trigger = value }, preflightModelSelection,
+    runChatTurn: async () => { runs += 1; return { completed: true } }, state: { user: { id: owner }, activeSessionId: null, newDraftVersion: 1, sessions: [], agentMode: 'chat', toolsConfig: {}, skillConfigs: {} } })))
+  setAuthToken('local-test-token')
+  try {
+    await render('owner-a'); let pending
+    await act(async () => { pending = trigger('old owner draft'); await Promise.resolve() })
+    await render('owner-b')
+    let result
+    await act(async () => { finish({ ok: true, selection: { modelName: 'model-a', modelProviderId: 'provider-a', modelConfigRevision: 7, modelMode: 'agent' } }); result = await pending })
+    assert.equal(result, false)
+    assert.equal(runs, 0)
+  } finally { await act(async () => root.unmount()); setAuthToken(''); dom.window.close() }
+})
+
+test('a running session does not hold the send lock for a different session or a new draft', async () => {
+  const dom = setupDom(), root = createRoot(document.getElementById('root')), requests = [], actions = []
+  let trigger
+  const onReady = value => { trigger = value }
+  const dispatch = action => actions.push(action)
+  const runChatTurn = request => new Promise(resolve => { requests.push({ request, finish: () => resolve({ completed: true }) }); request.onTurnAccepted() })
+  const state = activeSessionId => ({ activeSessionId, newDraftVersion: 1, user: { id: 'owner' }, agentMode: 'chat', sessions: ['a','b'].map(id => ({ id, title: 'Existing', messages: [], modelName: 'model-a', modelProviderId: 'provider-a' })), toolsConfig: {}, skillConfigs: {} })
+  const render = async id => act(async () => root.render(createElement(Harness, { dispatch, onReady, runChatTurn, state: state(id) })))
+  setAuthToken('local-test-token')
+  try {
+    await render('a'); let a, b
+    await act(async () => { a = trigger('work in A'); await Promise.resolve() })
+    await render('b')
+    await act(async () => { b = trigger('work in B'); await Promise.resolve() })
+    assert.equal(requests.length, 2, 'B reaches its own turn while A is unresolved')
+    await act(async () => { requests[0].finish(); await a })
+    assert.equal(await trigger('duplicate B'), false, 'finishing A does not unlock B')
+    await act(async () => { requests[1].finish(); await b })
+    await render(null)
+    let draft
+    await act(async () => { draft = trigger('new draft'); await Promise.resolve() })
+    assert.equal(requests.length, 3)
+    await act(async () => { requests[2].finish(); await draft })
+  } finally { for (const run of requests) run.finish(); await act(async () => root.unmount()); setAuthToken(''); dom.window.close() }
+})
+test('a late ACK for an older draft creates a background session without clearing or activating the new draft', async () => {
+  const dom = setupDom(), root = createRoot(document.getElementById('root')), actions = []
+  let trigger, request, finish, accepted = 0
+  const runChatTurn = value => new Promise(resolve => { request = value; finish = resolve })
+  const render = version => act(async () => root.render(createElement(Harness, { dispatch: a => actions.push(a), onReady: v => { trigger = v }, runChatTurn,
+    state: { activeSessionId: null, newDraftVersion: version, sessions: [], toolsConfig: {}, skillConfigs: {}, agentMode: 'chat' } })))
+  setAuthToken('local-test-token')
+  try {
+    await render(1); let pending
+    await act(async () => { pending = trigger('older draft', null, null, () => { accepted += 1 }); await Promise.resolve() })
+    await render(2)
+    await act(async () => { request.onTurnAccepted(); finish({ completed: true }); await pending })
+    const created = actions.find(action => action.type === 'NEW_SESSION')
+    assert.equal(created.payload.activate, false)
+    assert.equal(accepted, 0, 'the old acceptance cannot clear the current draft')
+    const current = { activeSessionId: null, draftSessionId: null, draftWorkspacePath: 'B', newDraftVersion: 2, sessions: [] }
+    const next = reduceSessionLifecycleState(current, created)
+    assert.equal(next.activeSessionId, null)
+    assert.equal(next.draftWorkspacePath, 'B')
+    assert.equal(next.sessions[0].id, request.sessionId)
+  } finally { finish?.({ completed: true }); await act(async () => root.unmount()); setAuthToken(''); dom.window.close() }
+})
 
 test('chat send flow rejects a same-tick duplicate before React generation state updates', async () => {
   const dom = setupDom()

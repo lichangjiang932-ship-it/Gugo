@@ -28,6 +28,7 @@ export function useChatSendActions({
   stateRef,
   steerActiveTurn,
   t,
+  toast = null,
   triggerSendFlow,
 }) {
   const handleWorkbenchSend = async (content) => {
@@ -53,19 +54,26 @@ export function useChatSendActions({
     if (isGenerating) {
       if (!typedContent) {
         setWorkbenchMessage(t('chatSteering.textOnly'))
+        toast?.info?.(t('chatSteering.textOnly'))
         return
       }
       await steerActiveTurn(typedContent)
       return
     }
-    if (directoryApprovalOpen) return
+    if (directoryApprovalOpen) {
+      setWorkbenchMessage(t('chatSteering.directoryAuthorizationRequired'))
+      toast?.info?.(t('chatSteering.directoryAuthorizationRequired'))
+      return
+    }
     const attachmentState = attachmentSendState(attachments)
     if (attachmentState.uploading) {
       setWorkbenchMessage(t('chatAttachments.waitingForUploads'))
+      toast?.info?.(t('chatAttachments.waitingForUploads'))
       return
     }
     if (attachmentState.failed) {
       setWorkbenchMessage(t('chatAttachments.removeFailed'))
+      toast?.info?.(t('chatAttachments.removeFailed'))
       return
     }
     const parsedSlash = parseSlashCommandInput(typedContent)

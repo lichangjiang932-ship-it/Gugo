@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Gauge, ListTodo, X } from 'lucide-react'
-import { estimateClientContextUsage } from '../../lib/contextUsage.js'
+import { buildPendingContextUsage } from '../../lib/contextMeter.js'
 import { getSlashActionCopy } from '../../lib/slashCoreCommands.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 
@@ -14,6 +14,9 @@ export default function ChatStatusCard({
   tasks = [],
   model,
   contextWindow,
+  contextWindowEstimated = false,
+  contextWindowKnown = null,
+  contextWindowSource = '',
   toolSpecs,
   systemPrompt,
   approvalMode,
@@ -21,14 +24,21 @@ export default function ChatStatusCard({
   onOpenTasks,
   onOpenContext,
 }) {
-  const { lang } = useT()
+  const { lang, t } = useT()
   const copy = getSlashActionCopy(lang).statusPanel
-  const usage = useMemo(() => estimateClientContextUsage({
+  const usage = useMemo(() => buildPendingContextUsage({
     messages,
     tools: toolSpecs,
     systemPrompt,
     contextWindow,
-  }), [contextWindow, messages, systemPrompt, toolSpecs])
+    contextWindowAuthoritative: contextWindowKnown === true && contextWindowEstimated !== true,
+    contextWindowEstimated,
+    contextWindowKnown,
+    contextWindowSource,
+  }), [contextWindow, contextWindowEstimated, contextWindowKnown, contextWindowSource, messages, systemPrompt, toolSpecs])
+  const meter = usage.meter
+  const windowKnown = meter.contextWindowKnown === true
+  const percent = meter.percent === null ? 0 : Math.max(0, Math.min(100, meter.percent))
   const scopedTasks = tasks.filter((task) => !task.sessionId || task.sessionId === session?.id)
   const running = scopedTasks.filter((task) => task.status === 'running').length
   const pending = scopedTasks.filter((task) => task.status === 'pending').length
@@ -49,13 +59,25 @@ export default function ChatStatusCard({
         </button>
       </div>
 
-      <button type="button" onClick={onOpenContext} className="mt-3 block w-full rounded-xl bg-ink/[0.035] px-3 py-2.5 text-left hover:bg-ink/[0.055]">
+      <button
+        type="button"
+        onClick={onOpenContext}
+        data-window-state={!windowKnown ? 'unknown' : meter.contextWindowEstimated ? 'estimated' : 'exact'}
+        className="mt-3 block w-full rounded-xl bg-ink/[0.035] px-3 py-2.5 text-left hover:bg-ink/[0.055]"
+      >
         <div className="flex items-center justify-between text-xs text-ink-fade">
           <span>{copy.context}</span>
-          <span className="font-mono">~{usage.estimatedTokens.toLocaleString()} / {usage.contextWindow.toLocaleString()} · {usage.percent}%</span>
+          <span className="font-mono">
+            ~{meter.usedTokens.toLocaleString()}
+            {windowKnown
+              ? <> / {meter.contextWindowEstimated ? '≈' : ''}{meter.contextWindow.toLocaleString()} · {meter.contextWindowEstimated ? '≈' : ''}{Math.round(percent)}%</>
+              : <> · {t('chat.contextUsage.windowUnknown')}</>}
+          </span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
-          <div className={`h-full rounded-full ${usage.percent >= 80 ? 'bg-danger' : usage.percent >= 60 ? 'bg-warning' : 'bg-ink/55'}`} style={{ width: `${Math.max(2, usage.percent)}%` }} />
+          {windowKnown && (
+            <div className={`h-full rounded-full ${percent >= 80 ? 'bg-danger' : percent >= 60 ? 'bg-warning' : 'bg-ink/55'}`} style={{ width: `${Math.max(2, percent)}%` }} />
+          )}
         </div>
       </button>
 

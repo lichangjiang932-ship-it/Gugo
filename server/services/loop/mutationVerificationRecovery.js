@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import path from 'node:path'
+import { isCommandExecutionTool } from './heuristics/capabilityChecks.js'
+import { extractMutationTargets } from './heuristics/deletionTargets.js'
 import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
 import { getDynamicToolRegistrationId } from '../../utils/toolSchemaDynamicRegistry.js'
 import { getBoundRuntimeTool } from '../../core/runtimeCapabilityState.js'
@@ -51,7 +54,7 @@ function pendingCount(s) {
 }
 
 function canonicalReadbackTool(s, name, args) {
-  if (!['read_file', 'list_directory'].includes(name)) return false
+  if (!['read_file', 'list_directory', 'git_status'].includes(name)) return false
   const userId = s?.job?.userId || null
   if (getDynamicToolRegistrationId(name, { userId })) return false
   const bound = getBoundRuntimeTool(name)
@@ -61,6 +64,12 @@ function canonicalReadbackTool(s, name, args) {
 }
 
 function canUseTool(s, name, args) {
+  // A status inventory can include pre-existing credentials. Do not turn its
+  // filenames into automatic content disclosure; keep those targets pending.
+  if (name === 'read_file') {
+    const filename = String(args?.path || '').replaceAll('\\', '/').split('/').at(-1) || ''
+    if (/^(?:\.env(?:\..*)?|\.?credentials(?:\..*)?|settings\.ya?ml|.*\.(?:pem|key|pfx|p12))$/iu.test(filename)) return false
+  }
   if (!s.activeToolSpecs?.some((spec) => s.d.toolNameFromSpec(spec) === name)
     || s.disabledToolValidationError?.(name)) return false
   try {
@@ -75,8 +84,10 @@ function remainingCallBudget(s) {
     if (!Number.isSafeInteger(budget[key]) || budget[key] < 0) return 0
   }
   if (budget.maxWallMs > 0 && budget.elapsed >= budget.maxWallMs) return 0
-  if (budget.maxModelCalls > 0 && budget.modelCalls >= budget.maxModelCalls) return 0
-  if (budget.maxModelTokens > 0 && budget.modelTokens >= budget.maxModelTokens) return 0
+  // Reaching a model limit forbids the next model request, not an already
+  // authorized host readback. An actual over-budget stop still stands.
+  if (budget.maxModelCalls > 0 && budget.modelCalls > budget.maxModelCalls) return 0
+  if (budget.maxModelTokens > 0 && budget.modelTokens > budget.maxModelTokens) return 0
   return Math.max(0, Math.floor(budget.maxTotalCalls - budget.used))
 }
 
@@ -107,6 +118,31 @@ export function captureMutationVerificationIntent(call, state = null) {
   }
 }
 
+function unknownCommandsBelongToProject(s, root) {
+  const calls = new Map()
+  let witnessed = false
+  for (const message of s.convo || []) {
+    for (const wire of message?.role === 'assistant' && Array.isArray(message.tool_calls) ? message.tool_calls : []) {
+      const name = wire.function?.name || wire.name
+      if (!isCommandExecutionTool({ name })) continue
+      try {
+        const raw = wire.function?.arguments ?? wire.args
+        calls.set(wire.id, { name, args: typeof raw === 'string' ? JSON.parse(raw) : raw })
+      } catch { return false }
+    }
+    if (message.role !== 'tool' || !calls.has(message.tool_call_id)) continue
+    const call = calls.get(message.tool_call_id)
+    let result
+    try { result = JSON.parse(message.content) } catch { return false }
+    if (result?.ok !== true) return false
+    if (!extractMutationTargets(call, result).has(s.d.PROJECT_SCOPE_TARGET)) continue
+    witnessed = true
+    const cwd = result.executionCwd || result.cwd || call.args?.cwd
+    if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !s.d.targetsMatch(cwd, root)) return false
+  }
+  return witnessed
+}
+
 function recoveryPlan(s, state, limit) {
   const ceiling = Math.min(MAX_BATCH_CALLS, MAX_AUTOMATIC_VERIFICATION_CALLS - state.totalCalls, limit)
   if (!Number.isSafeInteger(ceiling) || ceiling < 1) return []
@@ -120,8 +156,11 @@ function recoveryPlan(s, state, limit) {
   }
   for (const value of s.pendingMutationTargets || []) {
     const target = s.d.normalizeMutationTarget(value)
-    if (!target || target === s.d.PROJECT_SCOPE_TARGET) continue
-    add('read_file', target, { path: target })
+    if (!target) continue
+    if (target === s.d.PROJECT_SCOPE_TARGET) {
+      const cwd = s.verificationProjectDirectory || s.executionScope?.projectDirectory || s.outputDirectoryContext?.projectDirectory
+      if (typeof cwd === 'string' && path.isAbsolute(cwd) && unknownCommandsBelongToProject(s, cwd)) add('git_status', target, { cwd })
+    } else add('read_file', target, { path: target })
     if (proposed.size >= ceiling) return [...proposed.values()]
   }
   for (const value of s.pendingDeletionTargets || []) {

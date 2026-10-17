@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from '../lib/router.jsx'
 import { Bot, Search, User, X } from 'lucide-react'
 import { useAppContext } from '../store/AppContext.jsx'
-import { getAuthToken } from '../lib/accountClient.js'
+import { isCompositionEvent } from '../lib/compositionEvent.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import Modal from './Modal.jsx'
 import useSessionSearchResults from './leftRail/useSessionSearchResults.js'
@@ -78,8 +78,8 @@ export default function SessionSearchModal() {
   const inputRef = useRef(null)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const localResults = useMemo(() => buildLocalResults(state.sessions, query), [state.sessions, query])
-  const { results, loading, error } = useSessionSearchResults({ open, query, localResults, t })
+  const getLocalResults = useCallback(value => buildLocalResults(state.sessions, value), [state.sessions])
+  const { results, loading, error } = useSessionSearchResults({ open, query, getLocalResults, t })
 
   useEffect(() => {
     const openSearch = (event) => {
@@ -88,6 +88,7 @@ export default function SessionSearchModal() {
       setOpen(true)
     }
     const onKey = (event) => {
+      if (isCompositionEvent(event) || event.defaultPrevented) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setOpen(true)
@@ -106,12 +107,13 @@ export default function SessionSearchModal() {
 
   useEffect(() => {
     if (!open) return
-    window.setTimeout(() => inputRef.current?.focus(), 0)
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 0)
+    return () => window.clearTimeout(timer)
   }, [open])
 
   if (!open) return null
 
-  const shownResults = query.trim() && !getAuthToken() ? localResults : results
+  const shownResults = query.trim() ? results : []
 
   const openResult = (result) => {
     dispatch({ type: 'SWITCH_SESSION', payload: result.sessionId })
@@ -129,7 +131,7 @@ export default function SessionSearchModal() {
       overlayClassName="items-start px-4 pt-[12vh]"
       className="max-w-2xl border-ink overflow-hidden"
     >
-        <div className="h-12 px-4 border-b border-ink-fade/30 flex items-center gap-3">
+        <div className="session-search-field h-12 px-4 border-b border-ink-fade/30 flex items-center gap-3">
           <Search className="w-4 h-4 text-ink-fade" />
           <input
             ref={inputRef}
@@ -139,7 +141,7 @@ export default function SessionSearchModal() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t('sessionSearch.placeholder')}
-            className="flex-1 h-full bg-transparent outline-none text-sm text-ink placeholder:text-ink-fade"
+            className="session-search-input flex-1 h-full bg-transparent outline-none text-sm text-ink placeholder:text-ink-fade"
           />
           <span className="font-mono text-xs text-ink-fade border border-ink-fade/40 rounded px-1.5 py-0.5" aria-hidden="true">Esc</span>
           <button

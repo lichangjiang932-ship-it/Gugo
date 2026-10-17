@@ -1,4 +1,5 @@
 import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
+import { projectToolSpecs } from '../core/hostVerificationPolicy.js'
 import { listEnabledIntegrationToolNames } from './integrationsStore.js'
 import {
   getBuiltinSpec,
@@ -484,7 +485,7 @@ export function projectToolSpecsForRuntimePolicy(specs, {
   const disabledByTurn = new Set(normalizeServerToolsConfig(toolsConfig).disabled)
   const overrides = userToolOverrides(userId, userToolPermissions)
   const capabilities = workspaceToolCapabilities(fileAccessStatus)
-  return (Array.isArray(specs) ? specs : []).filter((spec) => {
+  return projectToolSpecs((Array.isArray(specs) ? specs : []).filter((spec) => {
     const name = toolName(spec)
     const dynamicState = dynamicToolSpecRegistrationState(spec, { userId })
     let reason = null
@@ -514,7 +515,7 @@ export function projectToolSpecsForRuntimePolicy(specs, {
     if (!reason) return true
     if (typeof onExcluded === 'function') onExcluded({ name, reason, stage })
     return false
-  })
+  }))
 }
 
 export async function resolveTurnToolSpecs({
@@ -567,16 +568,14 @@ export async function resolveTurnToolSpecs({
     }
     return true
   })
-  const eligibleSpecs = projectToolSpecsForRuntimePolicy(readySpecs, {
+  const deferredSpecs = projectToolSpecsForRuntimePolicy(readySpecs, {
     userId,
     toolsConfig,
     permissionMode,
     fileAccessStatus,
     userToolPermissions,
     onExcluded: ({ name, reason, stage }) => exclude(name, reason, stage),
-  })
-  const deferredSpecs = eligibleSpecs
-    .map(canonicalizeToolSpec)
+  }).map(canonicalizeToolSpec)
     .sort((left, right) => String(left?.function?.name || '').localeCompare(String(right?.function?.name || ''), 'en'))
   if (typeof onDeferredSpecs === 'function') {
     try { onDeferredSpecs(deferredSpecs) } catch { /* discovery diagnostics must not block the turn */ }

@@ -75,6 +75,7 @@ runtime dependency families and declared licenses are:
 | Package | License |
 |---|---|
 | `@e965/xlsx` | Apache-2.0 |
+| `@fontsource-variable/noto-sans-sc` | OFL-1.1 |
 | `@tailwindcss/typography` | MIT |
 | `better-sqlite3` | MIT |
 | `framer-motion` | MIT |
@@ -94,6 +95,26 @@ runtime dependency families and declared licenses are:
 | `sharp` | Apache-2.0; platform libvips shared libraries are LGPL-3.0-or-later |
 | `undici` | MIT |
 | `zod` | MIT |
+
+## Bundled UI font
+
+The browser UI self-hosts **Noto Sans SC Variable** from
+`@fontsource-variable/noto-sans-sc@5.3.1` (Google Inc.), licensed under
+**SIL Open Font License 1.1 (OFL-1.1)**. The exact package and integrity are
+locked in `package-lock.json`; source and font metadata are available at
+https://github.com/fontsource/font-files/tree/main/fonts/variable/noto-sans-sc
+and https://fontsource.org/fonts/noto-sans-sc.
+
+The unmodified package CSS uses `font-display: swap`, unicode-range WOFF2
+subsets and a continuous 100–900 weight axis (including the UI's 400–700 and
+650 weights). Vite bundles the local font files; no runtime font CDN is used.
+The complete upstream copyright notice and OFL text are also shipped as
+`public/licenses/NotoSansSC-OFL-1.1.txt`, copied by Vite to
+`dist/licenses/NotoSansSC-OFL-1.1.txt`. Existing Web (`dist`) and desktop
+(`dist/**/*`) release file lists include that license beside the built assets.
+This UI font is separate from the server-only PDF TTF below; same-page Office
+fallback content retains its original default stack, and authored document
+fonts and iframe previews are not replaced.
 
 ## Bundled PDF font
 

@@ -1,0 +1,77 @@
+{
+  "kind": "conversation-runtime-hardening",
+  "base": "648fd1b",
+  "full": {
+    "testFiles": 1193,
+    "exitCode": 0,
+    "seconds": 1290.284,
+    "frozenFiles": 4254,
+    "hashesUnchanged": true,
+    "manifest": "frozen-source.json",
+    "log": "gugo-conversation-runtime-eouGVO/full-tests-release.log"
+  },
+  "targeted": {
+    "testFiles": 21,
+    "tests": 312
+  },
+  "offline": {
+    "tests": 71,
+    "realModel": false
+  },
+  "implemented": {
+    "send": "owner/backend/session/draft single-flight; old ACK does not reactivate/clear new draft; old-owner preflight does not submit; visible toast on block",
+    "context": "fenced UUID/runtime-key binding; prepared/streamed public output/completed/tool-batch/compaction production observations; 200ms incremental numeric updates with shared Unicode token weights",
+    "acceptance": "canonical allowed git_status only with matching command execution roots; exact readback after status; equality at model budget ceiling does not forbid allowed reads; no automatic sensitive-inventory disclosure",
+    "failureUI": "one red completion summary; one entry per file; structured metadata retained; recovery/cancellation/unknown outcomes retain their controls"
+  },
+  "browser": {
+    "aOpenWhenBReplied": true,
+    "distinctSessions": true,
+    "aCompletesSeparately": true,
+    "liveFractions": [
+      0.18234,
+      0.18919
+    ],
+    "model": "deterministic loopback SSE fixture only",
+    "redSummaryColor": "rgb(180, 35, 24)",
+    "fileCards": 2,
+    "duplicateDetails": false,
+    "blockedFeedbackVisible": true,
+    "draftPreservedOnBlock": true,
+    "host": {
+      "envDir": false,
+      "independentHomeAndDatabaseAndProfile": true
+    },
+    "allOwnedServicesClosed": true
+  },
+  "gates": [
+    "lint",
+    "typecheck; 18 invalid fixtures rejected",
+    "debt",
+    "complexity",
+    "i18n shape/keys",
+    "dependencies",
+    "production package licenses",
+    "dotenv-disabled isolated Web build",
+    "git diff --check"
+  ],
+  "retainedNonfinalRuns": [
+    "full-tests.log",
+    "full-tests-final.log",
+    "full-tests-closure.log",
+    "full-tests-verified.log"
+  ],
+  "knownLimitations": [
+    "not a replay/acceptance of the real user PPT run",
+    "file-delivery receipts do not prove all workspace mutations",
+    "non-Git/missing root/permissions or existing dirty scope can remain incomplete; DEBT-VERIFY-003",
+    "token counts during streaming are partial estimates, not precise upstream billing",
+    "real Provider quality, OS sandbox, Electron installed package and long-term stress not accepted here"
+  ],
+  "git": {
+    "committed": false,
+    "pushed": false
+  },
+  "realUserServicesRestarted": false,
+  "protectedHeaderToolbarLayoutUnchanged": true
+}

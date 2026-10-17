@@ -1,0 +1,101 @@
+{
+  "kind": "claude-review-boundary-fixes",
+  "base": "648fd1b",
+  "scope": {
+    "fixed": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      7,
+      8
+    ],
+    "additional": "ordinary href origin comparison and relative scheme rejection",
+    "deferred": 4,
+    "debts": [
+      "DEBT-LINK-001",
+      "DEBT-SEARCH-001"
+    ]
+  },
+  "full": {
+    "testFiles": 1191,
+    "exitCode": 0,
+    "seconds": 1143.632,
+    "frozenFiles": 4250,
+    "hashesUnchanged": true,
+    "manifest": "frozen-source.json",
+    "exclusions": "docs/, .agent/, .claude/ and sensitive/runtime paths; working-tree byte hashes"
+  },
+  "targeted": {
+    "testFiles": 15,
+    "tests": 166
+  },
+  "gates": [
+    "lint",
+    "typecheck with all 18 invalid fixtures rejected",
+    "debt",
+    "function complexity",
+    "i18n shape/keys",
+    "dependencies",
+    "407 production-package licenses",
+    "71 offline eval cases",
+    "dotenv-disabled isolated Web build",
+    "diff whitespace",
+    "documentation references"
+  ],
+  "browser": {
+    "providerTargetIsolation": true,
+    "providerRequests": "synthetic interception; correct B transport/credential markers only",
+    "hostedRelativeInlineCallback": true,
+    "externalSnapshotBlocked": true,
+    "focusedSearchCases": 6,
+    "themes": [
+      "light",
+      "dark",
+      "white"
+    ],
+    "widths": [
+      1440,
+      360
+    ],
+    "contrastByTheme": {
+      "light": 7.24,
+      "dark": 11.99,
+      "white": 7.56
+    },
+    "ime": "composition DOM-event guard tested, not OS candidate-window acceptance",
+    "escape": "native CDP Escape closes",
+    "overflow": false,
+    "finalHost": {
+      "envDir": false,
+      "independentHomeDataProfile": true,
+      "realProviderCalled": false
+    },
+    "initialLauncherRetired": true
+  },
+  "host": {
+    "turnWebSocketAttached": false,
+    "upgradeTests": "real loopback HTTP server; all upgrade paths 403; ordinary read succeeds",
+    "credentialEnvironmentProjectorExported": false,
+    "liveEnabled": false
+  },
+  "preservation": {
+    "originalSnapshot": "gugo-review-fixes-dbRp3x/snapshot",
+    "indexUntouched": true,
+    "launchConfigurationEdited": false,
+    "protectedHeaderToolbarLayoutUnchanged": true,
+    "unrelatedPriorFilesChecked": "preservation.json"
+  },
+  "historicalRun": "bcmcv4mqu completed 1188 tests exit 0 in 1272.565s with hashesUnchanged:false; not rewritten as frozen PASS",
+  "limits": [
+    "cross-turn trusted file index not implemented",
+    "single no-match local scan remains O(N)",
+    "no real Provider or actual user-file opening in browser fixtures",
+    "no Electron package/OS sandbox/full-site accessibility or performance acceptance"
+  ],
+  "git": {
+    "committed": false,
+    "pushed": false
+  }
+}

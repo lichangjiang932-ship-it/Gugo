@@ -72,6 +72,9 @@ test('ordinary questions retain the complete stable tool catalog', () => {
   assert.ok(ANSWER_NAMES.includes('bash_exec'))
   assert.ok(ANSWER_NAMES.includes('slack_send_message'))
   assert.ok(ANSWER_NAMES.includes('Agent'))
+  // A terse "look this up" request must not depend on the model discovering
+  // web_search through another tool first.
+  assert.ok(namesOf(selectChat({ prompt: '查一下今天有什么科技新闻' })).includes('web_search'))
 })
 
 test('production chat uses a compact recoverable initial catalog', () => {
@@ -90,21 +93,22 @@ test('production chat uses a compact recoverable initial catalog', () => {
 
   const answer = selectProduction('Explain OAuth refresh-token rotation.')
   assert.deepEqual(answer.names, [
-    'load_skill', 'request_clarification', 'search_tools', 'set_deliverables',
+    'load_skill', 'request_clarification', 'search_tools', 'set_deliverables', 'web_search',
   ])
 
   const coding = selectProduction('Fix the failing tests in this project and verify the result.')
-  assert.equal(coding.names.length, 15)
+  assert.equal(coding.names.length, 16)
   for (const name of [
     'read_file', 'grep_code', 'write_file', 'edit_file', 'apply_patch',
     'bash_exec', 'run_command', 'run_project_check', 'git_diff', 'search_tools',
   ]) assert.ok(coding.names.includes(name), name)
-  for (const name of ['Agent', 'archive_extract', 'run_test', 'slack_send_message', 'web_search']) {
+  for (const name of ['Agent', 'archive_extract', 'run_test', 'slack_send_message']) {
     assert.equal(coding.names.includes(name), false, name)
     assert.deepEqual(coding.decision.excludedTools.find((entry) => entry.name === name), {
       name, stage: 'initial_disclosure', reason: 'deferred_until_requested',
     })
   }
+  assert.ok(coding.names.includes('web_search'), 'web search stays callable without an explicit search phrase')
 
   assert.deepEqual(selectProduction('Search the web for the current Node.js LTS.').names, [
     'fetch_url', 'load_skill', 'request_clarification', 'search_tools',

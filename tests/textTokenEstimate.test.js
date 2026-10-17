@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { characterTokenWeight, textTokens } from '../shared/textTokenEstimate.js'
+import { characterTokenWeight, textTokens, createStreamingTextTokenCounter } from '../shared/textTokenEstimate.js'
 import { textTokens as serverTokens } from '../server/services/contextCompactionMetrics.js'
 import { estimateTextTokens } from '../src/lib/contextUsage.js'
 
@@ -39,6 +39,16 @@ test('everything else non-ASCII is charged in full, on purpose', () => {
   // Astral characters count as one code point, not two surrogate halves.
   assert.equal(textTokens('🙂🙂'), 2)
   assert.equal(textTokens('中'.repeat(10)), 6)
+})
+
+test('streaming estimates use the same rule without chunk rounding or split-surrogate inflation', () => {
+  const sample = '中文 mixed 🙂 text あ'.repeat(11)
+  for (let size = 1; size <= 9; size += 1) {
+    const append = createStreamingTextTokenCounter()
+    let total = 0
+    for (let start = 0; start < sample.length; start += size) total = append(sample.slice(start, start + size))
+    assert.equal(total, textTokens(sample), 'chunk size '+size)
+  }
 })
 
 test('the planner and the interface meter cannot drift apart', () => {

@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-17",
+  "commands": [
+    { "name": "lint", "command": "npm run lint", "exitCode": 0 },
+    { "name": "typecheck", "command": "npm run typecheck", "exitCode": 0, "note": "18 protocol negative fixtures rejected" },
+    { "name": "debt", "command": "npm run debt:check", "exitCode": 0 },
+    { "name": "functions", "command": "npm run audit:functions", "exitCode": 0 },
+    { "name": "i18n-tests", "command": "npm run i18n:check", "exitCode": 0 },
+    { "name": "i18n-keys", "command": "npm run i18n:keys", "exitCode": 0, "note": "zh=1976/en=1976, missing=0, shape equal" },
+    { "name": "dependencies", "command": "npm run deps:check", "exitCode": 0 },
+    { "name": "licenses", "command": "npm run licenses", "exitCode": 0, "note": "407 production packages" },
+    { "name": "model-catalog", "command": "npm run catalog:validate", "exitCode": 0, "note": "226 providers, 8154 models" },
+    { "name": "desktop", "command": "npm run desktop:check", "exitCode": 0, "note": "73 tests including packaging and ASAR closure" },
+    { "name": "offline-eval", "command": "npm run eval:offline", "exitCode": 0, "note": "71 tests" },
+    { "name": "production-build", "command": "npm run build", "exitCode": 0 },
+    { "name": "diff-check", "command": "git diff --check", "exitCode": 0, "note": "line-ending warnings only" },
+    { "name": "full-suite-freeze", "command": "TEST_CONCURRENCY=1 TEST_ISOLATED_CONCURRENCY=1 npm test", "exitCode": 0, "note": "1201 test files PASS; 4284 hashes unchanged; run serially after a parallel-only preview-server port flake" }
+  ]
+}

@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from '../../lib/router.jsx'
 import { useAppContext } from '../../store/AppContext'
 import { writeStoredModelSelection } from '../../lib/modelSelection.js'
+import { presentChatSendBlocked } from './chatSendFeedback.js'
 import { streamResumeOwnerScope } from '../../lib/streamResumeDismissals.js'
-import { SETTINGS_TAB_MODELS, settingsPathForSection } from '../../lib/settingsNavigation.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { getSlashActionCopy } from '../../lib/slashCoreCommands.js'
-import { TASK_STATUS } from '../../store/taskStatus.js'
 import { persistSlashGoals } from '../../lib/slashGoals.js'
+import useResolvedSessionTodos from './useResolvedSessionTodos.js'
+import useChatHeaderActions from './useChatHeaderActions.js'
 import { recordChatFeedback } from '../../lib/evolutionClient.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import { useToast } from '../../components/Toast.jsx'
@@ -33,7 +34,6 @@ import useChatTurnRecovery from './useChatTurnRecovery.js'
 import useChatWorkspaceState from './useChatWorkspaceState.js'
 import useProjectFilesWorkbench from './useProjectFilesWorkbench.js'
 import useChatSessionBranches from './useChatSessionBranches.js'
-const CHAT_MODEL_SETTINGS_PATH = settingsPathForSection(SETTINGS_TAB_MODELS, [], { returnTo: '/chat' })
 export default function ChatSplit() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -66,11 +66,13 @@ export default function ChatSplit() {
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,
-    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow, selectedContextWindowAuthoritative, selectedConfigRevision,
+    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow, selectedContextWindowAuthoritative,
+    selectedContextWindowEstimated, selectedContextWindowKnown, selectedContextWindowSource, selectedConfigRevision,
     selectedModel, selectedModelProviderId, setSelectedModel, slashRegistry,
   } = useChatCatalogState({
     authoritativeModelFailure, globalActiveAgentId, lang, state, t,
   })
+  const sessionTodos = useResolvedSessionTodos({ messages, storedTodos: activeSession?.todos })
   const {
     activateWorkspaceForTurn, draftWorkspacePath, handleWorkspaceClear,
     handleWorkspaceSelect, recentWorkspaces, selectedWorkspacePath,
@@ -124,8 +126,7 @@ export default function ChatSplit() {
         : getVisibleModelErrorMessage(error, t),
     })
   }, [t, toast])
-  const showSendBlocked = useCallback((reason) => setWorkbenchMessage(t(reason === 'directory-approval' ? 'chatSteering.directoryAuthorizationRequired'
-    : reason === 'send-pending' ? 'chatSteering.sendPending' : 'chatSteering.turnRunning')), [setWorkbenchMessage, t])
+  const showSendBlocked = useCallback(reason => presentChatSendBlocked(reason, { t, setWorkbenchMessage, toast }), [setWorkbenchMessage, t, toast])
   const triggerSendFlow = useChatSendFlow({
     abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments,
     approvalMode: approvals.approvalSettings?.mode || 'normal',
@@ -223,22 +224,13 @@ export default function ChatSplit() {
     state,
     t,
   })
-  const handlePermAllow = () => {
-    dispatch({ type: 'SET_PERM_REQUEST', payload: null })
-    const pending = [...state.tasks].reverse().find((task) => task.status === 'pending')
-    if (pending) dispatch({ type: 'UPDATE_TASK', payload: { id: pending.id, updates: { status: TASK_STATUS.RUNNING, stepLabel: t('chatReliability.permissionReady') } } })
-    dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionGranted') })
-  }
-  const handleManageModels = () => {
-    // The settings route owns local/multi-user authentication; navigation is not a credential gate.
-    navigate(CHAT_MODEL_SETTINGS_PATH)
-  }
+  const { handleManageModels, handlePermAllow, handlePermDeny } = useChatHeaderActions({ dispatch, navigate, state, t })
   const { forkingMessageId, handleForkMessage, handleOpenSessionBranch } = useChatSessionBranches(
     { activeSessionId, dispatch, isGenerating, navigate, stateRef, t, toast },
   )
   const {
     onOpenPlan, onClosePlan, planCardVisible,
-  } = usePlanCardState({ activeSession })
+  } = usePlanCardState({ activeSession, todos: sessionTodos })
 
   const { openPreview, sessionChangesReview } = useChatOverlays({
     dispatch, isGenerating, messages, sessionId: activeSessionId || '',
@@ -248,9 +240,14 @@ export default function ChatSplit() {
       activeSession={activeSession} activeSessionId={activeSessionId} approvalMode={approvals.approvalSettings?.mode || 'normal'}
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
-      contextWindowAuthoritative={selectedContextWindowAuthoritative} selectedConfigRevision={selectedConfigRevision}
+      contextWindowAuthoritative={selectedContextWindowAuthoritative}
+      contextWindowEstimated={selectedContextWindowEstimated}
+      contextWindowKnown={selectedContextWindowKnown}
+      contextWindowSource={selectedContextWindowSource}
+      selectedConfigRevision={selectedConfigRevision}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
       sessionChangesReview={sessionChangesReview} planVisible={planCardVisible} onOpenPlan={() => { sessionChangesReview.close(); onOpenPlan() }}
+      sessionTodos={sessionTodos}
       onClosePlan={onClosePlan}
       modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onPause={handlePause} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
@@ -274,7 +271,7 @@ export default function ChatSplit() {
       onOpenArtifact={(artifact) => { dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact ? { ...artifact } : null }) }}
       onOpenInPreview={(msg, preview) => { dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: { messageId: msg.id, content: msg.meta?.artifactSource || msg.content, preview } }) }}
       onOpenModelPicker={() => setShowModelPicker(true)} onOpenSessionBranch={handleOpenSessionBranch} onPermAllow={handlePermAllow}
-      onPermDeny={() => { dispatch({ type: 'SET_PERM_REQUEST', payload: null }); dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionDenied') }) }}
+      onPermDeny={handlePermDeny}
       onPreviewMessage={setWorkbenchMessage}
       onResume={handleResume}
       onSend={handleSend} onSlashCommandSelect={executeSlashEntry}

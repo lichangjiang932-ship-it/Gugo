@@ -511,6 +511,15 @@ export function subscribeToJobEvents(
         method: 'POST',
         headers: authHeaders(),
       })
+      if (response.status === 401 || response.status === 403) {
+        // A missing/expired session will not become valid by backing off. Stop
+        // here and report a terminal state; polling still refreshes the list.
+        closed = true
+        if (retryTimer != null) clearTimeoutImpl(retryTimer)
+        retryTimer = null
+        reportConnection('unauthorized', { status: response.status })
+        return
+      }
       if (!response.ok) throw new Error(`stream ticket request failed: ${response.status}`)
       const { ticket } = await response.json()
       if (!ticket) throw new Error('stream ticket missing')

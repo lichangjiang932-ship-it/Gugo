@@ -26,9 +26,11 @@ export function reduceSessionLifecycleState(state, action) {
       return {
         ...state,
         sessions: [newSession, ...state.sessions],
-        activeSessionId: id,
-        draftSessionId: null,
-        draftWorkspacePath: '',
+        ...(action.payload?.activate === false ? {} : {
+          activeSessionId: id,
+          draftSessionId: null,
+          draftWorkspacePath: '',
+        }),
       }
     }
 

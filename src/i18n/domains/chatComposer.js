@@ -13,7 +13,9 @@ const translations = {
     "stop": "停止",
     "pause": "暂停",
     "send": "发送",
-    "steer": "追加指令"
+    "steer": "追加指令",
+    "emptySend": "输入内容后可发送",
+    "textOnly": "运行中只能发送文字引导"
   },
   "en": {
     "allSkills": "All skills",
@@ -29,7 +31,9 @@ const translations = {
     "stop": "Stop",
     "pause": "Pause",
     "send": "Send",
-    "steer": "Add instruction"
+    "steer": "Add instruction",
+    "emptySend": "Type a message to send",
+    "textOnly": "Send text guidance while the task runs"
   }
 }
 

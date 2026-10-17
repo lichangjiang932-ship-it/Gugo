@@ -4,6 +4,7 @@ import { JSDOM } from 'jsdom'
 import { act, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import RightPreviewPane from '../../src/pages/ChatSplit/RightPreviewPane.jsx'
+import RightRegionFrame from '../../src/pages/ChatSplit/rightPanes/RightRegionFrame.jsx'
 import { DirectFileToolbar } from '../../src/pages/ChatSplit/preview/PreviewChrome.jsx'
 import MarkdownRenderer from '../../src/components/MarkdownRenderer.jsx'
 
@@ -63,6 +64,38 @@ function harness(initialWidth = 1000, preferred = 900) {
   }
 }
 
+test('an embedded preview at a narrow width leaves the chat interactive and does not close on a composer Escape', async () => {
+  const h = harness(600)
+  try {
+    function EmbeddedScene() {
+      return <>
+        <div data-chat-main-area>
+          <div className="chat-main-pane">
+            <div data-testid="chat-scroll"><button type="button" data-testid="chat-opener">Conversation</button></div>
+            <div data-testid="chat-composer-surface"><textarea aria-label="Chat input" /></div>
+          </div>
+          <RightPreviewPane embedded artifact={artifact} onClose={() => {}} />
+        </div>
+      </>
+    }
+    await h.render(<EmbeddedScene />)
+    const pane = h.rootEl.querySelector('[data-testid="preview-pane"]')
+    assert.equal(pane.dataset.previewLayout, 'split')
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-backdrop"]'), null)
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-resize-handle"]'), null)
+    assert.equal(h.rootEl.querySelector('.chat-main-pane').hasAttribute('inert'), false)
+
+    const textarea = h.rootEl.querySelector('textarea')
+    textarea.focus()
+    const escape = new h.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    await act(async () => { document.dispatchEvent(escape) })
+    assert.ok(h.rootEl.querySelector('[data-testid="preview-pane"]'), 'the composer keeps Escape in an embedded preview')
+    assert.equal(escape.defaultPrevented, false)
+  } finally {
+    await h.cleanup()
+  }
+})
+
 test('preview observes the main container and preserves a saved wide preference across layout changes', async () => {
   const h = harness(1000)
   try {
@@ -115,6 +148,33 @@ test('narrow main area focuses preview, offers maximize and returns focus to an 
     assert.strictEqual(h.rootEl.querySelector('[data-testid="chat-scroll"]'), scrollRegion)
     assert.equal(scrollRegion.scrollTop, 320)
     assert.equal(h.dom.window.localStorage.getItem('gugo:left-rail-collapsed'), '0')
+  } finally { await h.cleanup() }
+})
+
+test('closing a focused preview inside the workbench overlay does not leave chat inert', async () => {
+  const h = harness(800)
+  function OverlayScene() {
+    const [open, setOpen] = useState(true)
+    const close = () => setOpen(false)
+    return <>
+      <nav className="left-rail"><button type="button">Navigation</button></nav>
+      <div data-chat-main-area>
+        <div className="chat-main-pane"><div data-testid="chat-scroll"><button type="button" data-testid="chat-opener">Conversation</button></div><div data-testid="chat-composer-surface"><textarea aria-label="Chat input" /></div></div>
+        {open && <RightRegionFrame overlay onClose={close} t={(key) => key} width={520}>
+          <RightPreviewPane artifact={artifact} onClose={close} />
+        </RightRegionFrame>}
+      </div>
+    </>
+  }
+  try {
+    await h.render(<OverlayScene />)
+    const chat = h.rootEl.querySelector('.chat-main-pane')
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-pane"]').dataset.previewLayout, 'focused')
+    assert.equal(chat.hasAttribute('inert'), true, 'the open overlay isolates the chat')
+    await h.click(h.rootEl.querySelector('[data-testid="preview-back-to-chat"]'))
+    assert.equal(h.rootEl.querySelector('[data-testid="preview-pane"]'), null)
+    assert.equal(chat.hasAttribute('inert'), false, 'the chat pane becomes interactive again')
+    assert.equal(chat.hasAttribute('aria-hidden'), false)
   } finally { await h.cleanup() }
 })
 

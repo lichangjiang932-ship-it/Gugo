@@ -1,7 +1,7 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
 import { emitContextPreparation } from './runtimeContextDiagnostics.js'
 import { modelRequestAttribution } from './modelRequestAttribution.js'
-import { contextUsageObservation } from './contextUsageObservation.js'
+import { contextUsageObservation, observeContextTextDeltas } from './contextUsageObservation.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
 import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
 import { MODEL_PROVIDER_STOP_REASON_ERROR_CODE } from '../../../shared/modelProviderStopDiagnostic.js'
@@ -167,7 +167,7 @@ async function executeModelRequestRound(s, context) {
         ? { toolChoice: { type: 'function', function: { name: s.forcedArtifactToolName } } }
         : {}),
     consumeBudget: (cost) => s.budget.consume(cost),
-    onTextDelta: async (text, metadata = {}) => {
+    onTextDelta: observeContextTextDeltas(s, async (text, metadata = {}) => {
       if (!text) return
       // After a tool call has started, later text in the same response is
       // narration too. Source-handoff protection still screens it as a whole,
@@ -184,7 +184,7 @@ async function executeModelRequestRound(s, context) {
         && context.hasCurrentAnswerReview()
       if (answerAllowed) return publishText(text, metadata)
       heldNarration.push({ text, metadata })
-    },
+    }),
     onToolCallStarted: async () => {
       await releaseNarration()
     },
@@ -234,7 +234,9 @@ async function executeModelRequestRound(s, context) {
       usage: modelPhaseUsage(i.modelResult),
       modelName: i.modelResult?.modelName || null,
       ...modelRequestAttribution(s),
-      contextUsage: contextUsageObservation(s, { stage: 'completed', inputTokens: i.modelResult?.usage?.promptTokens }),
+      contextUsage: contextUsageObservation(s, { stage: 'completed', inputTokens: i.modelResult?.usage?.promptTokens,
+        messages: [...s.convo, modelAssistantHistoryMessage(i.modelResult?.content || '', i.modelResult)],
+      }),
     })
   }
   const bufferedTextIsSafe = !s.requiresSourceHandoffProtection

@@ -25,6 +25,7 @@ import { getTurnArtifactById } from '../../turnArtifactStore.js'
 import { isFileArtifactTool } from '../../artifactIntent.js'
 import { killBackgroundProcess, listBackgroundProcesses, startBackgroundProcess } from '../../backgroundProcessStore.js'
 import { normalizeToolError } from '../../../utils/toolCallHarness.js'
+import { assertToolCall } from '../../../core/hostVerificationPolicy.js'
 import { getBoundRuntimeTool } from '../../../core/runtimeCapabilityState.js'
 import { getDynamicTool } from '../../../utils/toolSchemaCatalog.js'
 import { publishTurnActivity } from '../../turnActivityBus.js'
@@ -465,6 +466,16 @@ async function executeAgentOrExternalTool(context, registeredTool) {
 }
 
 export async function executeServerTool(context) {
+  try {
+    assertToolCall(context.name, context.args)
+  } catch (error) {
+    // A host refusal proves dispatch did not start. Return a known denial so the
+    // existing side-effect ledger can finish, rather than recording unknown.
+    return {
+      ...normalizeToolError(error, { fallbackCode: 'HOST_VERIFICATION_TOOL_DENIED' }),
+      denied: true, policyDenied: true, retryable: false,
+    }
+  }
   const { name, args, job, step, signal, allowedArtifactTools,
     requiresLocalArtifactDelivery, dynamicToolRegistrationId } = context
   if (isFileArtifactTool(name) && !allowedArtifactTools?.has(name)) {

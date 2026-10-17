@@ -165,7 +165,7 @@ test('chat chrome stays focused on conversations and essential composer controls
   assert.match(composerActions, /<ModelPicker/)
   assert.match(composerActions, /<Plus/)
   assert.match(composerActions, /data-testid="context-ring"/)
-  assert.match(composerActions, /<Send/)
+  assert.match(composerActions, /<ArrowUp/)
   assert.doesNotMatch(composer, /QUICK_SKILLS|SlashAutocomplete|local-files-chat-action|onContextClick/)
 })
 

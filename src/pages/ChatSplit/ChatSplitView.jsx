@@ -26,7 +26,11 @@ export default function ChatSplitView({
   contextToolSpecs,
   contextWindow,
   contextWindowAuthoritative,
+  contextWindowEstimated = false,
+  contextWindowKnown = null,
+  contextWindowSource = '',
   selectedConfigRevision = null,
+  sessionTodos = null,
   desktopPetVisible,
   directoryApproval,
   input,
@@ -101,9 +105,14 @@ export default function ChatSplitView({
   workspaceBusy,
   workspaceError,
 }) {
-  const contextUsage = useChatContextUsage({ messages, contextToolSpecs, contextSystemPrompt, contextWindow, contextWindowAuthoritative, recoveryOwnerScope, activeSessionId, input, attachments, selectedModel, selectedModelProviderId, selectedConfigRevision })
+  const contextUsage = useChatContextUsage({
+    messages, contextToolSpecs, contextSystemPrompt, contextWindow, contextWindowAuthoritative,
+    contextWindowEstimated, contextWindowKnown, contextWindowSource,
+    recoveryOwnerScope, activeSessionId, input, attachments, selectedModel, selectedModelProviderId, selectedConfigRevision,
+  })
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
   const hasWorkspace = Boolean(selectedWorkspacePath || activeSession?.workspacePath)
+  const todos = Array.isArray(sessionTodos) ? sessionTodos : (activeSession?.todos || [])
 
   return (
     <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper" mainAs="main" mainClassName="relative flex min-w-0 flex-1 overflow-hidden" mainProps={{ 'data-chat-main-area': true }}>
@@ -113,10 +122,10 @@ export default function ChatSplitView({
           onClosePlan={onClosePlan} onOpenPlan={onOpenPlan}
           onOpenPreview={onOpenPreview} onWorkbenchToggle={onWorkbenchToggle}
           planVisible={planVisible} previewOpen={previewOpen}
-          sessionChangesReview={sessionChangesReview} t={t} workbenchOpen={workbenchOpen}
+          sessionChangesReview={sessionChangesReview} t={t} todos={todos} workbenchOpen={workbenchOpen}
         />
         <ChatMessages key={JSON.stringify([recoveryOwnerScope, activeSessionId || '__draft__'])}
-          sessionId={activeSessionId} recoveryOwnerScope={recoveryOwnerScope}
+          sessionId={activeSessionId} recoveryOwnerScope={recoveryOwnerScope} todos={todos}
           workspacePath={selectedWorkspacePath || activeSession?.workspacePath || ''}
           onSideEffectResolved={onSideEffectResolved}
           messages={messages} routeHash={messageRouteHash}
@@ -143,12 +152,15 @@ export default function ChatSplitView({
             tasks,
             model: selectedModel,
             contextWindow,
+            contextWindowEstimated,
+            contextWindowKnown,
+            contextWindowSource,
             toolSpecs: contextToolSpecs,
             systemPrompt: contextSystemPrompt,
             approvalMode,
             onOpenTasks: onInlineTasks, onOpenContext: onInlineContext,
           }}
-          todos={activeSession?.todos || []}
+          todos={todos}
           sessionId={activeSessionId || ''}
           onGoalsChange={onGoalsChange}
           onSubmitFeedback={onSubmitFeedback} onManageMcp={onManageMcp}
@@ -209,6 +221,7 @@ export default function ChatSplitView({
           selectedModel={selectedModel}
           selectedModelProviderId={selectedModelProviderId}
           isGenerating={isGenerating}
+          directoryApprovalOpen={!!directoryApproval?.open}
           onAbort={onAbort} onPause={onPause}
           onFileChange={onFileChange}
           onToggleContext={toggleContextPanel}
@@ -246,7 +259,7 @@ export default function ChatSplitView({
             onRevealTurn={revealTurnInConversation}
             sessionId={activeSessionId}
             t={t}
-            todos={activeSession?.todos || []}
+            todos={todos}
           />
         )}
       </div>
@@ -255,7 +268,7 @@ export default function ChatSplitView({
         onInsertText={(text) => setInput((current) => (current ? `${current} ${text}` : text))}
         workbenchOpen={workbenchOpen}
         sessionId={activeSessionId}
-        todos={activeSession?.todos || []}
+        todos={todos}
         messages={messages}
         attachments={attachments}
         workbenchTab={workbenchTab}

@@ -26,6 +26,9 @@ function TerminalPanel({ command, cwd, runCommand, setCommand, setCwd, setTermin
   return (
     <section className="workbench-terminal-surface flex min-h-0 flex-1 flex-col bg-ink text-paper">
       <div className="flex items-center gap-2 border-b border-paper/10 p-2"><input value={cwd} onChange={(event) => setCwd(event.target.value)} aria-label={t('workbench.cwd')} className="h-8 min-w-0 flex-1 rounded border border-paper/10 bg-paper/10 px-2 font-mono text-xs outline-none focus:border-focus" /><button type="button" onClick={() => setTerminalTranscript(createTerminalTranscript())} aria-label={t('workbench.clearTerminal')} title={t('workbench.clearTerminal')} className="flex h-8 w-8 items-center justify-center rounded text-paper/65 hover:bg-paper/10 hover:text-paper"><Trash2 className="h-3.5 w-3.5" /></button></div>
+      <p data-testid="workbench-terminal-mode" className="border-b border-paper/10 px-3 py-1.5 text-xs text-paper/55">
+        {t('workbench.terminalWebHint')}
+      </p>
       <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5" data-testid="workbench-terminal-transcript">
         {entries.length === 0 && <p className="text-paper/60">{t('workbench.terminalHint')}</p>}
         {dropped > 0 && (

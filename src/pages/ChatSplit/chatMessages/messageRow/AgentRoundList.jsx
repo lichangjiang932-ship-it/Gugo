@@ -1,6 +1,7 @@
 import { Fragment } from 'react'
 import MarkdownRenderer from '../../../../components/MarkdownRenderer.jsx'
 import { AGENT_ROUND_KIND } from '../../../../lib/agentRounds.js'
+import { artifactHasInlineReference } from '../../../../lib/artifactReferences.js'
 import { useUiContributions } from '../../../../plugins/uiContributionRegistry.js'
 import { ToolStepRow } from '../ActivityTraces.jsx'
 import FileWriteCard from './FileWriteCard.jsx'
@@ -29,10 +30,16 @@ function clampGist(text) {
   return text.length > GIST_MAX_LENGTH ? `${text.slice(0, GIST_MAX_LENGTH)}…` : text
 }
 
-function splitStep(text) {
+function splitStep(text, artifacts) {
   const raw = String(text || '').trim()
   if (!raw) return { gist: '', body: '' }
   const [firstLine] = raw.split('\n')
+  // A reference in the opening line belongs in the full Markdown body, not a
+  // plain-text gist that can clip its label or URL. Reuse the renderer's
+  // reference detection, including automatic links for trusted bare filenames.
+  if (artifacts.some((reference) => artifactHasInlineReference(firstLine, reference, artifacts))) {
+    return { gist: '', body: raw }
+  }
   if (raw.includes('\n')) {
     const rest = raw.slice(firstLine.length).trim()
     // A first line too long to read in the header keeps the whole text below it,
@@ -43,8 +50,8 @@ function splitStep(text) {
   if (sentences) return { gist: clampGist(sentences[1]), body: sentences[2] }
   return { gist: '', body: raw }
 }
-function RoundRow({ label, text, t }) {
-  const { gist, body } = splitStep(text)
+function RoundRow({ artifacts, label, onLinkClick, text, t }) {
+  const { gist, body } = splitStep(text, artifacts)
   // Nothing at all to say: a placeholder is not information.
   if (!gist && !body) return null
   // A label with nothing beside it is a bare tag, and a column of them turns the
@@ -60,14 +67,16 @@ function RoundRow({ label, text, t }) {
       )}
       {body && (
         <div className="chat-round-body" data-testid="agent-round-body">
-          <MarkdownRenderer className="chat-round-text">{body}</MarkdownRenderer>
+          <MarkdownRenderer artifactReferences={artifacts} className="chat-round-text" onLinkClick={onLinkClick}>
+            {body}
+          </MarkdownRenderer>
         </div>
       )}
     </div>
   )
 }
 
-export default function AgentRoundList({ artifacts = [], onOpenArtifact, rounds = [], t, workspacePath = '' }) {
+export default function AgentRoundList({ artifacts = [], onLinkClick, onOpenArtifact, rounds = [], t, workspacePath = '' }) {
   const contributedToolViews = useUiContributions('tool-view')
   const list = Array.isArray(rounds) ? rounds : []
   if (list.length === 0) return null
@@ -78,7 +87,9 @@ export default function AgentRoundList({ artifacts = [], onOpenArtifact, rounds 
         const tool = round.tool
         return (
           <Fragment key={`${round.kind}:${index}`}>
-            {round.kind !== AGENT_ROUND_KIND.TOOL && <RoundRow label={round.kind} text={round.text} t={t} />}
+            {round.kind !== AGENT_ROUND_KIND.TOOL && (
+              <RoundRow artifacts={artifacts} label={round.kind} onLinkClick={onLinkClick} text={round.text} t={t} />
+            )}
             {/* The recorded call follows the action that asked for it; a call the
                 narrative never mentioned keeps its place at the end. */}
             {tool && (

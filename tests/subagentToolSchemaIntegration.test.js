@@ -55,6 +55,7 @@ async function runScript(script, { type = 'general', tools = SUBAGENT_TYPES[type
   const modelTools = []
   const approvals = []
   const dispatches = []
+  const dispatchRecords = []
   let index = 0
   const result = await _testing.subagentToolsLoop({
     userId,
@@ -71,6 +72,7 @@ async function runScript(script, { type = 'general', tools = SUBAGENT_TYPES[type
     },
     executeTool: (name, args, options) => {
       dispatches.push(name)
+      dispatchRecords.push({ name, args })
       return _testing.executeSubagentTool(name, args, options)
     },
     callModel: async ({ tools }) => {
@@ -87,7 +89,7 @@ async function runScript(script, { type = 'general', tools = SUBAGENT_TYPES[type
       })
     },
   })
-  return { result, outcomes, modelTools, approvals, dispatches }
+  return { result, outcomes, modelTools, approvals, dispatches, dispatchRecords }
 }
 
 // Act on the contract the model actually receives. With the old local copy,
@@ -133,7 +135,7 @@ test('general subagent replace_all supports an empty replacement without overwri
 test('general subagent can execute and verify a bounded command through the shared dispatcher', async (t) => {
   const filepath = fixture(t, 'command fixture')
   const cwd = path.dirname(filepath)
-  const { outcomes, approvals, dispatches } = await runScript([
+  const { outcomes, approvals, dispatches, dispatchRecords } = await runScript([
     { name: 'run_command', args: () => ({
       command: `node -e "process.stdout.write('subagent-command-ok')"`,
       cwd,
@@ -143,8 +145,14 @@ test('general subagent can execute and verify a bounded command through the shar
   const command = outcomes.find((outcome) => outcome.name === 'run_command')?.result
   assert.equal(command?.ok, true, command?.error || command?.stderr)
   assert.equal(command.stdout, 'subagent-command-ok')
-  assert.deepEqual(approvals, ['run_command'])
-  assert.deepEqual(dispatches, ['run_command'])
+  assert.equal(approvals[0], 'run_command')
+  assert.deepEqual([...new Set(dispatches)], approvals, 'each exact read scope obtains approval before cached reuse')
+  assert.equal(dispatches.filter(name => name === 'run_command').length, 1, 'generation is never replayed')
+  assert.ok(dispatches.slice(1).every(name => name === 'git_status'))
+  assert.ok(dispatches.length <= 3, 'at most two bounded status attempts')
+  for (const entry of dispatchRecords.filter(entry => entry.name === 'git_status')) {
+    assert.equal(path.normalize(entry.args.cwd), path.normalize(cwd), 'never inspect another granted project')
+  }
 })
 
 test('legacy edit aliases fail schema validation before any file mutation', async (t) => {

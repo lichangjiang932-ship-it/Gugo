@@ -1,0 +1,74 @@
+{
+  "kind": "direct-fixes-search-provider-context-send",
+  "date": "2026-10-17",
+  "base": "648fd1bbae8be698f2d0473fc1beba962ca1398a",
+  "status": "frozen-full-pass",
+  "scope": {
+    "fixed": ["streaming search debounce starvation and loading flash", "custom Provider ID preserves the draft", "context_usage stream observation interval", "useChatSendFlow state dependency", "provider-before-credential save order"],
+    "deferred": ["cross-turn trusted file references", "local search worst-case scan", "post-mutation acceptance expansion", "provider catalog pagination", "real Provider matrix", "desktop signing and OS sandbox"]
+  },
+  "behavior": {
+    "search": {
+      "getterStoredInRef": true,
+      "debounceDependsOnOpenTrimmedQueryAndT": true,
+      "settledQueryDrivesLoading": true,
+      "staleClosedQueriesCancelled": true,
+      "testFiles": ["tests/unit/SessionSearchWork.test.jsx", "tests/unit/SessionSearchModal.test.jsx", "tests/unit/SidebarSearchResults.test.jsx"]
+    },
+    "provider": {
+      "customIdEditingPreservesFields": true,
+      "catalogAndModeSwitchStillResets": true,
+      "pendingProbeAndSaveStillLockTarget": true,
+      "saveOrder": "saveLlmProvider then saveLlmCredential",
+      "failedProviderWritesNoCredential": true,
+      "failedCredentialLeavesRecoverableProvider": true
+    },
+    "context": {
+      "streamObservationIntervalMs": 1000,
+      "longStreamTest": "3001 text deltas published; 61 context_usage observations; no streamed text in payload",
+      "durableAnchorsPreserved": ["wire_prepared", "prepared", "completed", "retained"]
+    },
+    "send": {
+      "callbackReadsCurrentStateRef": true,
+      "wholeStateDependencyRemoved": true,
+      "stableCallbackTest": "tests/chatSendSingleFlight.test.js"
+    }
+  },
+  "targeted": {
+    "redRun": "gugo-direct-fix-red-EFJHIL",
+    "redFailures": 2,
+    "greenRun": "gugo-direct-fix-green4-Vzenlp",
+    "greenFiles": 7,
+    "neighborsRun": "gugo-direct-fix-neighbors-h33ICH",
+    "neighborsFiles": 12,
+    "gatesRun": "gugo-direct-fix-gates2-LhF2Wu",
+    "gatesExitCode": 0
+  },
+  "gates": [
+    "lint", "typecheck with 18 invalid fixtures rejected", "debt", "function complexity", "i18n shape/keys", "dependencies", "production package licenses", "offline eval (71)", "isolated Web build", "git diff --check"
+  ],
+  "full": {
+    "root": "C:/Users/21161/AppData/Local/Temp/gugo-direct-fix-full2-82YDTA",
+    "testFiles": 1193,
+    "finalResult": "PASS (1193 test file(s))",
+    "exitCode": 0,
+    "seconds": 1503,
+    "files": 4254,
+    "aggregateBefore": "23813ab76510261b200c14216d25e6f99370df83d89f4acaf890881c7515e8c3",
+    "aggregateAfter": "23813ab76510261b200c14216d25e6f99370df83d89f4acaf890881c7515e8c3",
+    "hashesUnchanged": true,
+    "changedDuringRun": [],
+    "wrapperStoppedAfterTestPass": true,
+    "hashesRecomputedIndependently": true,
+    "environment": "temporary HOME/DB/artifact/tmp; OS-only allowlist; NODE_ENV=test; GUGO_LOAD_DOTENV=0; no real model or user configuration"
+  },
+  "notVerified": [
+    "browser visual acceptance of the new search loading state",
+    "real Provider quality/tool/file-delivery success",
+    "non-durable context activity channel",
+    "cross-turn file links",
+    "local search O(N) indexing",
+    "native Electron package, signatures and OS sandbox"
+  ],
+  "git": { "staged": false, "committed": false, "pushed": false, "pullRequestCreated": false, "packaged": false, "released": false }
+}

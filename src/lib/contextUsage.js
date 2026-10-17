@@ -5,7 +5,12 @@ const DATA_IMAGE_URL_PATTERN = /data:image\/[a-z0-9.+-]+(?:;[^,\s]*)?;base64,[a-
 
 export const DEFAULT_MODEL_CONTEXT_WINDOW = 128_000
 
-const ESTIMATED_CONTEXT_WINDOW_SOURCES = new Set(['cloud_default', 'local_default'])
+const ESTIMATED_CONTEXT_WINDOW_SOURCES = new Set([
+  'cloud_default',
+  'local_default',
+  'bundled_catalog',
+  'catalog_estimate',
+])
 
 export function normalizeOptionalTokenCount(value) {
   if (

@@ -1,0 +1,59 @@
+{
+  "kind": "model-entry-selection-and-local-search-focus",
+  "date": "2026-10-17",
+  "base": "648fd1bbae8be698f2d0473fc1beba962ca1398a",
+  "status": "frozen-full-running",
+  "productionChanges": ["gugo-dev 5175 launch order restored without parameter changes", "local session-search focus classes and CSS only"],
+  "normalModelSelectionRewritten": false,
+  "offlineGuardRemoved": false,
+  "targeted": {
+    "combined": { "files": 10, "tests": 54, "exitCode": 0, "logRoot": "gugo-model-search-targeted-H58rBv" },
+    "modelNeighbors": { "files": 7, "tests": 27, "exitCode": 0, "logRoot": "gugo-model-config-tests-7lDBim" },
+    "searchNeighbors": { "files": 5, "tests": 21, "exitCode": 0, "newSearchCases": 8, "logRoot": "gugo-session-search-final-fJZ9YZ" },
+    "sourceOrderAndLifecycle": { "files": 3, "tests": 26, "exitCode": 0, "logRoot": "gugo-search-green-aAGuu2" },
+    "countsOverlap": true,
+    "knownJsdomNeighborDiagnostics": "attachEvent/detachEvent errors in existing fixtures; runner exits 0; not a zero-log-errors claim"
+  },
+  "browser": {
+    "configuration": "gugo-isolated-verification",
+    "port": 5179,
+    "backend": false,
+    "normal5175Started": false,
+    "user5181DraftTouched": false,
+    "focusedLightAndWhiteOutlineStyle": "none",
+    "inputBoxShadow": "none",
+    "fieldHeightCssPx": 48,
+    "neutralFieldShadowObserved": ["rgba(107, 114, 128, 0.6) 0px -2px 0px 0px inset", "rgba(115, 108, 100, 0.6) 0px -2px 0px 0px inset"],
+    "darkAndNarrowRenderingObserved": true,
+    "horizontalOverflowObserved": false,
+    "nativeKeyboardTabVisualVerified": false,
+    "exhaustiveFocusThemeMatrix": false,
+    "limitations": ["static host intentionally returns auth bootstrap 404", "host canvas scaling and background focus can affect screenshots and focus-within checks", "synthetic keyboard events do not establish native keyboard modality"],
+    "screenshot": "search-dark-browser.jpg",
+    "ownedServersStopped": true
+  },
+  "build": { "exitCode": 0, "seconds": 2.78, "root": "C:/Users/21161/AppData/Local/Temp/gugo-isolated-web-9fAM3s/dist", "searchCssPresent": true, "packaged": false },
+  "live": { "realModelRequests": 0, "realProviderProbeVerified": false, "intentionalRealCredentialOrSessionRead": false },
+  "full": {
+    "status": "completed-pass-but-invalid-frozen-snapshot",
+    "exitCode": 0,
+    "testFiles": 1188,
+    "seconds": 1272.565,
+    "finishedAt": "2026-10-17T05:47:39.563Z",
+    "hashesUnchanged": false,
+    "changedDuringRun": [
+      "src/lib/artifactReferenceMarkdown.js",
+      "src/lib/artifactReferencePath.js",
+      "tests/artifactReferenceLinks.test.jsx"
+    ],
+    "validFrozenSnapshot": false,
+    "reason": "The full suite finished with exit 0, but the source was edited while it ran (the real-instance relative-path fix), so the suite does not represent one immutable tree. This is not a final PASS for the current tree; a fresh full run is required.",
+    "taskId": "bcmcv4mqu",
+    "runRoot": "C:/Users/21161/AppData/Local/Temp/gugo-model-search-final-AYtXtU",
+    "startedAt": "2026-10-17T05:23:17.642Z",
+    "allPreFullGatesExitCode": 0,
+    "environment": "OS-only allowlist; fresh HOME/config/data/db/artifact/tmp/cache; NODE_ENV=test; GUGO_LOAD_DOTENV=0; no inherited model/proxy settings, forced SQLite driver, production or shared workspace overrides"
+  },
+  "history": { "previousFreeze": "../file-links-font-live/freeze-result-first-fail.json", "previousFullExitCode": 1, "previousFailurePreserved": true },
+  "git": { "staged": false, "committed": false, "pushed": false, "pullRequestCreated": false, "packaged": false, "released": false }
+}

@@ -28,8 +28,9 @@ test('chat header distinguishes ordinary conversations from a selected project',
   assert.match(headerBar, /data-chat-context=\{hasWorkspace \? 'project' : 'conversation'\}/)
   assert.match(headerBar, /<ChatSessionHeading hasWorkspace=\{hasWorkspace\}/)
   // A project conversation carries the project's own glyph and name before the
-  // title; an ordinary one keeps the plain conversation mark.
-  assert.match(header, /hasWorkspace && project\s*\? <ProjectGlyph[\s\S]*?: <MessageSquare/)
+  // title; an ordinary one starts with the title itself.
+  assert.match(header, /hasWorkspace && project[\s\S]*?<ProjectGlyph/)
+  assert.doesNotMatch(header, /MessageSquare/)
   assert.match(header, /data-testid="chat-session-project"/)
   assert.match(header, /title=\{title\}/)
 })

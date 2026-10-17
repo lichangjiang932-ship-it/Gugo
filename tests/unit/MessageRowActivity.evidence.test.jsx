@@ -64,7 +64,7 @@ for (const lang of ['zh', 'en']) {
   })
 }
 
-test('a failed file task without receipts keeps its missing-file completion state', async () => {
+test('a failed file task without receipts keeps its failure state behind a compact red summary', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -104,13 +104,10 @@ test('a failed file task without receipts keeps its missing-file completion stat
       </I18nProvider>,
     ))
 
-    assert.equal(
-      rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent,
-      'Task incomplete',
-    )
-    assert.match(rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent || '', /No detailed terminal reason was retained/)
-    assert.match(rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent || '', /validated final file/)
-    assert.match(rootElement.querySelector('[data-testid="incomplete-task-next-step"]')?.textContent || '', /Review the missing requirements/)
+    const notice = rootElement.querySelector('[data-testid=incomplete-task-notice]')
+    assert.equal(notice.classList.contains('text-danger'), true)
+    assert.equal(Boolean(rootElement.querySelector('[data-testid=incomplete-task-missing]')), false)
+    assert.equal(msg.meta.serverFailure.code, 'ARTIFACT_NOT_CREATED')
     assert.doesNotMatch(rootElement.textContent, /local file receipts?/i)
     assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
   } finally {
@@ -119,7 +116,7 @@ test('a failed file task without receipts keeps its missing-file completion stat
   }
 })
 
-test('a live model reply exposes structured incomplete diagnostics even without file receipts', async () => {
+test('a live model reply keeps structured incomplete diagnostics without displaying the full breakdown', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -163,18 +160,9 @@ test('a live model reply exposes structured incomplete diagnostics even without 
       </I18nProvider>,
     ))
 
-    assert.equal(
-      rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent,
-      'Task incomplete',
-    )
-    assert.match(
-      rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent || '',
-      /execution budget was exhausted/i,
-    )
-    assert.match(
-      rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent || '',
-      /unfinished task steps/i,
-    )
+    assert.equal(rootElement.querySelector('[data-testid=incomplete-task-notice]').classList.contains('text-danger'), true)
+    assert.equal(Boolean(rootElement.querySelector('[data-testid=incomplete-task-missing]')), false)
+    assert.deepEqual(msg.meta.serverFailure.missingRequirements, ['remaining_task_steps'])
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -290,11 +278,15 @@ test('blocked and generic model failures with local receipts show structured inc
         </I18nProvider>,
       ))
 
-      assert.ok(rootElement.querySelector('[data-testid="reply-completion-state"]'), entry.id)
-      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-reason"]'), entry.id)
-      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-missing"]'), entry.id)
-      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-next-step"]'), entry.id)
-      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-file-state"]'), entry.id)
+      if (entry.meta.serverConnectionState === 'blocked') {
+        assert.ok(rootElement.querySelector('[data-testid=reply-completion-state]'), entry.id)
+        assert.ok(rootElement.querySelector('[data-testid=incomplete-task-reason]'), entry.id)
+        assert.ok(rootElement.querySelector('[data-testid=incomplete-task-next-step]'), entry.id)
+      } else {
+        assert.equal(rootElement.querySelector('[data-testid=incomplete-task-notice]').classList.contains('text-danger'), true)
+        assert.equal(Boolean(rootElement.querySelector('[data-testid=incomplete-task-missing]')), false)
+      }
+      assert.equal(rootElement.querySelectorAll('[data-testid=artifact-open-card]').length, 1, entry.id)
     }
   } finally {
     await act(async () => root.unmount())
@@ -359,13 +351,11 @@ test('a failed turn hides managed artifacts but exposes independently verified l
       </I18nProvider>,
     ))
 
-    const completionState = rootElement.querySelector('[data-testid="reply-completion-state"]')
-    assert.equal(completionState?.textContent, 'Task incomplete')
-    assert.match(rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent || '', /acceptance checks did not finish/)
-    assert.match(rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent || '', /modified-file read-back.*diff or project checks/)
-    assert.match(rootElement.querySelector('[data-testid="incomplete-task-next-step"]')?.textContent || '', /Continue from the checkpoint/)
-    assert.match(rootElement.querySelector('[data-testid="incomplete-task-file-state"]')?.textContent || '', /1 verified file/)
-    assert.doesNotMatch(completionState?.parentElement?.className || '', /border|dashed/)
+    const notice = rootElement.querySelector('[data-testid=incomplete-task-notice]')
+    assert.equal(notice.classList.contains('text-danger'), true)
+    assert.equal(Boolean(rootElement.querySelector('[data-testid=incomplete-task-missing]')), false)
+    assert.equal(Boolean(rootElement.querySelector('[data-testid=incomplete-task-file-state]')), false)
+    assert.deepEqual(msg.meta.serverFailure.missingRequirements, ['mutation_readback', 'diff_or_project_check'])
     const cards = [...rootElement.querySelectorAll('[data-testid="artifact-open-card"]')]
     assert.equal(cards.length, 1)
     assert.match(cards[0].textContent, /gallery\.html/)

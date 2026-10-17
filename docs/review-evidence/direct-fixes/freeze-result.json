@@ -1,0 +1,16 @@
+{
+  "startedAt": "2026-10-17T10:31:55.215Z",
+  "finishedAt": "2026-10-17T10:56:58.175Z",
+  "root": "C:/Users/21161/AppData/Local/Temp/gugo-direct-fix-full2-82YDTA",
+  "files": 4254,
+  "aggregateBefore": "23813ab76510261b200c14216d25e6f99370df83d89f4acaf890881c7515e8c3",
+  "aggregateAfter": "23813ab76510261b200c14216d25e6f99370df83d89f4acaf890881c7515e8c3",
+  "hashesUnchanged": true,
+  "changedDuringRun": [],
+  "exitCode": 0,
+  "testFiles": 1193,
+  "finalResult": "PASS (1193 test file(s))",
+  "seconds": 1503,
+  "log": "full.log",
+  "note": "The log reports one # pass count per batch; the authoritative total is the final 1193 test-file PASS. Source hashes are identical before and after."
+}

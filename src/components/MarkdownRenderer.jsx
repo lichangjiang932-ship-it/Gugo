@@ -5,6 +5,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 import { findArtifactReferenceByHref, findArtifactReferenceByLocalPath, normalizeArtifactLocalPath, remarkArtifactReferences, remarkLocalPathLinks } from '../lib/artifactReferences.js'
+import { findArtifactReferenceBySupersededArtifactHref } from '../lib/artifactReferencePath.js'
 import { CodeBlock, SelectableFileLink } from './markdown/MarkdownControls.jsx'
 import { nodeText } from './markdown/markdownUtils.js'
 import { MarkdownImageProvider, MarkdownImageRenderer } from './markdown/MarkdownImage.jsx'
@@ -87,6 +88,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
             const isLocalPath = isLocalPathHref(href)
             const artifactReference = findArtifactReferenceByHref(artifactReferences, href)
               || (isLocalPath && findArtifactReferenceByLocalPath(artifactReferences, href))
+              || findArtifactReferenceBySupersededArtifactHref(artifactReferences, href)
             const isArtifactReference = Boolean(artifactReference)
             const visibleLocalPath = nodeText(children).trim()
             const normalizedVisibleLocalPath = normalizeArtifactLocalPath(visibleLocalPath)

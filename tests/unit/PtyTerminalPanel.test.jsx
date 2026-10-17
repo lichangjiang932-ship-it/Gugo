@@ -2,12 +2,21 @@ import assert from 'node:assert/strict'
 import test, { afterEach } from 'node:test'
 import { JSDOM } from 'jsdom'
 import { act } from 'react'
+import { resetTerminalSessions } from '../../src/lib/desktopTerminalSessions.js'
 
 const translations = {
   'workbench.terminal': 'Terminal',
   'workbench.terminalDesktop': 'Local shell',
+  'workbench.terminalCwd': 'Starting folder',
+  'workbench.terminalNew': 'New shell in this folder',
   'workbench.terminalExited': 'The shell exited (code {code}).',
   'workbench.terminalRestart': 'Restart terminal',
+  'workbench.terminalKill': 'End terminal',
+  'workbench.terminalKillConfirm': 'Click again to end the terminal',
+  'workbench.terminalCopy': 'Copy',
+  'workbench.terminalPaste': 'Paste',
+  'workbench.terminalSelectAll': 'Select all',
+  'workbench.terminalClear': 'Clear screen',
   'workbench.terminalStartFailed': 'The terminal could not start. Try again.',
 }
 
@@ -42,7 +51,10 @@ class FakeTerminal {
     this.writes = []
     this.cols = 0
     this.rows = 0
+    this.focused = 0
     this.dataHandlers = []
+    this.keyHandler = null
+    this.selection = ''
     FakeTerminal.instances.push(this)
   }
 
@@ -58,9 +70,21 @@ class FakeTerminal {
 
   onData(handler) { this.dataHandlers.push(handler) }
 
+  attachCustomKeyEventHandler(handler) { this.keyHandler = handler }
+
+  getSelection() { return this.selection }
+
+  selectAll() { this.selectedAll = true }
+
+  clear() { this.cleared = (this.cleared || 0) + 1 }
+
+  focus() { this.focused += 1 }
+
   dispose() { this.disposed += 1 }
 
   type(data) { for (const handler of this.dataHandlers) handler(data) }
+
+  press(event) { return this.keyHandler ? this.keyHandler({ type: 'keydown', preventDefault() {}, ...event }) : true }
 }
 FakeTerminal.instances = []
 
@@ -85,7 +109,7 @@ function createBridge({ deferred = false, id = 'terminal-1' } = {}) {
     start: (options) => {
       state.starts.push(options)
       live.add(id)
-      const result = { ok: true, id, cols: 90, rows: 30, shell: 'C:\\Windows\\cmd.exe' }
+      const result = { ok: true, id, cols: 90, rows: 30, cwd: String(options.cwd || ''), shell: 'C:\\Windows\\cmd.exe' }
       if (!deferred) return Promise.resolve(result)
       return new Promise((resolve) => { settle = () => resolve(result) })
     },
@@ -130,6 +154,7 @@ const mountedRoots = []
 
 afterEach(async () => {
   for (const root of mountedRoots.splice(0)) await act(async () => { root.unmount() })
+  resetTerminalSessions()
 })
 
 async function mountPanel({ bridge, initial = { active: true } }) {
@@ -147,13 +172,16 @@ async function mountPanel({ bridge, initial = { active: true } }) {
   }
   await render(initial)
   const panel = () => container.querySelector('[data-testid="workbench-pty-panel"]')
-  const clickRestart = async () => {
+  const clickByLabel = async (label) => {
     const button = [...container.querySelectorAll('button')]
-      .find((entry) => entry.getAttribute('aria-label') === 'Restart terminal')
+      .find((entry) => entry.getAttribute('aria-label') === label)
+    assert.ok(button, `missing button: ${label}`)
     await act(async () => { button.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true })) })
     await act(async () => {})
+    return button
   }
-  return { clickRestart, container, panel, render, root }
+  const clickRestart = () => clickByLabel('Restart terminal')
+  return { clickByLabel, clickRestart, container, panel, render, root }
 }
 
 test('the shell starts only once the tab is opened', async () => {
@@ -277,7 +305,7 @@ test('a shell that exits while its output is still being replayed is not called 
   assert.equal(panel().querySelector('[data-testid="workbench-pty-notice"]').textContent, 'The shell exited (code 1).')
 })
 
-test('restarting releases the old shell, and unmounting releases the new one', async () => {
+test('restarting replaces the shell, but unmounting only detaches from the new one', async () => {
   setupDom()
   const { bridge, state } = createBridge()
   const { clickRestart, root } = await mountPanel({ bridge })
@@ -287,13 +315,136 @@ test('restarting releases the old shell, and unmounting releases the new one', a
   assert.deepEqual(state.killed, ['terminal-1'])
   assert.equal(state.starts.length, 2, 'the restart asks for a new shell')
   assert.equal(FakeTerminal.instances[0].disposed, 1)
-  assert.equal(state.data.length, 1, 'the old subscription was dropped, not accumulated')
+  assert.equal(state.data.length, 1, 'the module owns one subscription, not one per mount')
 
   await act(async () => { root.unmount() })
-  assert.deepEqual(state.killed, ['terminal-1', 'terminal-1'])
+  assert.deepEqual(state.killed, ['terminal-1'], 'leaving the panel must not end the shell')
   assert.equal(FakeTerminal.instances[1].disposed, 1)
-  assert.deepEqual(state.data, [], 'no listener is left subscribed')
-  assert.deepEqual(state.exit, [])
+  assert.equal(state.data.length, 1, 'the session listener outlives the xterm')
+  assert.equal(state.exit.length, 1, 'the session listener outlives the xterm')
+})
+
+test('a remounted panel reattaches to the same shell and replays what it missed', async () => {
+  setupDom()
+  const { bridge, emit, state } = createBridge()
+  const first = await mountPanel({ bridge })
+  assert.equal(state.starts.length, 1)
+  await act(async () => { first.root.unmount() })
+
+  emit('data', { id: 'terminal-1', chunk: 'while hidden\r\n' })
+  const second = await mountPanel({ bridge })
+  assert.equal(state.starts.length, 1, 'the shell was reused, not restarted')
+  assert.equal(FakeTerminal.instances.length, 2)
+  assert.deepEqual(FakeTerminal.instances[1].writes, ['while hidden\r\n'])
+  assert.deepEqual(second.panel().querySelector('[data-testid="workbench-pty-cwd"]').textContent, 'cmd.exe')
+})
+
+test('the header names the folder the shell actually started in', async () => {
+  setupDom()
+  const { bridge } = createBridge()
+  const { panel } = await mountPanel({ bridge, initial: { active: true, cwd: 'C:/projects/gugo' } })
+  const cwd = panel().querySelector('[data-testid="workbench-pty-cwd"]')
+  assert.match(cwd.textContent, /C:\/projects\/gugo/)
+  assert.equal(cwd.getAttribute('title'), 'C:/projects/gugo')
+})
+
+test('an explicit end takes two clicks and leaves the shell stopped', async () => {
+  setupDom()
+  const { bridge, state } = createBridge()
+  const { clickByLabel, panel } = await mountPanel({ bridge })
+
+  await clickByLabel('End terminal')
+  assert.deepEqual(state.killed, [], 'the first click only arms the control')
+  assert.equal(panel().querySelector('[data-testid="workbench-pty-kill"]').dataset.armed, 'true')
+
+  await clickByLabel('Click again to end the terminal')
+  assert.deepEqual(state.killed, ['terminal-1'])
+  assert.equal(panel().dataset.phase, 'exited')
+})
+
+test('a new shell in the same folder replaces it; another folder keeps the old one alive', async () => {
+  setupDom()
+  const { bridge, state } = createBridge()
+  const { clickByLabel, render } = await mountPanel({ bridge, initial: { active: true, cwd: 'C:/one' } })
+  assert.equal(state.starts.length, 1)
+
+  await clickByLabel('New shell in this folder')
+  assert.deepEqual(state.killed, ['terminal-1'])
+  assert.equal(state.starts.length, 2)
+
+  await render({ active: true, cwd: 'C:/two' })
+  await clickByLabel('New shell in this folder')
+  assert.equal(state.starts.length, 3)
+  assert.deepEqual(state.killed, ['terminal-1'], 'the first project shell was left running')
+})
+
+test('the terminal takes focus on mount and when its tab becomes active again', async () => {
+  setupDom()
+  const { bridge } = createBridge()
+  const { render } = await mountPanel({ bridge, initial: { active: false } })
+  await render({ active: true })
+  assert.ok(FakeTerminal.instances[0].focused >= 1)
+  const before = FakeTerminal.instances[0].focused
+  await render({ active: false })
+  await render({ active: true })
+  assert.ok(FakeTerminal.instances[0].focused > before)
+})
+
+test('copy and paste use the clipboard without taking Ctrl+C away from the shell', async () => {
+  setupDom()
+  const clipboard = { text: '', async writeText(value) { this.text = value }, async readText() { return 'pasted\r' } }
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard } })
+  const { bridge, state } = createBridge()
+  await mountPanel({ bridge })
+  const terminal = FakeTerminal.instances[0]
+  terminal.selection = 'selected text'
+
+  await act(async () => { assert.equal(terminal.press({ key: 'c', ctrlKey: true, shiftKey: true }), false) })
+  await act(async () => {})
+  assert.equal(clipboard.text, 'selected text')
+
+  await act(async () => { assert.equal(terminal.press({ key: 'v', ctrlKey: true, shiftKey: true }), false) })
+  await act(async () => {})
+  assert.deepEqual(state.written, [['terminal-1', 'pasted\r']])
+
+  assert.equal(terminal.press({ key: 'c', ctrlKey: true }), true, 'plain Ctrl+C stays a shell interrupt')
+})
+
+test('the context menu exposes copy, paste, select all and clear', async () => {
+  setupDom()
+  const clipboard = { text: '', async writeText(value) { this.text = value }, async readText() { return 'from clipboard' } }
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard } })
+  const { bridge, state } = createBridge()
+  const { container } = await mountPanel({ bridge })
+  const surface = container.querySelector('[data-testid="workbench-pty-surface"]')
+  await act(async () => {
+    surface.dispatchEvent(new globalThis.window.MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 30 }))
+  })
+  assert.ok(container.querySelector('[data-testid="workbench-pty-menu"]'))
+
+  const terminal = FakeTerminal.instances[0]
+  terminal.selection = 'selected'
+  await act(async () => { container.querySelector('[data-testid="workbench-pty-menu-copy"]').click() })
+  await act(async () => {})
+  assert.equal(clipboard.text, 'selected')
+
+  await act(async () => {
+    surface.dispatchEvent(new globalThis.window.MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 30 }))
+  })
+  await act(async () => { container.querySelector('[data-testid="workbench-pty-menu-paste"]').click() })
+  await act(async () => {})
+  assert.deepEqual(state.written, [['terminal-1', 'from clipboard']])
+
+  await act(async () => {
+    surface.dispatchEvent(new globalThis.window.MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 30 }))
+  })
+  await act(async () => { container.querySelector('[data-testid="workbench-pty-menu-selectAll"]').click() })
+  assert.equal(terminal.selectedAll, true)
+  await act(async () => {
+    surface.dispatchEvent(new globalThis.window.MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 30 }))
+  })
+  await act(async () => { container.querySelector('[data-testid="workbench-pty-menu-clear"]').click() })
+  assert.equal(terminal.cleared, 1)
 })
 
 test('a shell that cannot start says so instead of showing a blank panel', async () => {

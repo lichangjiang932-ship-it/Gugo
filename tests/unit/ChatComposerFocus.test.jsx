@@ -60,7 +60,7 @@ test('composer whitespace focuses the textarea while controls keep their own cli
     const surface = rootElement.querySelector('[data-testid="chat-composer-surface"]')
     const actions = rootElement.querySelector('[data-testid="chat-composer-actions"]')
     const modelPicker = rootElement.querySelector('[data-testid="model-picker-trigger"]')
-    const sendButton = rootElement.querySelector('.lucide-send')?.closest('button')
+    const sendButton = rootElement.querySelector('.lucide-arrow-up')?.closest('button')
 
     assert.ok(textarea.placeholder.trim())
     assert.equal(textarea.getAttribute('aria-label'), textarea.placeholder)
@@ -90,8 +90,9 @@ test('composer whitespace focuses the textarea while controls keep their own cli
     assert.notEqual(document.activeElement, textarea)
 
     outside.focus()
+    assert.equal(sendButton.disabled, true, 'an empty draft cannot be sent')
     await act(async () => sendButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(sends, 1)
+    assert.equal(sends, 0)
     assert.notEqual(document.activeElement, textarea)
   } finally {
     await act(async () => root.unmount())
@@ -165,43 +166,61 @@ test('composer places compact project selection outside the input upper-left and
   }
 })
 
-test('running composer sends text or attachments and pauses only an empty draft', async () => {
+test('running composer sends text, stops with an attachment, and pauses only an empty draft', async () => {
   const dom = setupDom()
   const element = document.getElementById('root')
   const root = createRoot(element)
   let sent = 0
   let paused = 0
-  const render = async ({ input = '', attachments = [] } = {}) => act(async () => root.render(
+  const render = async ({ input = '', attachments = [], isGenerating = true } = {}) => act(async () => root.render(
     <ChatComposer
       input={input} attachments={attachments} setInput={() => {}} setAttachments={() => {}}
       onSend={() => { sent += 1 }} onAbort={() => { paused += 1 }}
-      isGenerating modelPickerOpen={false} modelOptions={[]} selectedModel="local-model"
+      isGenerating={isGenerating} modelPickerOpen={false} modelOptions={[]} selectedModel="local-model"
       onFileChange={() => {}} onOpenModelPicker={() => {}} onCloseModelPicker={() => {}}
       onModelChange={() => {}} onManageModels={() => {}}
       approvalMode="normal" onApprovalModeChange={() => {}} handleKeyDown={() => {}}
     />,
   ))
   try {
-    await render({ attachments: [{ id: 'owned-file', name: 'brief.txt', kind: 'text', uploadStatus: 'ready' }] })
+    // Idle attachment-only drafts are a send. While a turn runs, an attachment
+    // cannot steer it: the primary explains that and Stop is a separate control.
+    await render({
+      attachments: [{ id: 'owned-file', name: 'brief.txt', kind: 'text', uploadStatus: 'ready' }],
+      isGenerating: false,
+    })
     let primary = element.querySelector('[data-testid="composer-primary-action"]')
-    assert.ok(primary.querySelector('.lucide-send'), 'a ready attachment alone is a send, never pause')
+    assert.ok(primary.querySelector('.lucide-arrow-up'), 'a ready attachment alone is a send, never pause')
+    assert.equal(primary.disabled, false)
     await act(async () => primary.click())
     assert.equal(sent, 1)
     assert.equal(paused, 0)
 
+    await render({ attachments: [{ id: 'owned-file', name: 'brief.txt', kind: 'text', uploadStatus: 'ready' }] })
+    primary = element.querySelector('[data-testid="composer-primary-action"]')
+    assert.ok(primary.querySelector('.lucide-arrow-up'))
+    assert.equal(primary.disabled, true, 'attachment-only steering is not sendable while running')
+    assert.match(primary.getAttribute('aria-label'), /任务运行中|text guidance/i)
+    const attachmentStop = element.querySelector('[data-testid="composer-stop-action"]')
+    assert.ok(attachmentStop, 'Stop stays reachable for an attachment-only draft')
+    await act(async () => attachmentStop.click())
+    assert.equal(paused, 1)
+    assert.equal(sent, 1)
+
     for (const uploadStatus of ['uploading', 'error']) {
       await render({ attachments: [{ id: 'pending-file', name: 'brief.txt', kind: 'file', uploadStatus }] })
       primary = element.querySelector('[data-testid="composer-primary-action"]')
-      assert.ok(primary.querySelector('.lucide-send'), 'a pending attachment must not turn send into pause')
+      assert.ok(primary.querySelector('.lucide-arrow-up'), 'a pending attachment must not turn send into pause')
       assert.equal(primary.disabled, true, 'unavailable attachments cannot be sent as steering')
       await act(async () => primary.click())
     }
     assert.equal(sent, 1)
-    assert.equal(paused, 0)
+    assert.equal(paused, 1)
 
     await render({ input: 'Correct the current task' })
     primary = element.querySelector('[data-testid="composer-primary-action"]')
-    assert.ok(primary.querySelector('.lucide-send'))
+    assert.ok(primary.querySelector('.lucide-arrow-up'))
+    assert.equal(primary.disabled, false)
     await act(async () => primary.click())
     assert.equal(sent, 2)
 
@@ -210,7 +229,7 @@ test('running composer sends text or attachments and pauses only an empty draft'
     assert.ok(primary.querySelector('.lucide-pause'))
     assert.match(primary.getAttribute('aria-label'), /暂停|Pause/u)
     await act(async () => primary.click())
-    assert.equal(paused, 1)
+    assert.equal(paused, 2)
     assert.equal(sent, 2)
   } finally {
     await act(async () => root.unmount())

@@ -4,6 +4,7 @@ import { useT } from '../../i18n/I18nProvider.jsx'
 import { messageIndexForTurn, subscribeRevealTurn } from '../../lib/chatMessageSignals.js'
 import MessageRow from './chatMessages/MessageRow.jsx'
 import ChatMiniTimeline from './chatMessages/ChatMiniTimeline.jsx'
+import ConversationTodoList from './chatMessages/ConversationTodoList.jsx'
 import NewConversationWelcome from './chatMessages/NewConversationWelcome.jsx'
 import ScrollFadeContainer from '../../components/ui/ScrollFadeContainer.jsx'
 import useChatMessageViewport from './chatMessages/useChatMessageViewport.js'
@@ -16,6 +17,7 @@ export default function ChatMessages({
   onSideEffectResolved,
   workbenchMessage,
   isGenerating = false,
+  todos = [],
   onForkMessage,
   forkingMessageId = '',
   onManageModels,
@@ -96,6 +98,7 @@ export default function ChatMessages({
                 t={t}
               />
             ))}
+            <ConversationTodoList active={isGenerating} t={t} todos={todos} />
           </>
         ) : (
           <NewConversationWelcome

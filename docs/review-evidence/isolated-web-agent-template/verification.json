@@ -1,0 +1,137 @@
+{
+  "kind": "isolated-web-and-agent-template-keyboard",
+  "date": "2026-10-16",
+  "base": "648fd1bbae8be698f2d0473fc1beba962ca1398a",
+  "scope": "Approved first batch 0+1 only; no implementation of later roadmap batches",
+  "status": "offline-and-frozen-full-pass-browser-blocked",
+  "targeted": {
+    "files": 7,
+    "tests": 46,
+    "exitCode": 0,
+    "finalResult": "PASS",
+    "log": "gugo-round1-targeted-final-v2.log",
+    "newTemplateTests": 10,
+    "newIsolationTests": 8,
+    "knownDiagnostic": "Existing ModalEscapeLayers tests emit attachEvent/detachEvent TypeError diagnostics while passing; the new template tests do not."
+  },
+  "gates": {
+    "lint": { "exitCode": 0, "maxWarnings": 0, "log": "gugo-round1-lint-accepted.log" },
+    "typecheck": { "exitCode": 0, "negativeFixturesRejected": 18, "log": "gugo-round1-typecheck-accepted.log" },
+    "debt": { "exitCode": 0, "tests": 13 },
+    "functionAudit": { "exitCode": 0, "complexViolations": 0, "parseErrors": 0 },
+    "i18nCheck": { "exitCode": 0, "tests": 23 },
+    "i18nKeys": { "exitCode": 0, "missingZh": 0, "missingEn": 0, "shapeZh": 3337, "shapeEn": 3337 },
+    "dependencyManifest": { "exitCode": 0 },
+    "offlineEval": { "exitCode": 0, "tests": 71, "realProvider": false },
+    "combinedLog": "gugo-round1-gates.log"
+  },
+  "build": {
+    "exitCode": 0,
+    "command": "node scripts/verify-isolated-web.mjs --build",
+    "runRoot": "C:/Users/21161/AppData/Local/Temp/gugo-isolated-web-TejPjc",
+    "output": "dist under the temporary run root, not the checkout",
+    "modules": 3413,
+    "indexCssKilobytes": 146.59,
+    "tailwindMissingContentWarning": false,
+    "log": "gugo-round1-isolated-build-accepted.log",
+    "earlierAttempt": "gugo-round1-isolated-build.log exited 0 but had missing Tailwind content after cwd was moved to the temporary root; not accepted as the final styled build."
+  },
+  "full": {
+    "status": "PASS",
+    "testFiles": 1182,
+    "exitCode": 0,
+    "finalResult": "PASS (1182 test file(s))",
+    "seconds": 1108.623,
+    "hashesUnchanged": true,
+    "aggregateSha256": "4e8f3fb110ffa5f37babe5e493b8f4d1fc608f0873b62c8f0e0e64e647bc9d0a",
+    "sourceManifest": "source-manifest.json",
+    "sourceInventory": 3195,
+    "changedSources": 6,
+    "log": "gugo-round1-full-minimal.log",
+    "freezeResult": "freeze-result.json",
+    "earlierFailedRun": {
+      "exitCode": 1,
+      "finalFailureRecords": 144,
+      "seconds": 1818.371,
+      "hashesUnchanged": true,
+      "sourceManifest": "source-manifest-failed-env.json",
+      "freezeResult": "freeze-result-failed-env.json",
+      "log": "gugo-round1-full-final.log",
+      "identifiedContributors": "Verification harness incorrectly reused Web-build defaults: NODE_ENV=production removed React act, pure-local behavior changed cross-mode fixtures, and synthetic Windows domain broke credential ACL account lookup. Representative tests pass after correcting the harness, not product code. This does not yet prove all 144 failure records share those causes; the fresh full run must settle remaining failures. All failures and original hashes are retained, not reclassified as passing."
+    },
+    "secondFailedRun": {
+      "exitCode": 1,
+      "finalFailureRecords": 8,
+      "recordUnit": "failed batches, not eight individual test cases",
+      "seconds": 1151.981,
+      "hashesUnchanged": true,
+      "sourceManifest": "source-manifest-corrected-env-fail.json",
+      "freezeResult": "freeze-result-corrected-env-fail.json",
+      "log": "gugo-round1-full-corrected.log",
+      "identifiedContributors": "Remaining Web defaults disabled MCP stdio, forced the Node SQLite adapter (incompatible with better-sqlite3-specific test expectations), and supplied a missing/shared workspace path. All 13 failing files pass under the new minimal test environment; business source and assertions were unchanged."
+    },
+    "correctedEnvironment": "Independent OS-only allowlist plus fresh isolated HOME/config/data/db/artifact/tmp/cache roots and GUGO_LOAD_DOTENV=0; NODE_ENV=test. No inherited model settings/credentials, no Web-specific tool-disable flags, driver choice or workspace override. Tests use their existing runner/bootstrap and local synthetic fixtures.",
+    "environmentProbe": { "files": 5, "tests": 35, "exitCode": 0, "log": "gugo-round1-test-env-probe.log", "codeChanges": false },
+    "minimalEnvironmentProbe": { "files": 13, "tests": 138, "exitCode": 0, "log": "gugo-round1-minimal-env-probe.log", "codeChanges": false }
+  },
+  "independentReview": {
+    "initialFinding": "Direct internal-worker invocation bypassed parent environment sanitization and could clear an existing dist; reproduced red before repair.",
+    "repair": "Parent IPC request required, full env and project cwd checked before Vite import; POSIX exact-case keys, Windows case-folding with duplicate rejection and explicit synthetic user-discovery values.",
+    "regressions": ["direct worker rejects and preserves existing dist", "polluted IPC rejects before build", "invalid CLI flags reject", "real production CLI strips inherited VITE values from unrelated cwd"],
+    "limitations": ["No POSIX runtime was executed on this Windows host", "Synthetic dotenv fixture covers Vite behavior, not arbitrary future production manual-loadEnv mutations", "No cryptographic parent identity or OS sandbox is claimed"]
+  },
+  "browser": {
+    "status": "blocked",
+    "requestedConfiguration": "gugo-isolated-verification",
+    "requestedPort": 5179,
+    "returnedConfiguration": "gugo-usage-panel",
+    "returnedPort": 5175,
+    "attempts": 3,
+    "lastAttemptContext": "After the user changed the working directory and project settings were reloaded; same mismatch, stopped without further retries.",
+    "toolOutcome": "skipped-gate-off",
+    "ownedServerIdsStopped": [
+      "1f8f04d6-8d85-4b54-a0ba-c055ff645f28",
+      "c09388d4-9f99-4b02-8696-f2152f341d4f",
+      "cb2bdd35-e50a-4c6d-a6b5-9ff309c6e2a9"
+    ],
+    "lastServerListEmpty": true,
+    "nativeEnterSpaceVerified": false,
+    "visualVerified": false,
+    "limitation": "The tool launched another dev configuration rather than the isolated entry. All three owned starts were stopped immediately. Logs do not prove how far that incorrect dev startup progressed or whether it inspected ambient configuration; it is not isolation or UI acceptance evidence. No replacement server was started through Bash."
+  },
+  "isolation": {
+    "entry": "sanitized child env; fresh HOME/USERPROFILE/GUGO_HOME, data/db/config/workspace/artifact/tmp/cache roots; GUGO_LOAD_DOTENV=0 plus Vite envDir=false; loopback strict-port build/preview only",
+    "syntheticDotenv": "real Vite build and preview resolution omit synthetic sentinel; ordinary Vite control loads it",
+    "ordinaryStartupModified": false,
+    "intentionalRealSecretOrUserDataRead": false,
+    "realProviderCalled": false,
+    "osSandboxClaimed": false,
+    "previewToolMismatch": "See browser limitation; do not infer a fully isolated preview from the isolated build."
+  },
+  "preserved": [
+    "main layout and four top-right entry names/icons/order/position",
+    "warm-paper styling and brand colors",
+    "shared Modal and focus-trap implementation",
+    "owner/auth/approval/directory/CSP boundaries",
+    "normal Vite config, package scripts and lockfile"
+  ],
+  "earlierFailuresRetained": [
+    "gugo-round1-isolation-red.log (helper absent, not a behavioral dotenv-leak reproduction)",
+    "gugo-agent-template-ui-07t4hx/red.log (7 of 10 new DOM cases failed before UI fix)",
+    "gugo-round1-isolated-build.log (Tailwind configuration warning)",
+    "gugo-round1-worker-red.log (direct worker unexpectedly builds, exit 0)",
+    "gugo-round1-worker-green.log (test fixture TEMP parent missing)",
+    "gugo-round1-targeted-accepted.log and gugo-round1-worker-diagnostic.log (Windows auto-injected user discovery keys rejected until explicitly isolated)"
+  ],
+  "rawLogRoot": "C:/Users/21161/AppData/Local/Temp",
+  "rawLogDurability": "Temporary logs may be cleaned by the OS; this file records the persistent result summary.",
+  "persistentFailureSummary": "failed-runs.md",
+  "openDebt": ["DEBT-UI-002", "DEBT-VERIFY-001"],
+  "notVerified": [
+    "native browser Tab/Enter/Space activation and visual acceptance",
+    "native Electron or installed-package behavior",
+    "real model quality, availability, performance or costs",
+    "OS-level isolation"
+  ],
+  "git": { "branch": "fix/isolated-web-agent-template", "staged": false, "committed": false, "pushed": false, "packaged": false, "released": false }
+}

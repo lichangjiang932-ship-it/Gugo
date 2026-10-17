@@ -253,6 +253,13 @@ function referencesFromReceipts(receipts, {
     const identity = `${buildArtifactReferenceIdentity({ filename, messageId, type })}:${key}`
     const mutation = mutations.get(key)
     const stats = changeStats.get(key)
+    // The persisted receipt may already name the managed snapshots this local
+    // file superseded; an inline link to one of those URLs should still open
+    // the verified local file rather than being blocked as unselected.
+    const relatedArtifactIds = [...new Set([
+      ...(Array.isArray(mutation?.relatedArtifactIds) ? mutation.relatedArtifactIds : []),
+      ...(Array.isArray(receipt?.relatedArtifactIds) ? receipt.relatedArtifactIds : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean))]
     references.push({
       id: `local-file:${id}`,
       identity,
@@ -266,9 +273,7 @@ function referencesFromReceipts(receipts, {
         ? { retainedLocalFile: true, verificationPending: true }
         : { verifiedLocalFile: true }),
       ...(mutation?.toolCallId ? { toolCallId: mutation.toolCallId } : {}),
-      ...(mutation?.relatedArtifactIds?.length > 0
-        ? { relatedArtifactIds: mutation.relatedArtifactIds }
-        : {}),
+      ...(relatedArtifactIds.length > 0 ? { relatedArtifactIds } : {}),
       ...(stats ? { changeStats: { ...stats } } : {}),
       previewArtifact: {
         messageId: String(messageId || ''),

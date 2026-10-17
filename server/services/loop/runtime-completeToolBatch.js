@@ -1,4 +1,5 @@
 import { assertRuntimeStage } from './runtimeContract.js'
+import { publishContextUsage } from './contextUsageObservation.js'
 
 /** A call that will not run still gets its completed row, like every other call. */
 async function reportUnrunCall(s, call, result) {
@@ -216,6 +217,7 @@ export async function completeToolBatch(s) {
   if (deferredSystemContextCount > 0) {
     await s.persistTurn({ boundary: 'post-tool-system-context' })
   }
+  await publishContextUsage(s, { stage: 'retained' })
   if (i.goalPlanBlocked || i.toolStop) return { kind: 'next' }
   i.failureStrategyAdvisories = s.loopGuard.pendingAdvisories?.() || []
   for (const advisory of i.failureStrategyAdvisories) {

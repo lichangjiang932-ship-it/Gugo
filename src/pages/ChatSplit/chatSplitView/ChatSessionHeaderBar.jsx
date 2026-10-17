@@ -50,47 +50,50 @@ export default function ChatSessionHeaderBar({
   previewOpen = false,
   sessionChangesReview = null,
   t,
+  todos = null,
   workbenchOpen = false,
 }) {
   const previewLabel = t('workbench.preview')
   const previewTitle = t('workbench.previewWithShortcut', { label: previewLabel, shortcut: previewShortcutLabel() })
   // The task list's progress, on the button that opens it: the one number a
   // reader glances at to know where a long turn is.
-  const todos = (Array.isArray(activeSession?.todos) ? activeSession.todos : [])
+  const todoList = (Array.isArray(todos) ? todos : Array.isArray(activeSession?.todos) ? activeSession.todos : [])
     .filter((todo) => String(todo?.content || todo?.activeForm || todo?.title || '').trim())
-  const todosDone = todos.filter((todo) => todo?.status === 'completed').length
-  const todoProgress = todos.length > 0 ? `${todosDone}/${todos.length}` : ''
+  const todosDone = todoList.filter((todo) => todo?.status === 'completed').length
+  const todoProgress = todoList.length > 0 ? `${todosDone}/${todoList.length}` : ''
   const planTitle = todoProgress
-    ? `${t('workbench.planCardTitle')} · ${t('workbench.planProgress', { done: todosDone, total: todos.length })}`
+    ? `${t('workbench.planCardTitle')} · ${t('workbench.planProgress', { done: todosDone, total: todoList.length })}`
     : t('workbench.planCardTitle')
   return (
     <header className="chat-session-header flex h-12 shrink-0 items-center gap-1.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
       <ChatSessionHeading hasWorkspace={hasWorkspace} workspacePath={workspacePath} title={activeSession?.title || t('nav.newChat')} data-testid="chat-session-title" />
-      <button type="button" data-testid="header-plan-toggle" data-has-progress={todoProgress ? true : undefined} aria-pressed={planVisible || undefined} onClick={() => (planVisible ? onClosePlan?.() : onOpenPlan?.())} onKeyDown={(event) => { if (event.key === 'Escape' && planVisible) { event.preventDefault(); onClosePlan?.() } }} title={planTitle} aria-label={planTitle} className={`chat-chrome-button inline-flex h-8 min-w-8 shrink-0 items-center justify-center gap-1.5 rounded-control px-1.5 text-xs text-ink-soft hover:text-ink ${todoProgress ? 'chat-plan-chip' : ''}`}>
-        {todoProgress
-          ? <TodoProgressRing done={todosDone} total={todos.length} />
-          : <ListChecks className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />}
-        {todoProgress && <span className="font-mono tabular-nums text-ink-soft" data-testid="header-plan-progress" aria-hidden="true">{todoProgress}</span>}
-      </button>
-      <SessionChangesReview review={sessionChangesReview} t={t} />
-      <ChatPreviewButton
-        open={previewOpen || undefined}
-        onClick={onOpenPreview}
-        label={previewLabel}
-        shortcut={previewShortcutLabel()}
-        title={previewTitle}
-        aria-label={previewTitle}
-        data-testid="chat-preview-toggle"
-      />
-      <ChatWorkbenchToggle
-        open={workbenchOpen}
-        onClick={onWorkbenchToggle}
-        title={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
-        aria-label={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
-        aria-controls="right-workbench"
-        aria-expanded={workbenchOpen}
-        data-testid="workbench-toggle"
-      />
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        <button type="button" data-testid="header-plan-toggle" data-has-progress={todoProgress ? true : undefined} aria-pressed={planVisible || undefined} onClick={() => (planVisible ? onClosePlan?.() : onOpenPlan?.())} onKeyDown={(event) => { if (event.key === 'Escape' && planVisible) { event.preventDefault(); onClosePlan?.() } }} title={planTitle} aria-label={planTitle} className={`chat-chrome-button inline-flex h-8 min-w-8 shrink-0 items-center justify-center gap-1.5 rounded-control px-1.5 text-xs text-ink hover:bg-ink/[0.05] ${todoProgress ? 'chat-plan-chip' : ''}`}>
+          {todoProgress
+            ? <TodoProgressRing done={todosDone} total={todoList.length} />
+            : <ListChecks className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />}
+          {todoProgress && <span className="font-mono tabular-nums text-ink" data-testid="header-plan-progress" aria-hidden="true">{todoProgress}</span>}
+        </button>
+        <SessionChangesReview review={sessionChangesReview} t={t} />
+        <ChatPreviewButton
+          open={previewOpen || undefined}
+          onClick={onOpenPreview}
+          label={previewLabel}
+          shortcut={previewShortcutLabel()}
+          title={previewTitle}
+          aria-label={previewTitle}
+          data-testid="chat-preview-toggle"
+        />
+        <ChatWorkbenchToggle
+          open={workbenchOpen}
+          onClick={onWorkbenchToggle}
+          title={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
+          aria-label={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
+          aria-controls="right-workbench"
+          aria-expanded={workbenchOpen}
+          data-testid="workbench-toggle"
+        />
+      </div>
     </header>
   )
 }

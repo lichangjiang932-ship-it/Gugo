@@ -1,0 +1,108 @@
+{
+  "startedAt": "2026-10-17T04:53:07.477Z",
+  "finishedAt": "2026-10-17T05:12:02.014Z",
+  "inventoryBefore": 3365,
+  "inventoryAfter": 3365,
+  "aggregateBefore": "49d7b1a2724b302ed6ed5a4bce9cbd138766527496fb947d9ca03d2b4e623cb0",
+  "aggregateAfter": "49d7b1a2724b302ed6ed5a4bce9cbd138766527496fb947d9ca03d2b4e623cb0",
+  "hashesUnchanged": true,
+  "changedDuringRun": [],
+  "results": [
+    {
+      "name": "lint",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 42.487,
+      "log": "lint.log"
+    },
+    {
+      "name": "types-contracts",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 1.219,
+      "log": "types-contracts.log"
+    },
+    {
+      "name": "types-protocol",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 1.058,
+      "log": "types-protocol.log"
+    },
+    {
+      "name": "negative-types",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 1.46,
+      "log": "negative-types.log"
+    },
+    {
+      "name": "debt",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 0.892,
+      "log": "debt.log"
+    },
+    {
+      "name": "functions",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 1.493,
+      "log": "functions.log"
+    },
+    {
+      "name": "i18n",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 0.294,
+      "log": "i18n.log"
+    },
+    {
+      "name": "i18n-keys",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 0.152,
+      "log": "i18n-keys.log"
+    },
+    {
+      "name": "dependencies",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 0.225,
+      "log": "dependencies.log"
+    },
+    {
+      "name": "licenses",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 0.216,
+      "log": "licenses.log"
+    },
+    {
+      "name": "offline-eval",
+      "exitCode": 0,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 90.971,
+      "log": "offline-eval.log"
+    },
+    {
+      "name": "full",
+      "exitCode": 1,
+      "signal": null,
+      "errorCode": null,
+      "seconds": 975.99,
+      "log": "full.log"
+    }
+  ]
+}

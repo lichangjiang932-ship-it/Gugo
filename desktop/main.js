@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } from 'electron'
 import updaterPackage from 'electron-updater'
 import {
   isTrustedNavigation,
@@ -28,6 +28,8 @@ import {
 } from './petDrag.js'
 import { clampPetBounds } from './petBounds.js'
 import { createDesktopHosts } from './desktopHosts.js'
+import { configureDesktopApplicationMenu } from './desktopMenu.js'
+import { registerClipboardIpc } from './clipboardIpc.js'
 import {
   configureDesktopMainWindowPermissions,
   createDesktopMainWindow,
@@ -387,11 +389,7 @@ function handlePetDrag(event, payload = {}) {
 function registerDesktopIpc() {
   desktopFileActions.register(() => ({ mainWindow, applicationOrigin }))
   desktopHosts.register()
-  ipcMain.handle('desktop:write-clipboard-text', (event, value) => {
-    assertTrustedIpc(event)
-    clipboard.writeText(String(value ?? ''))
-    return { copied: true }
-  })
+  registerClipboardIpc({ ipcMain, assertTrusted: assertTrustedIpc, getMainWindow: () => mainWindow })
   ipcMain.handle('desktop:select-directory', async (event, payload = {}) => {
     assertTrustedIpc(event)
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
@@ -565,6 +563,7 @@ if (hasSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     app.setAppUserModelId('com.gugo.atelier')
+    configureDesktopApplicationMenu()
     registerDesktopIpc()
     try {
       await launch()

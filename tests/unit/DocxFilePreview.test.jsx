@@ -65,6 +65,8 @@ test('DOCX layout preserves tables, merged cells, borders, embedded images, styl
     assert.match(rendered.querySelector('style')?.textContent || '', /(?:204060|32, 64, 96)/u)
     assert.equal(frame.getAttribute('sandbox'), '')
     assert.match(frame.getAttribute('srcdoc'), /default-src 'none'/u)
+    assert.doesNotMatch(frame.getAttribute('srcdoc'), /Noto Sans SC Variable|--font-ui|--font-artifact-default|@fontsource/u)
+    assert.match([...rendered.querySelectorAll('style')].map(node => node.textContent).join('\n'), /font-family:\s*["']?Arial/u, 'the document font survives inside its own frame')
   })
 })
 

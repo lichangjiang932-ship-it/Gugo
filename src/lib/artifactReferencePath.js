@@ -1,9 +1,15 @@
+function pageOrigin() {
+  const origin = globalThis.window?.location?.origin
+  return /^https?:\/\//i.test(origin || '') ? origin : null
+}
+
 function normalizedReferenceUrl(value = '') {
   const raw = String(value || '').trim()
   if (!raw) return ''
   try {
-    const url = new URL(raw, 'http://artifact.local')
-    return decodeURIComponent(url.pathname).replace(/\/+$/, '').toLowerCase()
+    const url = new URL(raw, pageOrigin() || 'http://artifact.local')
+    const authority = url.origin === 'null' ? `${url.protocol}//${url.host}` : url.origin
+    return `${authority}${decodeURIComponent(url.pathname).replace(/\/+$/, '')}`.toLowerCase()
   } catch {
     try { return decodeURIComponent(raw.split(/[?#]/)[0]).replace(/\/+$/, '').toLowerCase() } catch { return raw.toLowerCase() }
   }
@@ -146,6 +152,77 @@ export function findArtifactReferenceByLocalPath(references = [], value = '') {
   return exact || null
 }
 
+/**
+ * A repository-relative path as prose writes it (`docs/report.md`). Unlike an
+ * absolute path it carries no root, so it is only ever resolved against an
+ * already-verified absolute receipt — never treated as filesystem access.
+ */
+export function normalizeArtifactRelativePath(value = '') {
+  let raw = decodedPathText(value).replaceAll('\\', '/').trim()
+  if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('/')) return ''
+  raw = raw.replace(/^\.\/+/, '')
+  const segments = []
+  for (const segment of raw.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') return ''
+    segments.push(segment.normalize('NFC'))
+  }
+  if (segments.length < 2) return ''
+  return segments.join('/').replace(/\/+$/, '')
+}
+
+export function findArtifactReferenceByRelativePath(references = [], value = '') {
+  const relative = normalizeArtifactRelativePath(value)
+  if (!relative || !Array.isArray(references)) return null
+  const target = relative.toLowerCase()
+  const suffix = `/${target}`
+  const exact = uniqueArtifactReference(references.filter((reference) => (
+    reference?.url
+    && ARTIFACT_PATH_FIELDS.some((field) => {
+      const normalized = normalizeArtifactLocalPath(reference?.[field])
+      return Boolean(normalized) && (normalized === target || normalized.endsWith(suffix))
+    })
+  )))
+  if (exact) return exact
+  // A pathless managed delivery has no local directory to validate. Only its
+  // globally unique registered basename may resolve prose back to that URL.
+  const candidate = findArtifactReferenceByFilename(references, relative.split('/').pop())
+  return candidate && !ARTIFACT_PATH_FIELDS.some(field => normalizeArtifactLocalPath(candidate[field])) ? candidate : null
+}
+
+/**
+ * A completed local write can supersede the managed artifact snapshot created
+ * from the same tool result. When the model links that snapshot URL directly,
+ * open the verified local file it was replaced by. Only an explicit persisted
+ * association (relatedArtifactIds) qualifies; a same-named unrelated artifact
+ * stays blocked.
+ */
+export function findArtifactReferenceBySupersededArtifactHref(references = [], href = '') {
+  const raw = String(href || '').trim()
+  if (!raw || !Array.isArray(references)) return null
+  if (raw.startsWith('//') || raw.includes('\\')) return null
+  let pathname
+  try {
+    const origin = pageOrigin()
+    const url = new URL(raw, origin || 'http://artifact.local')
+    if (!raw.startsWith('/') && (!origin || url.origin !== origin)) return null
+    pathname = url.pathname
+  } catch { return null }
+  const prefix = '/api/artifacts/'
+  if (!pathname.startsWith(prefix)) return null
+  let filename
+  try { filename = decodeURIComponent(pathname.slice(prefix.length)) } catch { return null }
+  if (!filename || filename.includes('/')) return null
+  const normalized = normalizedArtifactFilenameValue(filename)
+  if (!normalized) return null
+  return uniqueArtifactReference(references.filter((reference) => (
+    reference?.url
+    && Array.isArray(reference.relatedArtifactIds)
+    && reference.relatedArtifactIds.length > 0
+    && artifactFilenameAliases(reference).some((alias) => alias.normalized === normalized)
+  )))
+}
+
 export function localFileHrefMatchesReference(href, reference) {
   const raw = String(href || '').trim()
   const aliases = artifactFilenameAliases(reference)
@@ -169,7 +246,16 @@ export function sameArtifactReference(left, right) {
 function referenceForInlineHref(references, label, href) {
   const direct = findArtifactReferenceByHref(references, href)
     || findArtifactReferenceByLocalPath(references, href)
+    || findArtifactReferenceBySupersededArtifactHref(references, href)
   if (direct) return direct
+  // An explicit link whose visible label repeats the same repository-relative
+  // path is the model pointing at the file this turn verified.
+  const relativeHref = normalizeArtifactRelativePath(href)
+  const relativeLabel = normalizeArtifactRelativePath(label)
+  if (relativeHref && relativeLabel && relativeHref.toLowerCase() === relativeLabel.toLowerCase()) {
+    const relativeReference = findArtifactReferenceByRelativePath(references, relativeHref)
+    if (relativeReference) return relativeReference
+  }
   if (normalizeArtifactLocalPath(href)) return null
   const normalizedLabel = String(label || '').normalize('NFC').trim().toLowerCase()
   if (!normalizedLabel) return null
