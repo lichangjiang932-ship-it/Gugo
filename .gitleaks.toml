@@ -1,0 +1,12 @@
+# Keep the default Gitleaks rules, but do not read the SHA-256 manifest JSON as
+# key/value credentials. These files are generated evidence: every value is a
+# 64-character file hash and every key is a repository-relative path.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Versioned review evidence stores only file paths and SHA-256 hashes."
+paths = [
+  '''docs/review-evidence/[^/]+/frozen-source\.json''',
+  '''docs/review-evidence/[^/]+/source-manifest[^/]*\.json''',
+]
