@@ -4,7 +4,50 @@ All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases
 follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.75] - 2026-10-17
+
+Unsigned Windows release. It carries the model-context, task-list, terminal and interaction
+hardening completed on top of 0.11.72.
+
+### Changed
+
+- The context ring is a continuous circle in every state; the popover now shows only the used
+  percentage, used/window totals, progress bar and the system/tools/conversation rows. The visible
+  approximation badge and the details disclosure are gone.
+- Model context windows resolve from explicit settings, models.dev, the curated capability catalog,
+  then the bundled models.dev snapshot. A custom Provider key still resolves by model id
+  (`mimo-v2.6-flash` is covered at 1,048,576 tokens).
+- The send/pause primary action uses the warm ink-soft surface instead of near-black. Empty input,
+  directory approval, uploads and attachment-only steering explain why send is blocked; Stop stays
+  independent.
+- The conversation title no longer carries a leading bubble icon. The four header controls share a
+  tight group with darker icons, preserving their names, order and positions.
+- `web_search` is part of the initial read-only tool catalog, so ordinary lookup requests do not need
+  a prior `search_tools` discovery step. Search configuration and the dedicated enable switch still
+  control execution.
+- The desktop terminal keeps its shell alive when the panel detaches, replays missed output, shows
+  its actual starting folder, focuses on activation, supports copy/paste without taking Ctrl+C from
+  SIGINT, and ends a shell only through an explicit two-step action or renderer reload/crash.
+- `manage_todos` updates now publish into the header, plan card and an inline transcript list, with
+  transcript fallback after reload.
+
+### Fixed
+
+- Embedded previews no longer become a focus overlay or inert the chat at narrow widths; Escape and
+  IME composition are guarded in previews, directory approval, slash menus, plan cards and diff
+  comments.
+- Task-center selection clears stale details immediately and drops late responses; job SSE 401/403 is
+  a terminal unauthorized state instead of an endless retry.
+
+### Release notes
+
+`v0.11.73` was tagged but published nothing: the review-evidence hash manifests were misread by
+Gitleaks as credentials. `v0.11.74` published nothing: the Windows checkout converted the shipped
+OFL to CRLF, and the coverage lane exposed a coverage-only environment key in the isolated Vite
+worker. Both fixes are retained in Git history; the failed tags were not moved or reused.
+`v0.11.75` is the release verified by the complete CI gate set and the workflow builder.
+
+## [0.11.72] - 2026-10-08
 
 Preparing 0.11.72. It carries everything since 0.11.69 — the model configuration rework
 (`settings.yaml` as the one source, the models.dev catalogue, an OpenAI Responses adapter, import of
