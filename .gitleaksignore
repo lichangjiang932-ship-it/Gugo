@@ -17,3 +17,10 @@ a16a2aa91e11b8c706975685cfa13cbf1efd27a4:tests/sideEffectExecutionLedger.test.js
 # Historical synthetic provider-import fixture (a fake DeepSeek-style key, never an issued
 # credential); the fixture now assembles it at runtime. Only this exact finding.
 ac5157b3b3491204e2cc65de20f4261bff867d0f:tests/llmLegacyImport.test.js:generic-api-key:11
+# Historical synthetic preview-config fixture: a fake `ghp_`-prefixed value used
+# to prove credential-shaped env values are refused; it was never issued. The
+# fixture now assembles the prefix at runtime. Only this exact finding.
+270f21e1fc4fbfa19a9daa953b92cb691c7f892c:tests/previewConfig.test.js:github-pat:97
+# Historical RFC 6455 example WebSocket nonce in the upgrade-guard fixture; it is
+# not a credential. The fixture now assembles it at runtime. Only this exact finding.
+f8a9bc90844637c2b345da457782575cb1a07076:tests/fileDeliveryUpgradeGuard.test.js:generic-api-key:22

@@ -94,7 +94,7 @@ test('the environment block refuses anything that looks like a credential', () =
         // A name that merely contains the letters is not a credential name.
         MONKEY: 'banana',
         // A value that is clearly a key is refused whatever it is called.
-        GITHUB_PAT: 'ghp_0123456789abcdefghijklmnopqrstuvwxyz',
+        GITHUB_PAT: ['ghp_', '0123456789abcdefghijklmnopqrstuvwxyz'].join(''),
         OPAQUE: 'aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7b',
       },
     }],
