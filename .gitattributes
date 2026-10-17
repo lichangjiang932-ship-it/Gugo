@@ -9,3 +9,6 @@ tests/fixtures/plugin-compatibility-v1/** text eol=lf
 # Historical host-policy ownership is bound to the complete issued text hash.
 # Keep these fixtures byte-identical when Windows Git enables core.autocrlf.
 tests/fixtures/pptxAuthoringPolicyV*.txt text eol=lf
+
+# The shipped OFL must stay byte-identical to the upstream package license.
+public/licenses/*.txt text eol=lf

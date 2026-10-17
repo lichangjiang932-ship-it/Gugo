@@ -32,6 +32,9 @@ export function createIsolatedWebEnvironment({ sourceEnv = process.env, runRoot,
   delete env.ELECTRON_RUN_AS_NODE
   delete env.HOMEDRIVE
   delete env.HOMEPATH
+  // A coverage run would otherwise instrument the isolated Vite worker and
+  // make its environment differ from the explicitly constructed allowlist.
+  delete env.NODE_V8_COVERAGE
   return {
     ...env,
     HOME: home,
@@ -125,6 +128,9 @@ async function receiveWorkerRequest(args) {
     return result
   }
   const actual = normalize(process.env)
+  // Node re-injects the coverage directory into a child even when it was
+  // removed from the spawn env. It is test instrumentation, not user config.
+  delete actual.NODE_V8_COVERAGE
   const normalized = normalize(expected)
   const mismatches = [...new Set([...Object.keys(actual), ...Object.keys(normalized)])]
     .filter(key => actual[key] !== normalized[key])
